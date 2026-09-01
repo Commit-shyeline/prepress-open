@@ -6,6 +6,7 @@
 <meta name="robots" content="noindex, nofollow">
 <title>{{ name }} — podgląd 3D | prepress-open</title>
 {% include "_theme.html" %}
+{% include "_session.html" %}
 <style>
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--canvas); color: var(--ink);
@@ -51,7 +52,7 @@ body.bare #stage, body.embed #stage { min-height: 0; }
 </head>
 <body class="{{ 'bare' if bare else '' }}{{ ' embed' if embed else '' }}">
 {% with page_title = name, page_sub = 'podgląd 3D szablonu',
-        extra_actions = '<a href="' ~ base ~ '/api/templates/' ~ token ~ '/pdf">pobierz PDF</a>'
+        extra_actions = '<a data-authed href="' ~ base ~ '/api/templates/' ~ token ~ '/pdf">pobierz PDF</a>'
                         ~ '<a href="' ~ base ~ '/">← szablony</a>' %}
 {% include "_brand_header.html" %}{% endwith %}
 

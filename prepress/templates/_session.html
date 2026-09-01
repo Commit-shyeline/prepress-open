@@ -1,0 +1,47 @@
+{# The shop's session, in one file included by every page that talks to a guarded endpoint.
+
+   The token lives in sessionStorage (per-ORIGIN), so it can only ever be sent by a fetch this
+   page makes — a plain link the customer clicks is a browser navigation and carries no header,
+   which is why a `<a href="…/pdf">` used to land them on a raw JSON 401. Mark such links
+   `data-authed` and the handler below fetches them with the header and saves the blob instead. #}
+<script>
+const GATED = {{ 'true' if gated else 'false' }};
+const LOGIN_URL = {{ (login_url or '')|tojson }};
+const TOKEN_KEY = {{ session_key|tojson }};
+
+function authHeaders() {
+    const token = GATED ? (sessionStorage.getItem(TOKEN_KEY) || '') : '';
+    return token ? { Authorization: 'Bearer ' + token } : {};
+}
+
+function goToLogin() {
+    if (!LOGIN_URL) return;
+    // Where to come back to, so logging in does not dump the customer on somebody else's page.
+    const back = encodeURIComponent(window.location.pathname + window.location.search);
+    window.location.href = LOGIN_URL.replace('{next}', back);
+}
+
+/* A download link the customer clicks, fetched with the session header. */
+document.addEventListener('click', async (event) => {
+    const link = event.target.closest('a[data-authed]');
+    if (!link) return;
+    event.preventDefault();
+    let response;
+    try {
+        response = await fetch(link.href, { headers: authHeaders() });
+    } catch (_) {
+        return alert('Brak połączenia z serwerem.');
+    }
+    if (response.status === 401) return goToLogin();
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        return alert(data.error || 'Nie udało się pobrać pliku.');
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const saver = document.createElement('a');
+    saver.href = url;
+    saver.download = (link.getAttribute('download') || 'szablon.pdf');
+    document.body.appendChild(saver); saver.click(); saver.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+});
+</script>

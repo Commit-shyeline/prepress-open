@@ -18,7 +18,9 @@ import logging
 import os
 import secrets
 
-from flask import (Flask, Response, jsonify, render_template, request, send_file)
+from flask import (Flask, Response, jsonify, redirect, render_template, request,
+                   send_file)
+from urllib.parse import quote
 
 from . import (from_template, generate, identify, item, lines, materials, measure, messages,
                offset, outline, rules, shape, structure)
@@ -152,6 +154,14 @@ def require_session(view):
     @functools.wraps(view)
     def guarded(*args, **kwargs):
         if _session_secret() and not session_identity():
+            # A browser NAVIGATION (a pasted or e-mailed link) carries no Authorization header and
+            # never can, so handing it raw JSON is a dead end — send it to the login instead.
+            # "text/html" spelled out, not `accept_html` — that is also true for the `*/*` this
+            # page's own fetch() sends, and a fetch silently following a redirect to the
+            # login page reads as success instead of a refusal.
+            if _login_url() and "text/html" in request.headers.get("Accept", ""):
+                back = quote(base_path() + request.full_path.rstrip("?"), safe="")
+                return redirect(_login_url().replace("{next}", back), code=302)
             return jsonify({"error": "Zaloguj się, żeby sprawdzić plik.",
                             "login": _login_url()}), 401
         return view(*args, **kwargs)

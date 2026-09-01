@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Szablon do projektowania | prepress-open</title>
 {% include "_theme.html" %}
+{% include "_session.html" %}
 <style>
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--canvas); color: var(--ink);
@@ -332,9 +333,10 @@ function renderQueue() {
 async function download(items) {
     showError('');
     const response = await fetch('api/template', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ items }),
     });
+    if (response.status === 401) return goToLogin();
     if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         return showError(data.error || 'Nie udało się wygenerować PDF.');
@@ -351,7 +353,7 @@ async function download(items) {
 async function postJson(path, body) {
     try {
         const response = await fetch(path, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify(body),
         });
         return await response.json();
@@ -436,7 +438,8 @@ async function loadTemplates() {
                 <div class="act">
                     <a href="model/${encodeURIComponent(t.token)}"
                        title="Obróć flagę w 3D Kształt bierzemy z tego samego obrysu, który tnie ploter">3D</a>
-                    <a class="main" href="api/templates/${encodeURIComponent(t.token)}/pdf">Szablon PDF</a>
+                    <a class="main" data-authed download="${escapeHtml(short)}.pdf"
+                       href="api/templates/${encodeURIComponent(t.token)}/pdf">Szablon PDF</a>
                 </div>
             </div>`;
         }).join('');

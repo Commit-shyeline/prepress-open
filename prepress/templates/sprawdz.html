@@ -6,6 +6,7 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Sprawdź plik do druku | prepress-open</title>
 {% include "_theme.html" %}
+{% include "_session.html" %}
 <style>
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--canvas); color: var(--ink);
@@ -195,22 +196,7 @@ async function checkOne(file, template, side, page) {
    this page therefore has to be served from the same host as that login, and a copy on another
    subdomain would see no session at all. Standalone (no `gated`), none of this runs and the page
    behaves exactly as it always has. */
-const GATED = {{ 'true' if gated else 'false' }};
-const LOGIN_URL = {{ (login_url or '')|tojson }};
-const TOKEN_KEY = {{ session_key|tojson }};
 const BASE = {{ base|tojson }};
-
-function authHeaders() {
-    const token = GATED ? (sessionStorage.getItem(TOKEN_KEY) || '') : '';
-    return token ? { Authorization: 'Bearer ' + token } : {};
-}
-
-function goToLogin() {
-    if (!LOGIN_URL) return;
-    // Where to come back to, so logging in does not dump the customer on somebody else's page.
-    const back = encodeURIComponent(window.location.pathname + window.location.search);
-    window.location.href = LOGIN_URL.replace('{next}', back);
-}
 
 /* Asked once on load: a customer who is not logged in should learn it from the page, not from a
    refusal after they have already picked a 90 MB file. */
