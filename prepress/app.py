@@ -326,6 +326,19 @@ def model_page(token):
                            embed=request.args.get("embed") == "1")
 
 
+@app.route("/podglad-hero")
+def hero_preview():
+    """A LAYOUT preview of the two-layer hero, for settling how it should look before it is one.
+
+    Scaffolding only: the animation on it is the 3D template page in an iframe — exactly the one a
+    real hero would embed — so there is no second copy of the animation here to drift out of step
+    with the original. What the page exists to answer is the question that cannot be settled in the
+    abstract: how far the cut cloth may hang past the hero band and over the copy below it. Hence
+    the sliders, and hence the fact that nothing here is wired into the landing page.
+    """
+    return render_template("hero_preview.html")
+
+
 # A directory of finished 3D product models (.glb), for products whose shape no flat template can
 # describe — a pneumatic tent is a sewn object, not an outline. Configured, never committed: the
 # models are a shop's own renders, for the same reason its die library is data this code loads

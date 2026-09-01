@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Podgląd hero — dwie warstwy | prepress-open</title>
+{% include "_theme.html" %}
+<style>
+/* ── A LAYOUT preview, and only that ──────────────────────────────────────────
+   The animation on this page is the 3D template page in an iframe — exactly the one a real hero
+   would embed — so there is no second copy of it here to drift out of step with the original. What
+   this page exists to answer is the question that cannot be settled in the abstract: how far the
+   cloth may hang past the hero band and over the copy below it before it stops looking like fallen
+   fabric and starts looking like a bug. Hence the sliders.
+
+   Nothing here is wired into the live landing page. When the numbers are right they move there. */
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink);
+       font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; }
+
+.bar { display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
+       padding: 10px 18px; border-bottom: 1px solid var(--line);
+       background: var(--surface); font-size: 13px; position: relative; z-index: 9; }
+.bar b { font-size: 13.5px; }
+.bar label { display: flex; gap: 8px; align-items: center; color: var(--muted); }
+.bar output { min-width: 4.5ch; font-variant-numeric: tabular-nums; color: var(--ink);
+              font-weight: 700; }
+.bar input[type=range] { width: 150px; }
+.bar a { color: var(--accent-text); }
+
+/* The hero band. `overflow: visible` is the whole point: the cloth has to be able to leave it. */
+.hero { position: relative; overflow: visible;
+        min-height: 470px; display: grid;
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); align-items: center;
+        background: linear-gradient(180deg,
+                    color-mix(in srgb, var(--accent-mid) 9%, var(--canvas)), var(--canvas));
+        border-bottom: 1px solid var(--line); }
+.hero-inner { grid-column: 1; grid-row: 1; padding: 90px 12px 58px 20px;
+              display: flex; flex-direction: column; align-items: flex-start; gap: 14px;
+              justify-self: end; max-width: 560px; }
+.hero h1 { margin: 0; font-size: clamp(26px, 4vw, 40px); line-height: 1.12; font-weight: 800;
+           letter-spacing: -.02em; max-width: 16ch; text-wrap: balance; }
+.hero p { margin: 0; max-width: 46ch; color: var(--muted); font-size: 15.5px; }
+.hero .cta { display: inline-block; margin-top: 4px; padding: 13px 22px; border-radius: 10px;
+             background: var(--accent-mid); color: #fff; font-weight: 800; font-size: 16px;
+             text-decoration: none; border: 1px solid var(--accent-mid); }
+
+/* ── The two-layer stage ──
+   Absolutely positioned, TALLER than the hero band, stacked above the page content and deaf to the
+   mouse. That is what lets the front layer's cloth hang over <main> instead of being clipped at the
+   hero's edge — an iframe is clipped by its own box, so the box itself has to overhang.
+   NO mask on it: the fade the real hero uses would fade the cloth out exactly where it matters. */
+.hero-stage { position: absolute; top: 0; left: 48%; right: 0; z-index: 3; pointer-events: none; }
+.hero-stage iframe { display: block; width: 100%; height: 100%; border: 0; }
+/* A hairline on the boundary the cloth is supposed to fold over, so it is possible to see whether
+   it actually lands on it. Preview furniture — it does not ship. */
+.edge { position: absolute; left: 0; right: 0; height: 0; z-index: 8; pointer-events: none;
+        border-top: 1px dashed color-mix(in srgb, var(--accent-mid) 70%, transparent); }
+body.no-guide .edge { display: none; }
+
+main { position: relative; z-index: 1; padding: 34px 20px 80px; max-width: 1100px; margin: 0 auto; }
+main h2 { margin: 0 0 10px; font-size: 15px; letter-spacing: .06em; text-transform: uppercase;
+          color: var(--muted); }
+.cards { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.card { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px;
+        background: var(--surface); }
+.card h3 { margin: 0 0 8px; font-size: 16px; }
+.card p { margin: 0 0 8px; color: var(--muted); font-size: 14px; }
+.rows { display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+.rows div { display: flex; justify-content: space-between; gap: 12px;
+            padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.rows div:last-child { border-bottom: 0; }
+#note { padding: 0 20px 30px; color: var(--muted); font-size: 13px; max-width: 1100px;
+        margin: 0 auto; }
+
+@media (max-width: 760px) {
+    .hero { grid-template-columns: 1fr; grid-template-rows: 46svh auto; min-height: 0;
+            align-items: stretch; }
+    .hero-inner { grid-column: 1; grid-row: 2; padding: 10px 18px 30px; max-width: none;
+                  justify-self: stretch; }
+    .hero h1 { max-width: none; }
+    .hero-stage { left: 0; }
+}
+</style>
+</head>
+<body>
+
+<div class="bar">
+    <b>Podgląd hero — dwie warstwy</b>
+    <label>zwis nad treść
+        <input type="range" id="over" min="0" max="520" step="10" value="300">
+        <output id="overOut">300</output> px
+    </label>
+    <label>szerokość materiału
+        <input type="range" id="span" min="25" max="100" step="1" value="52">
+        <output id="spanOut">52</output> %
+    </label>
+    <label><input type="checkbox" id="guide" checked> linia zgięcia</label>
+    <span id="what" style="color:var(--muted)"></span>
+    <a href="{{ base }}/">← strona główna (bez zmian)</a>
+</div>
+
+<section class="hero">
+    <div class="hero-inner">
+        <h1>Sprawdź swoje pliki, zanim pójdą do druku</h1>
+        <p>Wgraj projekt. Sprawdzimy rozdzielczość, spady, kolory i obszar bezpieczny,
+           i powiemy, co poprawić. Możesz też pobrać nasz szablon i projektować od razu na nim.</p>
+        <a class="cta" href="{{ base }}/plik">Sprawdź swoje pliki</a>
+    </div>
+    <div class="hero-stage" id="stage">
+        <iframe id="flag" title="" aria-hidden="true" tabindex="-1" scrolling="no"></iframe>
+    </div>
+    <div class="edge" id="edge"></div>
+</section>
+
+<main>
+    <h2>To poniżej jest treścią strony — materiał ma na nią opadać</h2>
+    <div class="cards">
+        <div class="card">
+            <h3>Gotowe szablony</h3>
+            <p>Szablony naszych produktów. Każdy arkusz ma zaznaczony spad, linię cięcia
+               i obszar bezpieczny, w rozmiarze, w jakim produkujemy.</p>
+            <div class="rows">
+                <div><span>Vento Regular S</span><span>89 × 234 cm</span></div>
+                <div><span>Vento Regular M</span><span>89 × 294 cm</span></div>
+                <div><span>Vento Regular L</span><span>89 × 394 cm</span></div>
+            </div>
+        </div>
+        <div class="card">
+            <h3>Nowa pozycja</h3>
+            <p>Wybierz materiał i podaj wymiar gotowy. Spad 20 mm z każdej strony,
+               obszar bezpieczny 40 mm od linii cięcia, minimalna rozdzielczość 72 DPI.</p>
+            <div class="rows">
+                <div><span>Materiał</span><span>Mesh 270 g</span></div>
+                <div><span>Szerokość roli</span><span>3200 mm</span></div>
+                <div><span>Tryb koloru</span><span>CMYK</span></div>
+            </div>
+        </div>
+        <div class="card">
+            <h3>Co sprawdzamy</h3>
+            <p>Rozmiar wobec zamówionego, rozdzielczość, przestrzeń barw, spady i linie cięcia,
+               fonty zamienione na krzywe, grafika dochodząca do linii cięcia.</p>
+        </div>
+    </div>
+</main>
+
+<p id="note"></p>
+
+<script>
+/* THE ROLL: one sheet cut down through three flags and back to a fresh sheet.
+   The ORDER is arithmetic and not taste — a cut only ever makes a shape SMALLER, so the roll has to
+   descend by area, and these four do (measured 2026-09-01: 20705, 12517, 11604, 9847 cm²). That is
+   also why it is A → C → B and not the A → B → C it is natural to say out loud.
+
+   Matched by NAME rather than derived from geometry, because deriving it would mean fetching every
+   template's outline before the page could start. This lives HERE, on the preview, rather than on
+   the landing page: the landing page is untouched until these numbers are agreed. */
+const ROLL = [/Vento Regular S\b/i, /\bS Play A\b/i, /\bS Play C\b/i, /\bS Play B\b/i];
+
+const stage = document.getElementById('stage');
+const frame = document.getElementById('flag');
+const edge = document.getElementById('edge');
+const overInput = document.getElementById('over');
+const spanInput = document.getElementById('span');
+const guideInput = document.getElementById('guide');
+let source = null;                       // the roll URL, without the layout parameters
+
+/* The stage is taller than the hero by `over` pixels, and the boundary the cloth folds over sits
+   exactly at the hero's own bottom edge. `band` is that boundary as a fraction of the stage's
+   height, which is the one number the 3D page cannot work out for itself. */
+function place() {
+    const hero = document.querySelector('.hero');
+    const over = Number(overInput.value);
+    const heroH = hero.getBoundingClientRect().height;
+    const total = heroH + over;
+    stage.style.height = total + 'px';
+    edge.style.top = heroH + 'px';
+    overInput.nextElementSibling.value = over;
+    spanInput.nextElementSibling.value = spanInput.value;
+    document.body.classList.toggle('no-guide', !guideInput.checked);
+    return { band: heroH / total, span: Number(spanInput.value) / 100, heroH, over };
+}
+
+/* Layout changes go over postMessage, not through the src: reloading the iframe would restart the
+   roll from the top every time a slider moved, which makes it impossible to judge. */
+function retune() {
+    const { band, span, heroH, over } = place();
+    document.getElementById('what').textContent =
+        `pasmo ${Math.round(heroH)} px + zwis ${over} px`;
+    frame.contentWindow.postMessage({ band, span }, window.location.origin);
+}
+
+async function start() {
+    const templates = (await (await fetch('{{ base }}/api/templates')).json()).templates || [];
+    const roll = ROLL.map((named) => templates.find((t) => named.test(t.name || '')))
+                     .filter(Boolean);
+    const note = document.getElementById('note');
+    if (roll.length !== ROLL.length) {
+        note.textContent = 'Ten katalog nie ma wszystkich czterech produktów rolki '
+            + '(Vento Regular S, S Play A, S Play C, S Play B), więc nie ma czego ciąć.';
+        return;
+    }
+    const { band, span } = place();
+    const from = roll.slice(0, -1).map((t) => encodeURIComponent(t.token)).join(',');
+    source = `{{ base }}/model/${encodeURIComponent(roll[roll.length - 1].token)}`
+        + `?bare=1&cutFrom=${from}`;
+    frame.src = `${source}&band=${band.toFixed(4)}&span=${span.toFixed(3)}`;
+    note.textContent = 'Warstwa tylna: flaga, kadrowana i ruszana dokładnie jak hero, plus pełny '
+        + 'obrót. Warstwa przednia: tylko materiał odcięty od flagi, opadający na krawędź hero '
+        + 'i zwisający nad treścią. Strona główna jest nietknięta.';
+}
+
+for (const control of [overInput, spanInput, guideInput]) {
+    control.addEventListener('input', retune);
+}
+window.addEventListener('resize', retune);
+start();
+</script>
+</body>
+</html>

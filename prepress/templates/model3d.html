@@ -41,6 +41,13 @@ body.bare #stage canvas { pointer-events: none; }
    clipped top and bottom on a phone (shop rule, 2026-09-01). No floor here: fit the frame given. */
 body.bare, body.embed { height: 100vh; min-height: 0; overflow: hidden; }
 body.bare #stage, body.embed #stage { min-height: 0; }
+/* A cutting roll uses the BOTTOM of the frame — the bench, and the waste hanging off its edge. The
+   legend and the side note live down there on an inspection page, where nothing else does; on a
+   roll they sit exactly on the thing the whole sequence builds towards, and on a phone they cover
+   it outright. So on a roll they move to the TOP, which is empty sky for most of it, and share the
+   row rather than stacking blind: neither knows the other's wrapped height. */
+body.cutting .legend { top: 12px; bottom: auto; max-width: min(62%, 460px); }
+body.cutting .note-float { top: 12px; bottom: auto; max-width: 34%; }
 </style>
 <script type="importmap">
 { "imports": { "three": "{{ asset('three.module.min.js') }}" } }
@@ -180,6 +187,97 @@ function sweepSleeve(curve, { rings = 36, around = 24, radiusAt, tailAt, tailDir
     return { geometry, ringOfVertex };
 }
 
+/* ── The Vento REGULAR's tunnels ──
+   Measured off the flag's own cut outline: the notch in the top-left corner exists so the elbow
+   clears the fabric, so the notch's width IS the left tunnel and its height IS the top one. The
+   strips wrap the rigid frame as full sleeves (the shop: NOT folded in half), so they are erased
+   from the flat silhouette and built as fabric tubes by rigidFrame below. */
+function tunnelsOf(outline, box, clothW, S) {
+    const leftEdgeTop = Math.max(...outline.filter(([x]) => x < box.x0 + 1e-4).map(([, y]) => y));
+    const topEdgeLeft = Math.min(...outline.filter(([, y]) => y > box.y1 - 1e-4).map(([x]) => x));
+    const notchW = topEdgeLeft - box.x0, notchH = box.y1 - leftEdgeTop;
+    const plausible = (v) => v > 20 * S && v < clothW / 3;
+    return { w: plausible(notchW) ? notchW : 110 * S,
+             h: plausible(notchH) ? notchH : 110 * S };
+}
+
+/* ── The Vento REGULAR's frame ──
+   Rigid hardware, from a photo: a dark aluminium pole, a rigid white arm, an elbow joining them in
+   the notch the template cuts for it, and the two tunnel strips sewn round pole and arm as full
+   sleeves. Nothing here moves in the wind — the frame is rigid and the wind model knows it.
+
+   A FUNCTION and not a branch of the mast block, because a rolling cut shows a Regular SHEET on its
+   own frame before cutting a Vento out of it: two callers, one frame, and no second copy to drift.
+
+   WHERE the frame sits inside its tunnel is the whole difference between a sleeve and a missing
+   strip. The pole used to stand ON the seam — the corpus edge — with a fixed 62 mm teardrop tail
+   pointing INTO the corpus, so the ~110 mm strip the silhouette erases had nothing in it at all and
+   the flag read as having had its sleeve cut off rather than folded over the pole and sewn (the
+   shop, 2026-09-01, against the Vento winder line where it is right). The frame belongs at the
+   OUTER edge of its own tunnel: the fabric folds over it there and comes back to be sewn at the
+   corpus, which is exactly the span the tails below cover. */
+function rigidFrame({ tunnel, box, groundY, S }) {
+    const parts = new THREE.Group();
+    const steel = new THREE.MeshStandardMaterial({ color: 0xb4b9c1, roughness: 0.42,
+                                                   metalness: 0.12 });
+    const poleR = 14 * S, armR = 5 * S;
+    const poleWrap = poleR + 3 * S, armWrap = armR + 3 * S;
+    const poleX = box.x0 + poleWrap, armY = box.y1 - armWrap;
+
+    const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(poleR, poleR, armY - groundY, 16), steel);
+    pole.position.set(poleX, (groundY + armY) / 2, 0);
+    parts.add(pole);
+    const arm = new THREE.Mesh(
+        new THREE.CylinderGeometry(armR, armR, box.x1 - poleX, 12),
+        new THREE.MeshStandardMaterial({ color: 0xe8e8ea, roughness: 0.4 }));
+    arm.rotation.z = Math.PI / 2;
+    arm.position.set((poleX + box.x1) / 2, armY, 0);
+    parts.add(arm);
+    const elbow = new THREE.Mesh(
+        new THREE.SphereGeometry(poleR * 1.25, 14, 12),
+        new THREE.MeshStandardMaterial({ color: 0x2c2f36, roughness: 0.55 }));
+    elbow.position.set(poleX, armY, 0);
+    parts.add(elbow);
+
+    /* The tunnels: fabric PANCAKES stretched open by the frame — the teardrop profile, seam
+       pointing at the corpus. Each remembers which strip of the PAGE wraps it, so wearArtwork can
+       dress it in the customer's own print. The tail reaches from the frame's centre to the seam,
+       so a sleeve fills its tunnel exactly and meets the flat cloth instead of stopping short. */
+    const sleeveCloth = () => new THREE.MeshPhysicalMaterial({
+        color: 0xf4f4f6, roughness: 0.72, metalness: 0.0,
+        sheen: 0.5, sheenRoughness: 0.55, sheenColor: new THREE.Color(0xffffff),
+        side: THREE.DoubleSide,
+    });
+    const gap = 25 * S;
+    const poleSleeveH = armY - gap - box.y0;
+    const poleSweep = sweepSleeve(
+        new THREE.LineCurve3(new THREE.Vector3(poleX, box.y0, 0),
+                             new THREE.Vector3(poleX, box.y0 + poleSleeveH, 0)),
+        { radiusAt: () => poleWrap,
+          tailAt: () => Math.max(tunnel.w - poleWrap, poleWrap * 1.6),
+          tailDirAt: () => new THREE.Vector3(1, 0, 0),
+          uvAt: (t, fraction) => [fraction, t] });
+    const poleSleeve = new THREE.Mesh(poleSweep.geometry, sleeveCloth());
+    parts.add(poleSleeve);
+
+    const armSleeveL = box.x1 - (poleX + gap);
+    const armSweep = sweepSleeve(
+        new THREE.LineCurve3(new THREE.Vector3(poleX + gap, armY, 0),
+                             new THREE.Vector3(box.x1, armY, 0)),
+        { radiusAt: () => armWrap,
+          tailAt: () => Math.max(tunnel.h - armWrap, armWrap * 1.6),
+          // Gravity: the slack of the top sleeve hangs DOWN off the rigid arm.
+          tailDirAt: () => new THREE.Vector3(0, -1, 0),
+          uvAt: (t, fraction) => [t, fraction] });
+    const armSleeve = new THREE.Mesh(armSweep.geometry, sleeveCloth());
+    parts.add(armSleeve);
+
+    return { parts, poleX, sleeves: [
+        { mesh: poleSleeve, w: tunnel.w, h: poleSleeveH, x: box.x0, y: box.y0 },
+        { mesh: armSleeve, w: armSleeveL, h: tunnel.h, x: poleX + gap, y: armY }] };
+}
+
 const token = {{ token|tojson }};
 const stage = document.getElementById('stage');
 
@@ -190,14 +288,36 @@ function fail(text) {
 }
 
 const data = await fetch(`{{ base }}/api/templates/${token}/shape`).then(r => r.json()).catch(() => null);
-/* `?cutFrom=<token>` turns this page into the cutting animation: the flag starts as THAT shape and
-   is cut down to this one, on this template's own mast. The end state is what the mast belongs to,
-   which is why the cut runs on the destination's page rather than the source's. */
-const cutFromToken = new URLSearchParams(location.search).get('cutFrom');
-const cutFromData = cutFromToken
-    ? await fetch(`{{ base }}/api/templates/${cutFromToken}/shape`)
-          .then(r => r.json()).catch(() => null)
-    : null;
+/* `?cutFrom=<token>[,<token>…]` turns this page into the cutting animation: the flag starts as the
+   FIRST shape listed — the sheet — and is cut down through each later one to this one, on this
+   template's own mast. The end state is what the mast belongs to, which is why the chain runs on
+   the destination's page rather than the sheet's. A single token is the two-shape cut this began
+   as, unchanged.
+
+   The order is not a preference, it is arithmetic: a cut only ever makes a shape SMALLER, so the
+   tokens must descend by area. Measured on the four the shop rolls through — Regular S 20705 cm²,
+   Play A 12517, Play C 11604, Play B 9847 — which is why the chain is A → C → B and not the
+   A → B → C it is natural to say out loud. */
+const params = new URLSearchParams(location.search);
+const cutFromTokens = (params.get('cutFrom') || '')
+    .split(',').map(one => one.trim()).filter(Boolean);
+/* A roll is drawn in TWO LAYERS, which is what lets the cloth leave the flag's box.
+   BACK is the flag, framed and moved as the hero's own tour moves it, drawn only into the top
+   `band` of the canvas. FRONT is nothing but the cloth cut off it, drawn over the whole canvas
+   afterwards, so it hangs past that band and over whatever the page puts below.
+   `band` is where the two meet, as a fraction of the canvas height. The parent sets it, because
+   only the parent knows how tall its hero is; on a page of its own the default gives the cloth
+   room to hang without crowding the flag. */
+let bandFraction = Math.min(Math.max(parseFloat(params.get('band')) || 0.66, 0.15), 0.98);
+/* How wide the fallen cloth lies across the frame, as a fraction of it. Premium reads as BIG: a
+   length of real fabric over the page, not a swatch pinned to it. The parent may tune it, because
+   how much of a page a piece of cloth may cover is a question about the page. */
+let frontSpan = Math.min(Math.max(parseFloat(params.get('span')) || 0.52, 0.25), 1.6);
+const cutFromData = (await Promise.all(cutFromTokens.map(one =>
+        fetch(`{{ base }}/api/templates/${one}/shape`).then(r => r.json()).catch(() => null))))
+    .filter(shape => shape && !shape.error && (shape.netto || []).length);
+// Tells the page's own chrome to get out of the bottom of the frame; see the stylesheet.
+if (cutFromData.length) document.body.classList.add('cutting');
 if (!data || data.error || !(data.netto || []).length) {
     fail((data && data.error) || 'Nie udało się wczytać kształtu szablonu.');
 } else {
@@ -261,9 +381,21 @@ function fitInside(destination, source, preferred) {
     const clip = window.polygonClipping;
     const outside = (ring) => clip.difference(closedRing(ring), closedRing(source))
                                   .reduce((sum, polygon) => sum + ringArea(polygon[0]), 0);
-    const NOISE = ringArea(destination) * 2e-4;
-    if (!preferred && outside(destination) <= NOISE) return { ring: destination, morph: false };
-    const shape = preferred && preferred.length > 2 ? preferred : destination;
+    /* What counts as "does not fit" rather than "two drawings of the same edge disagree".
+       Measured across the roll: the worst HAIRLINE — a Play B against the Play C it comes out of,
+       two outlines that share that edge — is 3 cm², and the smallest genuine MISFIT — a Drop
+       against a Play B, where the hem really is 47 mm too narrow — is 401 cm². Anything between
+       1e-3 and 4e-2 of the destination's area separates them; 1e-3 sits two orders below the
+       misfit and keeps the hairline on the right side of the line, where the union clamp in
+       build() absorbs it for nothing. At the old 2e-4 the hairline read as a misfit and every
+       Play C → Play B cut was shrunk to 0.999 and then grown back over 1.3 s of dead animation. */
+    const NOISE = ringArea(destination) * 1e-3;
+    /* An EMPTY drawing is no drawing. `transform` is always present in the shape payload, so the
+       caller always hands this an array — and `!preferred` on `[]` is false, which is why every
+       cut so far reported `morph: true` whatever the geometry said. */
+    const drawn = preferred && preferred.length > 2;
+    if (!drawn && outside(destination) <= NOISE) return { ring: destination, morph: false };
+    const shape = drawn ? preferred : destination;
     const centre = [shape.reduce((s, p) => s + p[0] / shape.length, 0),
                     shape.reduce((s, p) => s + p[1] / shape.length, 0)];
     const scaledTo = (k) => shape.map(([x, y]) => [centre[0] + (x - centre[0]) * k,
@@ -339,152 +471,212 @@ function outlineOf(shape, scale) {
 
 /* ── The cut ─────────────────────────────────────────────────────────────────
    Returns a per-frame runner, or null when this page is not a cutting page. Everything it needs
-   is passed in: it wants the scene's numbers, not build()'s 1300-line scope.
+   is passed in: it wants the scene's numbers, not build()'s 1300-line scope. The runner returns
+   the BEAT it is playing, because the camera is part of the choreography and lives out there.
 
-   What comes away is difference(SOURCE, DESTINATION) from a real boolean library, and every frame
-   only ever INTERSECTS with that. Three earlier attempts reconstructed the waste side by hand and
-   each one, somewhere, kept the scrap and dropped the banner. This cannot: everything the
-   animation removes is by construction part of the true offcut. */
-function installCut({ S, fabric, finished, morphs, cutSource, box, clothW, clothH,
-                      paintSilhouette, clothMaterial, group }) {
-    if (!cutSource || !window.polygonClipping) return null;
+   `stages` is the roll — the sheet first, this template's own outline last, one cut between each
+   neighbouring pair. What comes away at every stage is difference(SOURCE, DESTINATION) from a real
+   boolean library, and every frame only ever INTERSECTS with that. Three earlier attempts
+   reconstructed the waste side by hand and each one, somewhere, kept the scrap and dropped the
+   banner. This cannot: everything the animation removes is by construction part of the true
+   offcut.
+
+   The waste no longer leaves the shot either. It falls at real g onto the bench at the foot of the
+   frame, drapes over the bench's front edge the way leftover cloth is left on a cutting table, and
+   stays there — one heap per stage — until the brand mark rolls across and pushes the lot off the
+   end. Then a fresh sheet slides in and the roll repeats. */
+function installCut({ S, stages, finished, morphs, box, clothW, clothH,
+                      paintSilhouette, clothMaterial, group, front, showTrim, rig, sheetRig,
+                      sheetTunnel, poleTravel, flag, brand }) {
+    if (!stages || stages.length < 2 || !window.polygonClipping) return null;
     const clip = window.polygonClipping;
+    const cuts = stages.length - 1;
 
     /* Where two outlines share a stretch, difference() emits a crumb per coincident vertex pair.
        Play A and Play C are the SAME shape above 800 mm and differ only in the bottom-right
-       corner, so their difference came back as one real 914 cm² piece plus 57 crumbs totalling
-       23 mm². Those are arithmetic, not cloth. The threshold names what it dropped, because a
-       rule that decides what counts as real has to be able to say what it excluded. */
-    const REAL_PIECE = 0.002;               // of the source's own area
-    const sourceArea = ringArea(cutSource);
-    const everything = clip.difference(closedRing(cutSource), closedRing(fabric));
-    const waste = everything.filter(poly => ringArea(poly[0]) / sourceArea >= REAL_PIECE);
-    if (waste.length !== everything.length) {
-        const crumbs = everything.length - waste.length;
-        const area = everything.filter(poly => ringArea(poly[0]) / sourceArea < REAL_PIECE)
-                               .reduce((sum, poly) => sum + ringArea(poly[0]), 0);
-        console.info(`cut: ignored ${crumbs} coincident-edge crumb(s), ` +
-                     `${(area * 1e4).toFixed(1)} mm² in total`);
-    }
-
-    /* Where the blade travels: EVERY stretch of the destination outline that is not already an
-       edge of the source. The Play A and the Regular share their bottom hem and a knife has
-       nothing to do there; a Drop parts from a Play B in three separate places. Each stretch is
-       one STROKE, and each keeps the shared point at either end — a straight edge is two points
-       long, so dropping the points that sit on it deletes the whole edge (that is what hid the
-       Regular's right-hand side). Taking only the longest stretch, as this did while every offcut
-       was a single piece, left a Drop's other two pieces on stretches the blade never visited. */
+       corner, so their difference comes back as one real 911 cm² piece plus 52 crumbs totalling
+       22 mm². Those are arithmetic, not cloth. The threshold names what it dropped, because a rule
+       that decides what counts as real has to be able to say what it excluded. */
+    const REAL_PIECE = 0.002;               // of that stage's own source area
+    /* How near a point has to be to count as lying ON an edge the source already has. */
     const ON_EXISTING_EDGE = 3 * S;
-    const shared = fabric.map(p => projectOnRing(cutSource, p).distance <= ON_EXISTING_EDGE);
-    const strokes = [];
-    const firstShared = shared.indexOf(true);
-    if (firstShared === -1) {
-        strokes.push(fabric.concat([fabric[0]]));      // nothing is shared: cut the whole ring
-    } else {
-        let stroke = [], anchor = null;
-        for (let k = 0; k <= fabric.length; k++) {
-            const i = (firstShared + k) % fabric.length;
-            if (shared[i]) {
-                if (stroke.length) { stroke.push(fabric[i]); strokes.push(stroke); stroke = []; }
-                anchor = fabric[i];
-            } else {
-                if (!stroke.length && anchor) stroke.push(anchor);
-                stroke.push(fabric[i]);
-            }
-        }
-        if (stroke.length > 1) strokes.push(stroke);
-    }
-    if (!strokes.length || !waste.length) return null;
-
-    /* The free corner is the bottom-right: the one the wind moves and the one a cutter reaches
-       for. Each stroke runs from its far end TOWARDS that corner, and the strokes are ordered the
-       same way, so the knife works inwards to the corner the offcut will hang from
-       (shop rule, 2026-09-01 — this ran the other way round until it was asked to be flipped). */
-    const freeCorner = cutSource.reduce((a, b) => (b[0] - b[1] > a[0] - a[1] ? b : a));
-    const toCorner = (p) => (p[0] - freeCorner[0]) ** 2 + (p[1] - freeCorner[1]) ** 2;
-    for (const stroke of strokes) {
-        if (toCorner(stroke[stroke.length - 1]) > toCorner(stroke[0])) stroke.reverse();
-    }
-    strokes.sort((a, b) => toCorner(b[0]) - toCorner(a[0]));
-    /* Constant blade speed, with the points shared out by real length so a long stroke is not
-       rushed to keep pace with a short one. The stored outline is hundreds of points around a
-       curve and two points down a straight side, so raw point order crawls the curve and
-       teleports the edge. */
-    const lengthOf = (r) => r.reduce(
-        (sum, p, i) => (i ? sum + Math.hypot(p[0] - r[i - 1][0], p[1] - r[i - 1][1]) : 0), 0);
-    const totalLength = strokes.reduce((sum, r) => sum + lengthOf(r), 0) || 1;
-    let cutPath = [];
-    for (const stroke of strokes) {
-        cutPath = cutPath.concat(resamplePath(
-            stroke, Math.max(2, Math.round(220 * lengthOf(stroke) / totalLength))));
-    }
-    if (cutPath.length <= 2) return null;
-
-    /* ── Timing ── one beat on the sheet before the first stroke, one on the finished flag after
-       the offcut has gone. A single pass is over in six seconds, not long enough to look twice.
-       GROW only exists for a destination that had to be cut undersized; when the shape fitted, it
-       is skipped and the cycle is what it always was. */
-    const SHEET = 1.2, CUT_SECONDS = 3.6, FALL_SECONDS = 1.2;
-    const GROW = morphs ? 1.3 : 0, FLAG = 2.3;
-    const CYCLE = SHEET + CUT_SECONDS + FALL_SECONDS + GROW + FLAG;
-    /* The piece that was cut becoming the piece that was ordered. A morph and not a scale: the two
-       are different outlines, so there is no factor that takes one to the other. The mast, the
-       base and the guide lines stand at true size throughout — they are what it grows into. */
-    const MORPH_STEPS = 24;                 // a 2048-wide mask repaint is not free
-    const [morphFrom, morphTo] = morphs ? alignRings(fabric, finished, 260) : [null, null];
-    const morphedAt = (step) => {
-        const t = step / MORPH_STEPS;
-        const eased = t * t * (3 - 2 * t);
-        return morphFrom.map(([x, y], i) => [x + (morphTo[i][0] - x) * eased,
-                                             y + (morphTo[i][1] - y) * eased]);
-    };
-    // Real g. One scene unit is 100 mm, so 9.81 m/s² is 98.1 units/s², and a 2.3 m flag's offcut
-    // clears the shot in about two thirds of a second — which is what it does.
+    const CUT_FRAMES = 120;
+    // Real g. One scene unit is 100 mm, so 9.81 m/s² is 98.1 units/s².
     const GRAVITY = 98.1;
 
-    /* ── Every step of the cut, computed once ──
-       Freeing is decided PER OFFCUT PIECE, against that piece's own ring. The single closure this
-       replaces walked the SOURCE boundary between the two ends of the whole cut, which spans
-       pieces the blade has not reached — that is what made Play C → Play B free area
-       backwards. Every piece here is entirely waste, so a wrong closure can only free LESS of that
-       piece; it can never reach the banner.
+    /* ── The roll, beat by beat ──
+       The shop owner's own script, in order: each flag takes its turn in front of the camera, then
+       the pole comes out, the blade runs, the waste drops to the bench, the pole goes back in, and
+       the next flag takes its turn. After the last one the mark clears the bench, the finished flag
+       slides out and a fresh sheet slides in. Held as ONE table because the timing IS the
+       choreography; scattered through the runner it becomes impossible to retune. */
+    const PRESENT = 3.8, SQUARE = 0.7, POLE = 0.6, CUT_SECONDS = 3.4, SETTLE = 1.35;
+    const SWEEP = 2.6, SLIDE_OUT = 0.85, SLIDE_IN = 0.95;
+    /* GROW only exists for a destination that had to be cut undersized; when every shape in the
+       roll fits as drawn, it is skipped and costs nothing. */
+    const GROW = morphs ? 1.3 : 0;
+    const beats = [];
+    let running = 0;
+    const beat = (kind, seconds, stage) => {
+        beats.push({ kind, stage, from: running, to: running + seconds, span: seconds });
+        running += seconds;
+    };
+    /* The pole comes out ONCE and goes back in ONCE, around the FIRST cut only: the sheet is taken
+       off the Regular's frame, cut, and what comes out of it is hung on the Vento mast. The two
+       cuts after that happen with that mast standing (the shop, 2026-09-01: "no more flagpole funny
+       business"). Without a frame of its own for the sheet there is nothing to swap, so the mast
+       simply stays up for the whole roll. */
+    for (let i = 0; i < cuts; i++) {
+        beat('present', PRESENT, i);
+        /* SQUARE UP. The blade only ever works on a flag that is face-on and still: awers to the
+           camera, flat, no turn, no wind (the shop, 2026-09-01). This beat is where the turn eases
+           back to a whole number of revolutions and the camera comes round to straight-on, so that
+           nothing is moving by the time anything is cut. */
+        beat('square', SQUARE, i);
+        if (i === 0 && sheetRig) beat('poleOut', POLE, i);
+        beat('cut', CUT_SECONDS, i);
+        beat('settle', SETTLE, i);
+        if (i === 0 && sheetRig) beat('poleIn', POLE, i);
+    }
+    if (GROW) beat('grow', GROW, cuts);
+    beat('present', PRESENT, cuts);
+    beat('sweep', SWEEP, cuts);
+    beat('slideOut', SLIDE_OUT, cuts);
+    beat('slideIn', SLIDE_IN, cuts);
+    const CYCLE = running;
 
-       Both halves are stored, freed AND kept. The kept half used to be computed in the frame loop
-       as an argument to the repaint — which meant a ~3 ms boolean ran 60 times a second forever,
-       to feed a function whose first line was a cache check. */
-    const bannerInside = fabric.reduce(
-        (a, p) => [a[0] + p[0] / fabric.length, a[1] + p[1] / fabric.length], [0, 0]);
-    // When the blade first and last runs along each piece's own boundary.
-    const pieces = waste.map((polygon) => {
-        const ring = openRing(polygon[0]);
-        let first = Infinity, last = -Infinity;
-        for (let i = 0; i < cutPath.length; i++) {
-            if (projectOnRing(ring, cutPath[i]).distance <= ON_EXISTING_EDGE) {
-                if (i < first) first = i;
-                if (i > last) last = i;
-            }
+    const eased = (k) => k * k * (3 - 2 * k);
+
+    /* The piece that was cut becoming the piece that was ordered. A morph and not a scale: the two
+       are different outlines, so there is no factor that takes one to the other. The mast, the base
+       and the guide lines stand at true size throughout — they are what it grows into. */
+    const MORPH_STEPS = 24;                 // a 2048-wide mask repaint is not free
+    const [morphFrom, morphTo] = morphs ? alignRings(stages[cuts], finished, 260) : [null, null];
+    const morphedAt = (step) => {
+        const t = step / MORPH_STEPS;
+        const smoothed = eased(t);
+        return morphFrom.map(([x, y], i) => [x + (morphTo[i][0] - x) * smoothed,
+                                             y + (morphTo[i][1] - y) * smoothed]);
+    };
+
+    /* ── One stage's geometry ──
+       Where the blade travels: EVERY stretch of the destination outline that is not already an edge
+       of the source. A Play A and the Regular share their bottom hem and a knife has nothing to do
+       there; a Play B parts from a Play C in two separate places. Each stretch is one STROKE, and
+       each keeps the shared point at either end — a straight edge is two points long, so dropping
+       the points that sit on it deletes the whole edge (that is what hid the Regular's right-hand
+       side). Taking only the longest stretch left a two-piece offcut's second piece on a stretch
+       the blade never visited. */
+    function planGeometry(index) {
+        const cutSource = stages[index], fabric = stages[index + 1];
+        const sourceArea = ringArea(cutSource);
+        const everything = clip.difference(closedRing(cutSource), closedRing(fabric));
+        const waste = everything.filter(poly => ringArea(poly[0]) / sourceArea >= REAL_PIECE);
+        if (waste.length !== everything.length) {
+            const crumbs = everything.length - waste.length;
+            const area = everything.filter(poly => ringArea(poly[0]) / sourceArea < REAL_PIECE)
+                                   .reduce((sum, poly) => sum + ringArea(poly[0]), 0);
+            console.info(`cut ${index + 1}/${cuts}: ignored ${crumbs} coincident-edge crumb(s), ` +
+                         `${(area * 1e4).toFixed(1)} mm² in total`);
         }
-        /* Nothing separates until the stroke closes, and that is not a fallback — it is what
-           happens when the offcut SURROUNDS the destination. Cutting a Drop out of the middle of a
-           Play B leaves a frame, whose outer edge is the sheet's own and whose inner edge is the
-           cut; a frame holds together right up to the moment the cut meets itself. The test above
-           looks at the outer ring only, so exactly those pieces land here. */
-        if (first === Infinity) { first = cutPath.length - 2; last = cutPath.length - 1; }
-        return { polygon, ring, first, last };
-    });
-    const stepAt = (headLength) => {
+        if (!waste.length) return null;
+
+        const shared = fabric.map(p => projectOnRing(cutSource, p).distance <= ON_EXISTING_EDGE);
+        const strokes = [];
+        const firstShared = shared.indexOf(true);
+        if (firstShared === -1) {
+            strokes.push(fabric.concat([fabric[0]]));      // nothing is shared: cut the whole ring
+        } else {
+            let stroke = [], anchor = null;
+            for (let k = 0; k <= fabric.length; k++) {
+                const i = (firstShared + k) % fabric.length;
+                if (shared[i]) {
+                    if (stroke.length) { stroke.push(fabric[i]); strokes.push(stroke); stroke = []; }
+                    anchor = fabric[i];
+                } else {
+                    if (!stroke.length && anchor) stroke.push(anchor);
+                    stroke.push(fabric[i]);
+                }
+            }
+            if (stroke.length > 1) strokes.push(stroke);
+        }
+        if (!strokes.length) return null;
+
+        /* The free corner is the bottom-right: the one the wind moves and the one a cutter reaches
+           for. Each stroke runs from its far end TOWARDS that corner, and the strokes are ordered
+           the same way, so the knife works inwards to the corner the offcut will hang from
+           (shop rule, 2026-09-01 — this ran the other way round until it was asked to be flipped). */
+        const freeCorner = cutSource.reduce((a, b) => (b[0] - b[1] > a[0] - a[1] ? b : a));
+        const toCorner = (p) => (p[0] - freeCorner[0]) ** 2 + (p[1] - freeCorner[1]) ** 2;
+        for (const stroke of strokes) {
+            if (toCorner(stroke[stroke.length - 1]) > toCorner(stroke[0])) stroke.reverse();
+        }
+        strokes.sort((a, b) => toCorner(b[0]) - toCorner(a[0]));
+        /* Constant blade speed, with the points shared out by real length so a long stroke is not
+           rushed to keep pace with a short one. The stored outline is hundreds of points around a
+           curve and two points down a straight side, so raw point order crawls the curve and
+           teleports the edge. */
+        const lengthOf = (r) => r.reduce(
+            (sum, p, i) => (i ? sum + Math.hypot(p[0] - r[i - 1][0], p[1] - r[i - 1][1]) : 0), 0);
+        const totalLength = strokes.reduce((sum, r) => sum + lengthOf(r), 0) || 1;
+        let cutPath = [];
+        for (const stroke of strokes) {
+            cutPath = cutPath.concat(resamplePath(
+                stroke, Math.max(2, Math.round(220 * lengthOf(stroke) / totalLength))));
+        }
+        if (cutPath.length <= 2) return null;
+
+        /* Freeing is decided PER OFFCUT PIECE, against that piece's own ring. A single closure
+           walking the SOURCE boundary between the two ends of the whole cut spans pieces the blade
+           has not reached — that is what made a two-piece stage free area backwards. Every piece
+           here is entirely waste, so a wrong closure can only free LESS of that piece; it can never
+           reach the banner. */
+        const bannerInside = fabric.reduce(
+            (a, p) => [a[0] + p[0] / fabric.length, a[1] + p[1] / fabric.length], [0, 0]);
+        // When the blade first and last runs along each piece's own boundary.
+        const pieces = waste.map((polygon) => {
+            const ring = openRing(polygon[0]);
+            let first = Infinity, last = -Infinity;
+            for (let i = 0; i < cutPath.length; i++) {
+                if (projectOnRing(ring, cutPath[i]).distance <= ON_EXISTING_EDGE) {
+                    if (i < first) first = i;
+                    if (i > last) last = i;
+                }
+            }
+            /* Nothing separates until the stroke closes, and that is not a fallback — it is what
+               happens when the offcut SURROUNDS the destination. A shape cut out of the middle of
+               another leaves a frame, whose outer edge is the sheet's own and whose inner edge is
+               the cut; a frame holds together right up to the moment the cut meets itself. The test
+               above looks at the outer ring only, so exactly those pieces land here. */
+            if (first === Infinity) { first = cutPath.length - 2; last = cutPath.length - 1; }
+            return { polygon, ring, first, last };
+        });
+
+        const wastePoints = waste.flat().flat();
+        return {
+            index, cutSource, fabric, waste, cutPath, pieces, bannerInside, steps: [],
+            left: Math.min(...wastePoints.map(p => p[0])),
+            right: Math.max(...wastePoints.map(p => p[0])),
+            top: Math.max(...wastePoints.map(p => p[1])),
+            bottom: Math.min(...wastePoints.map(p => p[1])),
+        };
+    }
+
+    // Both halves are stored, freed AND kept: the kept half used to be recomputed in the frame
+    // loop, which meant a ~3 ms boolean ran sixty times a second to feed a cache check.
+    function stepAt(plan, headLength) {
         const freed = [];
-        for (const piece of pieces) {
+        for (const piece of plan.pieces) {
             if (headLength <= piece.first) continue;               // not reached yet
             if (headLength > piece.last) { freed.push(piece.polygon); continue; }
-            const head = cutPath.slice(piece.first, headLength);
+            const head = plan.cutPath.slice(piece.first, headLength);
             if (head.length < 2) continue;
             const a = projectOnRing(piece.ring, head[0]);
             const b = projectOnRing(piece.ring, head[head.length - 1]);
             const forward = head.concat(walkRing(piece.ring, b, a));
             const backward = head.concat(walkRing(piece.ring, a, b).reverse());
-            let candidate = pointInRing(forward, bannerInside) ? backward : forward;
-            if (pointInRing(candidate, bannerInside)) {
+            let candidate = pointInRing(forward, plan.bannerInside) ? backward : forward;
+            if (pointInRing(candidate, plan.bannerInside)) {
                 candidate = ringArea(forward) < ringArea(backward) ? forward : backward;
             }
             try {
@@ -495,108 +687,108 @@ function installCut({ S, fabric, finished, morphs, cutSource, box, clothW, cloth
         }
         const rings = freed.flat();
         return { freed: rings,
-                 kept: rings.length ? clip.difference(closedRing(cutSource), freed).flat()
-                                    : [cutSource] };
-    };
+                 kept: rings.length ? clip.difference(closedRing(plan.cutSource), freed).flat()
+                                    : [plan.cutSource] };
+    }
 
-    /* Off the critical path and in small bites: two booleans a step is ~6 ms, and 120 of them in
-       one macrotask froze the page for a third of a second on the office Intel HD 530. */
-    const CUT_FRAMES = 120, PER_TICK = 6;
-    const steps = [];
-    const precompute = () => {
-        const until = Math.min(steps.length + PER_TICK, CUT_FRAMES);
-        while (steps.length < until) {
-            steps.push(stepAt(Math.round(cutPath.length * (steps.length + 1) / CUT_FRAMES)));
-        }
-        if (steps.length < CUT_FRAMES) setTimeout(precompute, 0);
-    };
-    setTimeout(precompute, 0);
-
-    /* ── The offcut mesh ──
+    /* ── One stage's offcut mesh ──
        Its own plane rather than a clone of the cloth's: it never takes wind, so it does not need
-       the cloth's segment count, and every vertex it carries is paid for twice — once in the
-       hinge search below and again in computeVertexNormals on every frame of the cut. Same size
-       and same UVs, so it wears the printed sheet exactly as the cloth does. */
-    const OFFCUT_ACROSS = 20;
-    const offcutGeometry = new THREE.PlaneGeometry(
-        clothW, clothH, OFFCUT_ACROSS,
-        Math.min(72, Math.round(OFFCUT_ACROSS * clothH / clothW)));
-    offcutGeometry.translate(box.x0 + clothW / 2, box.y0 + clothH / 2, 0);
-    const cutMesh = new THREE.Mesh(offcutGeometry, clothMaterial.clone());
-    // Half resolution: this mask only has to carry the edge of a piece that is on screen for
-    // three seconds and then falls, while the banner's own mask is what you inspect.
+       the cloth's segment count, and every vertex it carries is paid for twice — once in the hinge
+       search below and again in computeVertexNormals on every frame of the cut. Same size and same
+       UVs as the cloth, so it wears the printed sheet exactly as the cloth does. */
+    /* Enough segments across the piece to carry the folds of the drape: at 20 a fold spanned four
+       quads and read as a crease rather than a curve. */
+    const OFFCUT_ACROSS = 36;
+    /* The cloth is the front layer now — it lies across the page and is looked AT, not glimpsed
+       falling — so its silhouette gets resolution to match. Two meshes share each mask, so this is
+       one canvas per stage and not two. */
     const OFFCUT_MASK_WIDTH = 1024;
-    const offcut = silhouette(OFFCUT_MASK_WIDTH,
-                              Math.min(4096, Math.round(OFFCUT_MASK_WIDTH * clothH / clothW)));
-    cutMesh.material.alphaMap = offcut.texture;
-    cutMesh.material.needsUpdate = true;
-    cutMesh.visible = false;
 
-    /* Pinned at the offcut's OWN middle. Rotating the mesh itself turns it about the plane's
-       centre, which is not on the piece — that is what threw the offcut sideways out of shot
-       instead of dropping it. */
-    const wastePoints = waste.flat().flat();
-    const dropX = (Math.min(...wastePoints.map(p => p[0]))
-                   + Math.max(...wastePoints.map(p => p[0]))) / 2;
-    const dropY = (Math.min(...wastePoints.map(p => p[1]))
-                   + Math.max(...wastePoints.map(p => p[1]))) / 2;
-    const falling = new THREE.Group();
-    falling.position.set(dropX, dropY, 0);
-    cutMesh.position.set(-dropX, -dropY, 0);
-    falling.add(cutMesh);
-    group.add(falling);
+    function dress(plan) {
+        const geometry = new THREE.PlaneGeometry(
+            clothW, clothH, OFFCUT_ACROSS,
+            Math.min(72, Math.round(OFFCUT_ACROSS * clothH / clothW)));
+        geometry.translate(box.x0 + clothW / 2, box.y0 + clothH / 2, 0);
+        const mesh = new THREE.Mesh(geometry, clothMaterial.clone());
+        const mask = silhouette(OFFCUT_MASK_WIDTH,
+                                Math.min(4096, Math.round(OFFCUT_MASK_WIDTH * clothH / clothW)));
+        mesh.material.alphaMap = mask.texture;
+        mesh.material.needsUpdate = true;
+        mesh.visible = false;
 
-    /* The offcut is the SAME printed sheet, so it wears whatever the cloth is wearing. The artwork
-       arrives asynchronously and lands on clothMaterial after this clone was taken, which is why
-       the freed strip came away blank on the first run. */
-    const matchCloth = () => {
-        if (cutMesh.material.map === clothMaterial.map) return;
-        cutMesh.material.map = clothMaterial.map;
-        cutMesh.material.color.copy(clothMaterial.color);
-        cutMesh.material.needsUpdate = true;
-    };
+        /* Pinned at the offcut's OWN middle. Rotating the mesh itself turns it about the plane's
+           centre, which is not on the piece — that is what threw the offcut sideways out of shot
+           instead of dropping it. */
+        const dropX = (plan.left + plan.right) / 2, dropY = (plan.bottom + plan.top) / 2;
+        const falling = new THREE.Group();
+        falling.position.set(dropX, dropY, 0);
+        mesh.position.set(-dropX, -dropY, 0);
+        falling.add(mesh);
+        group.add(falling);
 
-    /* ── How the freed cloth moves ──
-       Which stroke of the cut freed each vertex, and which way the blade was pointing there.
-       Computed once: it is the plane's own grid against the path, and neither moves. The direction
-       is the hinge the freed cloth folds over. */
-    const flat = offcutGeometry.attributes.position.array.slice();
-    const vertexCount = offcutGeometry.attributes.position.count;
-    const hinge = new Uint16Array(vertexCount);
-    const freedWhen = new Float32Array(vertexCount);
-    for (let v = 0; v < vertexCount; v++) {
-        const x = flat[v * 3], y = flat[v * 3 + 1];
-        let best = Infinity, bestStep = 0;
-        for (let i = 0; i < cutPath.length; i++) {
-            const d = (cutPath[i][0] - x) ** 2 + (cutPath[i][1] - y) ** 2;
-            if (d < best) { best = d; bestStep = i; }
+        /* The SAME piece where it ends up: its own mesh in the front layer, wearing the same
+           silhouette mask and the same print. Two meshes and not one, because the two live in
+           different worlds — the peeling one is on the flag, in perspective, turning with it; this
+           one lies over the bottom edge of the frame in a flat orthographic layer that the flag's
+           camera knows nothing about. Nobody follows a falling strip pixel for pixel across that
+           boundary; what reads is that it fell, and is now here. */
+        const restGeometry = new THREE.PlaneGeometry(
+            clothW, clothH, OFFCUT_ACROSS,
+            Math.min(72, Math.round(OFFCUT_ACROSS * clothH / clothW)));
+        restGeometry.translate(box.x0 + clothW / 2, box.y0 + clothH / 2, 0);
+        const restMesh = new THREE.Mesh(restGeometry, clothMaterial.clone());
+        restMesh.material.alphaMap = mask.texture;
+        restMesh.material.aoMap = null;             // the hem AO belongs to the flag, not to scrap
+        restMesh.material.needsUpdate = true;
+        restMesh.visible = false;
+        front.add(restMesh);
+
+        /* Which stroke of the cut freed each vertex, and which way the blade was pointing there.
+           Computed once: it is the plane's own grid against the path, and neither moves. The
+           direction is the hinge the freed cloth folds over. */
+        const flat = geometry.attributes.position.array.slice();
+        const vertexCount = geometry.attributes.position.count;
+        const hinge = new Uint16Array(vertexCount);
+        const freedWhen = new Float32Array(vertexCount);
+        for (let v = 0; v < vertexCount; v++) {
+            const x = flat[v * 3], y = flat[v * 3 + 1];
+            let best = Infinity, bestStep = 0;
+            for (let i = 0; i < plan.cutPath.length; i++) {
+                const d = (plan.cutPath[i][0] - x) ** 2 + (plan.cutPath[i][1] - y) ** 2;
+                if (d < best) { best = d; bestStep = i; }
+            }
+            hinge[v] = bestStep;
+            freedWhen[v] = bestStep / (plan.cutPath.length - 1);
         }
-        hinge[v] = bestStep;
-        freedWhen[v] = bestStep / (cutPath.length - 1);
-    }
-    const alongX = new Float32Array(cutPath.length);
-    const alongY = new Float32Array(cutPath.length);
-    for (let i = 0; i < cutPath.length; i++) {
-        const a = cutPath[Math.max(0, i - 1)], b = cutPath[Math.min(cutPath.length - 1, i + 1)];
-        const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
-        alongX[i] = dx / len;
-        alongY[i] = dy / len;
+        const alongX = new Float32Array(plan.cutPath.length);
+        const alongY = new Float32Array(plan.cutPath.length);
+        for (let i = 0; i < plan.cutPath.length; i++) {
+            const a = plan.cutPath[Math.max(0, i - 1)];
+            const b = plan.cutPath[Math.min(plan.cutPath.length - 1, i + 1)];
+            const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
+            alongX[i] = dx / len;
+            alongY[i] = dy / len;
+        }
+        Object.assign(plan, { geometry, mesh, mask, falling, dropX, dropY, flat, vertexCount,
+                              hinge, freedWhen, alongX, alongY, shownMask: null, landed: 0,
+                              sagged: null, restGeometry, restMesh, draped: false,
+                              midX: (box.x0 + box.x1) / 2 });
+        drape(plan);            // its resting pose never changes, so write it once and leave it
     }
 
-    /* Cloth the blade has passed is held only by whatever is still uncut above it: it peels off
-       the plane along the cut line and it sags. Both grow with the SQUARE of the time since it
-       came loose, because acceleration is what the eye reads as weight — the first version moved
-       every freed vertex by the same amount and then stopped, which looked like a wipe. The
-       ceilings are the attachment itself; cloth still joined above cannot fall further than the
-       join lets it. */
+    /* Cloth the blade has passed is held only by whatever is still uncut above it: it peels off the
+       plane along the cut line and it sags. Both grow with the SQUARE of the time since it came
+       loose, because acceleration is what the eye reads as weight — the first version moved every
+       freed vertex by the same amount and then stopped, which looked like a wipe. The ceilings are
+       the attachment itself; cloth still joined above cannot fall further than the join lets it. */
     const LOOSE_FULL = 1.1;                  // seconds to reach the ceilings
     const HELD_SAG = clothH * 0.15;
     const PEEL_MAX = 1.15;                   // radians it folds off the plane
-    const sagOffcut = (progress) => {
-        const position = offcutGeometry.attributes.position;
-        for (let v = 0; v < vertexCount; v++) {
-            const x = flat[v * 3], y = flat[v * 3 + 1];
-            const loose = Math.max(0, progress - freedWhen[v]) * CUT_SECONDS;
+    function sagOffcut(plan, progress) {
+        const position = plan.geometry.attributes.position;
+        for (let v = 0; v < plan.vertexCount; v++) {
+            const x = plan.flat[v * 3], y = plan.flat[v * 3 + 1];
+            const loose = Math.max(0, progress - plan.freedWhen[v]) * CUT_SECONDS;
             if (loose <= 0) {
                 position.array[v * 3] = x;
                 position.array[v * 3 + 1] = y;
@@ -604,9 +796,9 @@ function installCut({ S, fabric, finished, morphs, cutSource, box, clothW, cloth
                 continue;
             }
             const weight = Math.min(loose / LOOSE_FULL, 1) ** 2;
-            const i = hinge[v];
-            const hx = cutPath[i][0], hy = cutPath[i][1];
-            const ux = alongX[i], uy = alongY[i];
+            const i = plan.hinge[v];
+            const hx = plan.cutPath[i][0], hy = plan.cutPath[i][1];
+            const ux = plan.alongX[i], uy = plan.alongY[i];
             const rx = x - hx, ry = y - hy;
             const along = ux * rx + uy * ry;
             /* Rodrigues about the cut line, which lies in the plane, so the only new depth comes
@@ -620,75 +812,412 @@ function installCut({ S, fabric, finished, morphs, cutSource, box, clothW, cloth
             position.array[v * 3 + 2] = (ux * ry - uy * rx) * s;
         }
         position.needsUpdate = true;
-        offcutGeometry.computeVertexNormals();
+        plan.geometry.computeVertexNormals();
+    }
+
+    /* ── Where the cloth ends up ──
+       Folded over the bottom edge of the frame — the bottom of the hero, on a page — with NO TABLE
+       under it (the shop, 2026-09-01). Written in the FRONT layer's own coordinates: x across the
+       frame from its middle, y zero AT that edge and negative below it, z towards the viewer. So
+       "hangs over the edge" is literally y going negative, and the orthographic front camera puts
+       y = 0 on the boundary pixel exactly.
+
+       A long strip cannot hang its whole length: the Regular's first offcut is 2.3 m of cloth and
+       would run off the bottom of the page. So past the drop the length GATHERS, which is what
+       fabric does when more of it arrives than there is room to hang.
+
+       FOLDS ACROSS THE WIDTH are the whole difference between hanging cloth and hanging card, and
+       card is what the first version looked like. Nothing where it lies back over the edge, held
+       flat by the weight of everything behind it; growing as it goes down, where nothing holds it
+       at all. Each piece carries its own phase and its own tilt, so three of them over one edge
+       read as three cloths rather than one thick one.
+
+       Written once, when the piece is built: a resting pose that never changes is static geometry
+       and costs nothing for the rest of the roll. */
+    const OVER = 0.75;                       // how much lies back over the edge, above the line
+    const DROP = 4.4;                        // how far it hangs below the line
+    const GATHER = 0.7;                      // the coil the remaining length gathers into
+    const GATHER_PITCH = 1.0;                // one fold of that coil
+    const STACK = 0.4;                       // each piece lies a little in front of the last
+    /* Fold pitch in the CLOTH's own terms, not in absolute units: the first offcut off a Regular is
+       a full-width band and the last is a corner scrap, and a fixed pitch gave the wide one four
+       lazy waves and the narrow one none at all. */
+    const FOLD_PITCH = clothW / 7;           // one fold across the width
+    const FOLD_DEPTH = 0.42;                 // how far a fold stands off the plane at full hang
+    function drapedAt(plan, v) {
+        const raw = plan.flat[v * 3];
+        const across = raw - plan.midX;
+        const ahead = plan.index * STACK;
+        // A slight tilt over the edge, different per piece: cloth is never laid down square.
+        const tilt = (plan.index - 1) * 0.05;
+        const s = Math.max(0, plan.top - plan.flat[v * 3 + 1] + (raw - plan.left) * tilt);
+        if (s < OVER) {
+            // Lying back over the edge, away from the viewer: the fold that sells the weight.
+            const back = OVER - s;
+            return [across, back * 0.28, ahead - back];
+        }
+        const down = s - OVER;
+        const loose = Math.min(down / DROP, 1);
+        const fold = Math.sin(across / FOLD_PITCH * 2 * Math.PI + plan.index * 2.1)
+                     * FOLD_DEPTH * loose;
+        // A fold eats length, so fabric taken up sideways rides back up — which is what gives a
+        // hanging cloth its uneven bottom edge instead of a ruled one.
+        const takenUp = Math.abs(fold) * 0.35;
+        if (down < DROP) return [across, -down + takenUp, ahead + fold];
+        const turn = (down - DROP) / GATHER_PITCH * 2 * Math.PI;
+        return [across, -DROP - GATHER * (0.5 - 0.5 * Math.cos(turn)) + takenUp,
+                ahead + fold + GATHER * 0.7 * Math.sin(turn)];
+    }
+
+    function drape(plan) {
+        const position = plan.restGeometry.attributes.position;
+        for (let v = 0; v < plan.vertexCount; v++) {
+            const [x, y, z] = drapedAt(plan, v);
+            position.array[v * 3] = x;
+            position.array[v * 3 + 1] = y;
+            position.array[v * 3 + 2] = z;
+        }
+        position.needsUpdate = true;
+        plan.restGeometry.computeVertexNormals();
+        /* And the bounds, or the piece is never drawn. Every vertex above has just been moved out of
+           the flag's world and into the front layer's, but the geometry's bounding sphere is still
+           the one computed from the flat plane — so three.js frustum-culls the mesh against a sphere
+           nowhere near where the cloth now is, and the front layer renders an empty scene while
+           reporting three visible meshes. */
+        plan.restGeometry.computeBoundingSphere();
+        plan.restGeometry.computeBoundingBox();
+    }
+
+    /* Arriving is a DROP, not an appearance: the cloth comes in from above the edge and settles,
+       with the last of it easing out rather than stopping dead. */
+    const ARRIVE = 4.2;                      // how far above its resting place it comes in from
+    const ARRIVE_AT = 0.34;                  // how far into the settle the front layer takes over
+    function arriveCloth(plan, k) {
+        const settled = eased(Math.min(Math.max(k, 0), 1));
+        plan.restMesh.visible = k > 0;
+        plan.restMesh.position.y = (1 - settled) * ARRIVE;
+        // A touch of roll as it lands, alternating, so two pieces never arrive the same way.
+        plan.restMesh.rotation.z = (1 - settled) * 0.07 * (plan.index % 2 ? 1 : -1);
+    }
+
+    /* ── The mark that clears the bench ──
+       The brand's own signet, rolling across the page and shoving the day's waste off the end. The
+       logo is CONFIGURATION, never content (PREPRESS_BRAND_LOGO) — a shop's mark belongs to the
+       shop — and with none set the disc wears the brand NAME, exactly as the page header does. The
+       wordmark is painted first and the image replaces it if and when it loads, so a blocked or
+       cross-origin logo degrades to something readable instead of to a blank coin. */
+    function brandFace() {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 512;
+        const face = canvas.getContext('2d');
+        const clear = () => {
+            face.clearRect(0, 0, 512, 512);
+            face.fillStyle = '#ffffff';
+            face.beginPath();
+            face.arc(256, 256, 250, 0, Math.PI * 2);
+            face.fill();
+        };
+        clear();
+        face.fillStyle = '#14161a';
+        face.font = '700 58px system-ui, Segoe UI, sans-serif';
+        face.textAlign = 'center';
+        face.textBaseline = 'middle';
+        face.fillText(brand.name || 'prepress-open', 256, 256, 400);
+        const texture = new THREE.CanvasTexture(canvas);
+        if (brand.logo) {
+            const image = new Image();
+            image.crossOrigin = 'anonymous';
+            image.onload = () => {
+                clear();
+                const fit = Math.min(330 / image.width, 330 / image.height);
+                face.drawImage(image, 256 - image.width * fit / 2, 256 - image.height * fit / 2,
+                               image.width * fit, image.height * fit);
+                texture.needsUpdate = true;
+            };
+            image.onerror = () => { /* the wordmark already painted is the correct fallback */ };
+            image.src = brand.logo;
+        }
+        return texture;
+    }
+
+    /* Big enough to read as the brand rather than as a bead on a rail, and it rides LOW: the cloth
+       hangs BELOW the edge, so a disc rolling along the edge itself would clear the very thing it is
+       supposed to be shoving off. In the FRONT layer, in front of every piece of cloth there. */
+    const MARK_RADIUS = 2.1;
+    const MARK_RIDE = -1.4;                  // its centre, relative to the edge (front-layer y)
+    const markGeometry = new THREE.CylinderGeometry(MARK_RADIUS, MARK_RADIUS, 0.24, 40);
+    // A cylinder stands on its own +y; turned onto its side its faces meet the camera and it rolls
+    // about z, which is the axis the sweep spins.
+    markGeometry.rotateX(Math.PI / 2);
+    const markFace = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5,
+                                                      map: brandFace(), transparent: true });
+    const mark = new THREE.Mesh(markGeometry, [
+        new THREE.MeshStandardMaterial({ color: 0x1d2026, roughness: 0.7 }),
+        markFace, markFace]);
+    mark.visible = false;
+    front.add(mark);
+    /* Right across the frame and out the other side. The front layer's own width, not the flag's:
+       these are front-layer coordinates, centred on the frame. */
+    const frameHalf = () => Math.max(clothW / 2 / 0.82, clothW / 2) + MARK_RADIUS + 1.5;
+
+    /* ── Precompute, off the critical path and in small bites ──
+       Two booleans a step is ~6 ms, and 120 of them in one macrotask froze the page for a third of
+       a second on the office Intel HD 530. With a roll of stages there is more of it, so it is
+       queued: the stage in hand finishes first and the rest fill in behind it while that one plays.
+       Each stage takes about nine seconds of the roll and about a second and a half to prepare, so
+       the queue stays well ahead — and when it does not, the clock WAITS (see the runner) rather
+       than skipping a cut nobody got to see. */
+    const PER_TICK = 6;
+    const plans = new Array(cuts).fill(null);
+    let building = 0;
+    const precompute = () => {
+        while (building < cuts && plans[building] === false) building += 1;
+        if (building >= cuts) return;
+        if (plans[building] === null) {
+            const plan = planGeometry(building);
+            if (!plan) { plans[building] = false; building += 1; setTimeout(precompute, 0); return; }
+            dress(plan);
+            plans[building] = plan;
+            setTimeout(precompute, 0);
+            return;
+        }
+        const plan = plans[building];
+        const until = Math.min(plan.steps.length + PER_TICK, CUT_FRAMES);
+        while (plan.steps.length < until) {
+            plan.steps.push(stepAt(
+                plan, Math.round(plan.cutPath.length * (plan.steps.length + 1) / CUT_FRAMES)));
+        }
+        if (plan.steps.length >= CUT_FRAMES) building += 1;
+        setTimeout(precompute, 0);
     };
+    setTimeout(precompute, 0);
+    const ready = (index) => plans[index] === false
+        || (plans[index] && plans[index].steps.length >= CUT_FRAMES);
+
+    /* The offcut is the SAME printed sheet, so it wears whatever the cloth is wearing. The artwork
+       arrives asynchronously and lands on clothMaterial after these clones were taken, which is why
+       the freed strip came away blank on the first run. */
+    function matchCloth() {
+        for (const plan of plans) {
+            if (!plan || plan.mesh.material.map === clothMaterial.map) continue;
+            for (const worn of [plan.mesh.material, plan.restMesh.material]) {
+                worn.map = clothMaterial.map;
+                worn.color.copy(clothMaterial.color);
+                worn.needsUpdate = true;
+            }
+        }
+    }
 
     const blades = shears(1.35);
     blades.visible = false;
     group.add(blades);
 
+    /* A frame slides straight down out of the shot and back up: a flag comes OFF its mast to be
+       cut, which is both what the owner asked for and what a cutter does with one. Two of them —
+       the sheet's rigid Regular frame and this template's own mast — and never both at once. */
+    function standPoles(sheetDown, mastDown) {
+        if (sheetRig) {
+            sheetRig.position.y = -poleTravel * sheetDown;
+            sheetRig.visible = sheetDown < 0.999;
+        }
+        rig.position.y = -poleTravel * mastDown;
+        rig.visible = mastDown < 0.999;
+    }
+    // With no frame for the sheet there is nothing to swap: this template's mast stands throughout.
+    const MAST_ONLY = sheetRig ? 1 : 0;
+    /* Set before the first beat can run. The roll spends its first seconds precomputing, and until
+       it does the runner returns without touching anything — which left BOTH frames standing in the
+       same flag. */
+    standPoles(0, MAST_ONLY);
+
+    function restart() {
+        for (const plan of plans) {
+            if (!plan) continue;
+            plan.mesh.visible = false;
+            plan.shownMask = null;
+            plan.sagged = null;             // the next roll peels it again from flat
+            plan.falling.position.set(plan.dropX, plan.dropY, 0);
+            plan.falling.rotation.z = 0;
+            plan.mesh.position.set(-plan.dropX, -plan.dropY, 0);
+            // The front layer goes back to empty: nothing has fallen onto the page yet.
+            plan.draped = false;
+            plan.restMesh.visible = false;
+            plan.restMesh.position.set(0, 0, 0);
+            plan.restMesh.rotation.z = 0;
+        }
+        mark.visible = false;
+        blades.visible = false;
+        flag.position.x = 0;
+        standPoles(0, MAST_ONLY);        // a fresh sheet arrives on the sheet's own frame
+        showTrim(false);
+    }
+
     /* Both masks are 1000+ pixels wide and re-upload to the GPU when repainted, so each is drawn
-       only when the step it shows actually changes — the silhouette moves 120 times over three
-       and a half seconds, not sixty times a second. */
-    let firstFrame = 0, shownBanner = null, shownOffcut = null;
+       only when the step it shows actually changes — a silhouette moves 120 times over three and a
+       half seconds, not sixty times a second. */
+    let firstFrame = 0, previousElapsed = 0, wasAt = 0, shownBanner = null;
+    let holding = { kind: 'present', stage: 0, k: 0 };
+    const show = (key, rings, strips) => {
+        if (shownBanner === key) return;
+        paintSilhouette(rings, strips);
+        shownBanner = key;
+    };
+
     return (elapsed) => {
-        if (!firstFrame) firstFrame = elapsed;
-        if (steps.length < CUT_FRAMES) return;         // still precomputing
+        if (!firstFrame) { firstFrame = elapsed; previousElapsed = elapsed; }
+        const delta = elapsed - previousElapsed;
+        previousElapsed = elapsed;
+        if (!ready(0)) { firstFrame += delta; return null; }   // still preparing the first cut
         const at = (elapsed - firstFrame) % CYCLE;
+        /* A wrap, and NOT merely a clock that went backwards. Holding the clock for a cut that is
+           not ready rewinds `at` by a rounding error every frame, and a plain `at < wasAt` read
+           each of those as the start of a new roll: it called restart(), which swept every heap
+           already on the bench off it. Only a drop of most of a cycle is a wrap. */
+        if (wasAt - at > CYCLE * 0.5) { restart(); shownBanner = null; }
+        wasAt = at;
         matchCloth();
 
-        if (at < SHEET) {                              // the uncut sheet
-            if (shownBanner !== 'sheet') { paintSilhouette([cutSource]); shownBanner = 'sheet'; }
-            cutMesh.visible = false;
+        let current = beats[beats.length - 1];
+        for (const one of beats) { if (at < one.to) { current = one; break; } }
+        /* A cut nobody has finished preparing is worth waiting for, not skipping: hold the clock
+           where it is and keep showing the flag that is already standing. */
+        if ((current.kind === 'cut' || current.kind === 'poleOut') && !ready(current.stage)) {
+            firstFrame += delta;
+            return holding;            // hold the shot too, or the camera jumps while we wait
+        }
+        const k = Math.min(Math.max((at - current.from) / current.span, 0), 1);
+        const plan = current.stage < cuts ? plans[current.stage] : null;
+        /* Cloth that has already fallen stays exactly where it fell. Only the piece belonging to
+           the beat in hand is still moving. */
+        for (const done of plans) {
+            if (done && done.draped && done !== plan) arriveCloth(done, 1);
+        }
+
+        switch (current.kind) {
+        case 'present':
+            /* This stage's flag, whole, on its pole. The SHEET stands on the Regular's rigid frame
+               with its tunnel strips erased from the flat cloth, because there they are sewn round
+               that frame; every later flag stands on this template's own mast. The last one is the
+               ordered shape, and only then do the cut line and the safe area describe what is
+               actually there. */
+            if (current.stage === 0 && sheetRig) {
+                show('sheet0', [stages[0]], sheetTunnel);
+                standPoles(0, 1);
+            } else {
+                show('flag' + current.stage,
+                     [current.stage === cuts ? finished : stages[current.stage]]);
+                standPoles(1, 0);
+            }
+            showTrim(current.stage === cuts);
             blades.visible = false;
-            return;
-        }
+            break;
 
-        if (at >= SHEET + CUT_SECONDS) {               // nothing holds it any more
+        case 'square':
+            // Nothing to draw that the present before it was not already drawing; see driveLayered.
             blades.visible = false;
-            if (shownBanner !== 'flag') {
-                paintSilhouette([fabric]);
-                shownBanner = 'flag';
-                sagOffcut(1);                          // freeze it fully peeled, then let it go
+            break;
+
+        case 'poleOut':
+            /* Unhooked. The strips that were sewn round the frame are flat cloth again the moment
+               it is off, so the silhouette stops cutting them out. */
+            show('unhooked', [stages[0]], null);
+            standPoles(eased(k), 1);
+            break;
+
+        case 'poleIn':
+            standPoles(1, 1 - eased(k));
+            break;
+
+        case 'cut': {
+            const progress = k;
+            const index = Math.min(CUT_FRAMES - 1, Math.floor(progress * CUT_FRAMES));
+            const step = plan.steps[index];
+            show(`cut${current.stage}:${index}`, step.kept);
+            if (step.freed.length) {
+                if (plan.shownMask !== index) {
+                    fillSilhouette(plan.mask.ctx, step.freed, box, plan.mask.canvas);
+                    plan.mask.texture.needsUpdate = true;
+                    plan.shownMask = index;
+                }
+                plan.mesh.visible = true;
+                plan.falling.position.set(plan.dropX, plan.dropY, 0);
+                plan.falling.rotation.z = 0;
+                plan.mesh.position.set(-plan.dropX, -plan.dropY, 0);
+                sagOffcut(plan, progress);
             }
-            const seconds = at - SHEET - CUT_SECONDS;
-            // alphaTest compares the FINAL alpha, so fading opacity would blink the piece out in
-            // one frame. It falls out of shot instead.
-            cutMesh.visible = seconds < FALL_SECONDS;
-            falling.position.y = dropY - 0.5 * GRAVITY * seconds * seconds;
-            falling.rotation.z = -0.55 * seconds;
-            // Once the scrap is clear, what was cut becomes what was ordered.
-            if (morphs) {
-                const step = Math.max(0, Math.min(
-                    Math.round((seconds - FALL_SECONDS) / GROW * MORPH_STEPS), MORPH_STEPS));
-                const key = 'morph' + step;
-                if (shownBanner !== key) { paintSilhouette([morphedAt(step)]); shownBanner = key; }
-            }
-            return;
+            const along = Math.round(progress * (plan.cutPath.length - 1));
+            const tip = plan.cutPath[Math.min(plan.cutPath.length - 1, along)];
+            const behind = plan.cutPath[Math.max(0, along - 4)];
+            blades.visible = true;
+            blades.position.set(tip[0], tip[1], 0.05);
+            blades.rotation.z = Math.atan2(tip[1] - behind[1], tip[0] - behind[0]);
+            break;
         }
 
-        const progress = (at - SHEET) / CUT_SECONDS;
-        const index = Math.min(CUT_FRAMES - 1, Math.floor(progress * CUT_FRAMES));
-        const step = steps[index];
-        if (shownBanner !== index) { paintSilhouette(step.kept); shownBanner = index; }
-        if (step.freed.length) {
-            if (shownOffcut !== index) {
-                fillSilhouette(offcut.ctx, step.freed, box, offcut.canvas);
-                offcut.texture.needsUpdate = true;
-                shownOffcut = index;
+        case 'settle': {
+            // Nothing holds it any more: this stage's flag is finished and its waste is in the air.
+            blades.visible = false;
+            show('freed' + current.stage, [plan.fabric]);
+            if (!plan.sagged) {
+                fillSilhouette(plan.mask.ctx, plan.waste.flat(), box, plan.mask.canvas);
+                plan.mask.texture.needsUpdate = true;
+                plan.shownMask = null;
+                sagOffcut(plan, 1);                            // fully peeled, then let it go
+                plan.sagged = plan.geometry.attributes.position.array.slice();
+                plan.mesh.visible = true;
             }
-            cutMesh.visible = true;
-            falling.position.set(dropX, dropY, 0);
-            falling.rotation.z = 0;
-            sagOffcut(progress);
+            const seconds = k * current.span;
+            // Out of the flag's band at real g, turning as it goes.
+            const fallen = 0.5 * GRAVITY * seconds * seconds;
+            plan.falling.position.y = plan.dropY - fallen;
+            plan.falling.rotation.z = -0.55 * seconds;
+            plan.mesh.visible = fallen < (plan.top - box.y0) + 8;
+            /* And into the FRONT layer, arriving from above the edge while the last of it is still
+               on its way down behind. The two overlap on purpose: that overlap is what reads as one
+               piece of cloth falling out of the flag and landing on the page. */
+            plan.draped = true;
+            arriveCloth(plan, (k - ARRIVE_AT) / (1 - ARRIVE_AT));
+            break;
         }
 
-        const along = Math.round(progress * (cutPath.length - 1));
-        const tip = cutPath[Math.min(cutPath.length - 1, along)];
-        const behind = cutPath[Math.max(0, along - 4)];
-        blades.visible = true;
-        blades.position.set(tip[0], tip[1], 0.05);
-        blades.rotation.z = Math.atan2(tip[1] - behind[1], tip[0] - behind[0]);
+        case 'grow': {
+            const step = Math.max(0, Math.min(Math.round(k * MORPH_STEPS), MORPH_STEPS));
+            show('morph' + step, [morphedAt(step)]);
+            standPoles(1, 0);
+            break;
+        }
+
+        case 'sweep': {
+            const from = -frameHalf(), to = frameHalf();
+            const x = from + (to - from) * k;
+            mark.visible = true;
+            mark.position.set(x, MARK_RIDE, cuts * STACK + 1.6);
+            mark.rotation.z = -(x - from) / MARK_RADIUS;       // rolling, not sliding
+            for (const heap of plans) {
+                if (!heap || !heap.draped) continue;
+                // Shoved from wherever the disc has reached, and only ever forwards.
+                const reach = x + MARK_RADIUS - (heap.midX - heap.left - clothW / 2);
+                heap.restMesh.position.x = Math.max(heap.restMesh.position.x, reach);
+            }
+            break;
+        }
+
+        case 'slideOut':
+            mark.visible = false;
+            flag.position.x = -eased(k) * (clothW + 9);
+            break;
+
+        case 'slideIn':
+            // The edge is clear, and the next sheet arrives whole and already on its own frame.
+            show('sheet', [stages[0]], sheetTunnel);
+            standPoles(0, MAST_ONLY);
+            showTrim(false);
+            for (const heap of plans) { if (heap) heap.mesh.visible = false; }
+            flag.position.x = (1 - eased(k)) * (clothW + 9);
+            break;
+        }
+        holding = { kind: current.kind, stage: current.stage, k };
+        return holding;
     };
 }
 
@@ -701,34 +1230,56 @@ function build(data, cutFrom) {
     const rings = sortedRings(data);              // the guide lines below draw every one of them
     const fabric = outlineOf(data, S);
 
-    /* The shape being cut FROM, laid the way a cutter lays it: the two corpuses meet at their
-       BOTTOM-RIGHT corners (shop rule, 2026-08-31). That corner is the one both flags share — the
-       free corner, away from the mast — and nesting there is what makes the leftover a single
-       piece instead of a frame wrapped round the banner.
+    /* The roll: every shape being cut FROM, laid the way a cutter lays them — ALL the corpuses
+       meet at their BOTTOM-RIGHT corners (shop rule, 2026-08-31). That corner is the one they all
+       share — the free corner, away from the mast — and nesting there is what makes each leftover
+       a single piece instead of a frame wrapped round the banner.
 
-       The union is a hairline clamp, not a design choice: after the corners meet the two bottom
-       edges still differ by hundredths of a millimetre, and a destination poking outside its
-       source makes "offcut = source minus destination" no longer the offcut. */
-    let cutSource = null, cutFit = null;
-    if (cutFrom && (cutFrom.netto || []).length && window.polygonClipping) {
-        const scaled = outlineOf(cutFrom, S);
-        const toRight = Math.max(...fabric.map(p => p[0])) - Math.max(...scaled.map(p => p[0]));
-        const toBottom = Math.min(...fabric.map(p => p[1])) - Math.min(...scaled.map(p => p[1]));
-        const nested = scaled.map(([x, y]) => [x + toRight, y + toBottom]);
+       Stages run sheet first, this template's own outline last. */
+    /* Reduced motion turns the roll off entirely: a flag being cut apart every half minute behind
+       somebody's reading is precisely what that setting exists to stop, and the page then shows this
+       template as itself, which is what it is. Read here rather than through `bare`/`calm` further
+       down — those are declared below and a const used above its declaration is a TDZ
+       ReferenceError, which has killed this file twice already. */
+    const rolling = !(document.body.classList.contains('bare')
+                      && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    let stages = null, cutFit = null;
+    if (rolling && cutFrom.length && window.polygonClipping) {
+        const clip = window.polygonClipping;
+        const anchorX = Math.max(...fabric.map(p => p[0]));
+        const anchorY = Math.min(...fabric.map(p => p[1]));
+        const nested = cutFrom.map((shape) => {
+            const raw = outlineOf(shape, S);
+            const toRight = anchorX - Math.max(...raw.map(p => p[0]));
+            const toBottom = anchorY - Math.min(...raw.map(p => p[1]));
+            return raw.map(([x, y]) => [x + toRight, y + toBottom]);
+        });
         /* A Drop is not a trimmed Play B: 400 cm² of it lies OUTSIDE, so no cut produces one.
            It is cut as the template's own `transform` shape — slimmer, drawn for this — and that
            is transformed into the real outline once the scrap is gone (shop rule, 2026-09-01).
            Every other pair fits as it is, and this returns the destination unchanged. */
-        cutFit = fitInside(fabric, nested,
+        cutFit = fitInside(fabric, nested[nested.length - 1],
                            (data.transform || []).map(([x, y]) => [x * S, y * S]));
-        cutSource = openRing(window.polygonClipping
-            .union(closedRing(nested), closedRing(cutFit.ring))
-            .flat().sort((a, b) => ringArea(b) - ringArea(a))[0]);
+        stages = nested.concat([cutFit.ring]);
+        /* The hairline clamp, and it runs BACKWARDS from the last ring so that every stage's
+           source really does contain its own destination. It is not a design choice: after the
+           corners meet, two bottom edges still differ by hundredths of a millimetre, and a
+           destination poking outside its source makes "offcut = source minus destination" no
+           longer the offcut. Measured on the four-flag roll it adds 3.03, 1.18 and 0.00 cm² —
+           hairlines, and enough to keep every stage a clean single-piece cut. */
+        for (let i = stages.length - 2; i >= 0; i--) {
+            stages[i] = openRing(clip.union(closedRing(stages[i]), closedRing(stages[i + 1]))
+                .flat().sort((a, b) => ringArea(b) - ringArea(a))[0]);
+        }
     }
 
-    // The plane has to hold BOTH shapes, or the bigger one is clipped by a canvas sized for the
-    // smaller. Without a cut this is exactly the fabric's own box, as before.
-    const framed = cutSource ? fabric.concat(cutSource) : fabric;
+    /* Two layers exist exactly when a roll does: without one there is no cloth to hang and the
+       flag gets the whole canvas, as it always did. */
+    const layered = !!stages;
+
+    // The plane has to hold EVERY shape in the roll, or the biggest is clipped by a canvas sized
+    // for a later one. Without a cut this is exactly the fabric's own box, as before.
+    const framed = stages ? fabric.concat(...stages) : fabric;
     const xs = framed.map(p => p[0]), ys = framed.map(p => p[1]);
     const box = { x0: Math.min(...xs), x1: Math.max(...xs),
                   y0: Math.min(...ys), y1: Math.max(...ys) };
@@ -752,16 +1303,7 @@ function build(data, cutFrom) {
         // The hung flag: the only tunnel is the top one, its width straight from the template.
         tunnel = { h: ((data.sewn_sides_mm || {}).top || 130) * S };
     }
-    if (data.rigid) {
-        const leftEdgeTop = Math.max(...fabric.filter(([x]) => x < box.x0 + 1e-4)
-                                            .map(([, y]) => y));
-        const topEdgeLeft = Math.min(...fabric.filter(([, y]) => y > box.y1 - 1e-4)
-                                             .map(([x]) => x));
-        const notchW = topEdgeLeft - box.x0, notchH = box.y1 - leftEdgeTop;
-        const plausible = (v) => v > 20 * S && v < clothW / 3;
-        tunnel = { w: plausible(notchW) ? notchW : 110 * S,
-                   h: plausible(notchH) ? notchH : 110 * S };
-    }
+    if (data.rigid) tunnel = tunnelsOf(fabric, box, clothW, S);
 
     /* Hero mode: the decorative strip behind the landing copy, as opposed to the page you open
        to inspect a template. It buys a cheaper material, a coarser cloth and a lower render
@@ -780,11 +1322,54 @@ function build(data, cutFrom) {
     const QUALITY = [Math.min(window.devicePixelRatio, 2),
                      Math.min(window.devicePixelRatio, 1.5),
                      1, 0.75, 0.55];
+    /* A layered hero does not get the bottom of that ladder. The cloth lies ON the page at reading
+       distance, where 0.55 of a pixel is visibly mush; the flag behind it could take the softening
+       but they share one canvas, so the floor is set by whichever needs it sharper. */
+    const QUALITY_FLOOR = 2;
     let qualityStep = 0;
     renderer.setPixelRatio(HERO ? QUALITY[0] : Math.min(window.devicePixelRatio, 2));
     stage.appendChild(renderer.domElement);
     const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 200);
     const controls = new OrbitControls(camera, renderer.domElement);
+
+    /* ── The front layer ──
+       Nothing but the cloth that came off the flag, and the mark that clears it away. Its own scene
+       and its own camera, drawn AFTER the back one and over the whole canvas, so it sits in front of
+       the flag and can hang past the band the flag is confined to — over whatever the page puts
+       below its hero.
+
+       ORTHOGRAPHIC on purpose. A foreground layer whose job is to lie over a boundary must not be
+       foreshortened, and with no perspective one world unit is a fixed number of pixels — which is
+       the only way the fold line lands exactly on that boundary instead of near it. */
+    const front = new THREE.Scene();
+    front.add(new THREE.HemisphereLight(0xf4f6ff, 0x24262a, 0.8));
+    const frontKey = new THREE.DirectionalLight(0xffffff, 1.6);
+    frontKey.position.set(-1.1, 2.4, 3.2);
+    front.add(frontKey);
+    const frontRim = new THREE.DirectionalLight(0xdfe8ff, 0.45);
+    frontRim.position.set(2.2, -1.0, 1.5);
+    front.add(frontRim);
+    const frontCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
+    // Stood back along +z looking the usual way, rather than sitting at the origin with a negative
+    // near plane: the cloth's own folds cross z = 0 in both directions.
+    frontCamera.position.set(0, 0, 120);
+    /* How wide the fallen cloth lies across the frame. Premium reads as BIG: a length of real
+       fabric over the page, not a swatch pinned to it. */
+    const FRONT_SPAN = 0.82;
+    // How tall the flag's own band is, in pixels: the whole canvas unless a front layer is hanging
+    // below it, in which case the flag keeps only its share and the cloth gets the rest.
+    const bandHeight = () => Math.max(1, Math.round(
+        (layered ? bandFraction : 1) * stage.clientHeight));
+    function fitFront() {
+        const w = stage.clientWidth, h = stage.clientHeight;
+        const perUnit = (frontSpan * w) / Math.max(clothW, 1e-3);    // pixels per scene unit
+        frontCamera.left = -w / 2 / perUnit;
+        frontCamera.right = w / 2 / perUnit;
+        // World y = 0 IS the boundary: the bottom of the flag's band, the bottom of the hero.
+        frontCamera.top = bandHeight() / perUnit;
+        frontCamera.bottom = -(h - bandHeight()) / perUnit;
+        frontCamera.updateProjectionMatrix();
+    }
 
     /* ── The cloth: subdivided plane + alpha silhouette of the real outline ── */
     const alpha = document.createElement('canvas');
@@ -798,17 +1383,20 @@ function build(data, cutFrom) {
     /* Painted from whatever rings the cloth currently IS, rather than once at build time: the cut
        repaints this every frame, and a silhouette drawn once could only ever show one shape. */
     const alphaMap = new THREE.CanvasTexture(alpha);
-    function paintSilhouette(rings) {
+    /* `strips` are the tunnels to cut out of the flat cloth, defaulting to this template's own. A
+       rolling cut hands its own: the sheet it starts from is a Regular, whose strips are sewn round
+       a rigid frame, and once that frame is unhooked they are flat cloth again. */
+    function paintSilhouette(rings, strips = tunnel) {
         fillSilhouette(ctx, rings, box, alpha);
-        if (tunnel) {
+        if (strips) {
             // The tunnel strips leave the flat cloth: they wrap the frame as sleeves, built below.
             ctx.fillStyle = '#000';
-            if (tunnel.w) ctx.fillRect(0, 0, tunnel.w / clothW * alpha.width, alpha.height);
-            ctx.fillRect(0, 0, alpha.width, tunnel.h / clothH * alpha.height);
+            if (strips.w) ctx.fillRect(0, 0, strips.w / clothW * alpha.width, alpha.height);
+            ctx.fillRect(0, 0, alpha.width, strips.h / clothH * alpha.height);
         }
         alphaMap.needsUpdate = true;
     }
-    paintSilhouette([cutSource || fabric]);
+    paintSilhouette([stages ? stages[0] : fabric]);
 
     /* The reinforcing seam (shop rule, 2026-08-27): 30 mm along the FREE edges is folded in half
        and sewn to a 15 mm double-fabric hem. Double fabric reads as a slightly darker, denser
@@ -989,6 +1577,18 @@ function build(data, cutFrom) {
     const LEVEL_COLOURS = { red: 0xd21f3c, amber: 0xc77700 };
     window.addEventListener('message', (event) => {
         if (event.origin !== window.location.origin || !event.data) return;
+        /* Layout, from the page that owns it. Only the parent knows how tall its hero is, and it
+           can change on any resize — so this arrives as a message rather than as a URL, because
+           re-reading the URL would mean reloading the frame and restarting the roll from the top
+           every time somebody dragged a window edge. */
+        if (typeof event.data.band === 'number' && event.data.band > 0) {
+            bandFraction = Math.min(Math.max(event.data.band, 0.15), 0.98);
+            resize();
+        }
+        if (typeof event.data.span === 'number' && event.data.span > 0) {
+            frontSpan = Math.min(Math.max(event.data.span, 0.25), 1.6);
+            fitFront();
+        }
         if (typeof event.data.artwork === 'string'
                 && event.data.artwork.startsWith('data:image/')) {
             wearArtwork(event.data.artwork, 1);
@@ -1148,25 +1748,35 @@ function build(data, cutFrom) {
     group.add(cloth);
     guides.forEach(g => group.add(g.line));
     hemFolds.forEach(f => group.add(f.mesh));
+    /* NO TABLE, and so nothing here but the ground the mast stands on. What the fallen cloth folds
+       over is the bottom edge of the frame, and that lives in the front layer, which has its own
+       coordinates and needs nothing from this one. */
+    // Everything the mast block is about to add belongs to the pole assembly, which a cut removes.
+    const beforeMast = group.children.length;
+    /* Hoisted out of the mast block: a rolling cut builds a SECOND frame below — the sheet's own —
+       and both need the same ground, the same metal and the same size of base plate. */
+    const groundY = box.y1 - mastH;
+    /* Barely metallic on purpose. A metal in three.js is lit by what it REFLECTS, and this scene
+       has no environment map to reflect, so metalness 0.7 rendered the mast as a black spike down
+       the flag rather than a pole (shop rule, spotted it on a phone, 2026-08-31). Low metalness
+       lets the hemisphere and key light land on it diffusely, which is what brushed aluminium looks
+       like anyway. An env map would be the richer fix and costs a cube render the hero cannot
+       afford. */
+    const steel = new THREE.MeshStandardMaterial({ color: 0xb4b9c1, roughness: 0.42,
+                                                   metalness: 0.12 });
+    // The base is a SQUARE plate sized per flag size (the price list gives its diagonal).
+    const baseSide = ((data.base || {}).side_mm || 300) * S;
+    const basePlate = () => new THREE.Mesh(new THREE.BoxGeometry(baseSide, 30 * S, baseSide),
+        new THREE.MeshStandardMaterial({ color: 0x2c2f36, roughness: 0.8 }));
     if (mastH > 0) {
         const frontier = fabric
             .filter(([x, y]) => !fabric.some(([ox, oy]) => ox < x - SLEEVE_EDGE_TOLERANCE && oy > y + 1e-6))
             .sort((a, b) => a[1] - b[1]);
-        const groundY = box.y1 - mastH;
-        /* Barely metallic on purpose. A metal in three.js is lit by what it REFLECTS, and this
-           scene has no environment map to reflect, so metalness 0.7 rendered the mast as a black
-           spike down the flag rather than a pole (shop rule, spotted it on a phone, 2026-08-31).
-           Low metalness lets the hemisphere and key light land on it diffusely, which is what
-           brushed aluminium looks like anyway. An env map would be the richer fix and costs a
-           cube render the hero cannot afford. */
-        const steel = new THREE.MeshStandardMaterial({ color: 0xb4b9c1, roughness: 0.42,
-                                                       metalness: 0.12 });
-        // The base is a SQUARE plate sized per flag size (the price list gives its diagonal).
-        const baseSide = ((data.base || {}).side_mm || 300) * S;
         const plate = new THREE.Mesh(new THREE.BoxGeometry(baseSide, 30 * S, baseSide),
             new THREE.MeshStandardMaterial({ color: 0x2c2f36, roughness: 0.8 }));
         plate.position.set(frontier[0][0], groundY + 15 * S, 0);
         group.add(plate);
+
 
         if (construction === 'top') {
             /* The hung flag: a vertical mast beside the left edge, a rigid crossarm through the
@@ -1221,66 +1831,10 @@ function build(data, cutFrom) {
             document.getElementById('mastNote').textContent =
                 'maszt poglądowy — flaga wieszana za tunel górny (poprzeczka w tunelu)';
         } else if (data.rigid) {
-            /* Vento REGULAR: rigid hardware (from a photo — dark aluminium pole, rigid white arm on
-               an elbow), tunnel sewn as a FULL sleeve, not folded. The pole stands at the corpus
-               left edge and the arm at the corpus top edge — exactly where the tunnel strips
-               (erased from the flat cloth) wrap around them — and the elbow sits in the notch the
-               template cuts for it. Nothing here joins mastPieces and mastArcOf stays null: this
-               frame does not move, and the wind model knows it. */
-            const poleX = box.x0 + tunnel.w, armY = box.y1 - tunnel.h;
-            const poleR = 14 * S, armR = 5 * S;
-            plate.position.x = poleX;
-            const pole = new THREE.Mesh(
-                new THREE.CylinderGeometry(poleR, poleR, armY - groundY, 16), steel);
-            pole.position.set(poleX, (groundY + armY) / 2, 0);
-            group.add(pole);
-            const arm = new THREE.Mesh(
-                new THREE.CylinderGeometry(armR, armR, box.x1 - poleX, 12),
-                new THREE.MeshStandardMaterial({ color: 0xe8e8ea, roughness: 0.4 }));
-            arm.rotation.z = Math.PI / 2;
-            arm.position.set((poleX + box.x1) / 2, armY, 0);
-            group.add(arm);
-            // The elbow fitting joining pole and arm, inside the notch cut for it.
-            const elbow = new THREE.Mesh(
-                new THREE.SphereGeometry(poleR * 1.25, 14, 12),
-                new THREE.MeshStandardMaterial({ color: 0x2c2f36, roughness: 0.55 }));
-            elbow.position.set(poleX, armY, 0);
-            group.add(elbow);
-
-            /* The tunnels: fabric PANCAKES stretched open by the frame — the teardrop
-               profile, seam pointing at the corpus (pole sleeve) and hanging down with the
-               cloth's weight (arm sleeve). Each remembers which strip of the page wraps it, so
-               wearArtwork can dress it. */
-            const sleeveCloth = () => new THREE.MeshPhysicalMaterial({
-                color: 0xf4f4f6, roughness: 0.72, metalness: 0.0,
-                sheen: 0.5, sheenRoughness: 0.55, sheenColor: new THREE.Color(0xffffff),
-                side: THREE.DoubleSide,
-            });
-            const gap = 25 * S;
-            const poleSleeveH = armY - gap - box.y0;
-            const poleSweep = sweepSleeve(
-                new THREE.LineCurve3(new THREE.Vector3(poleX, box.y0, 0),
-                                     new THREE.Vector3(poleX, box.y0 + poleSleeveH, 0)),
-                { radiusAt: () => poleR + 3 * S, tailAt: () => 62 * S,
-                  tailDirAt: () => new THREE.Vector3(1, 0, 0),
-                  uvAt: (t, fraction) => [fraction, t] });
-            const poleSleeve = new THREE.Mesh(poleSweep.geometry, sleeveCloth());
-            group.add(poleSleeve);
-            tunnelSleeves.push({ mesh: poleSleeve,
-                                 w: tunnel.w, h: poleSleeveH, x: box.x0, y: box.y0 });
-
-            const armSleeveL = box.x1 - (poleX + gap);
-            const armSweep = sweepSleeve(
-                new THREE.LineCurve3(new THREE.Vector3(poleX + gap, armY, 0),
-                                     new THREE.Vector3(box.x1, armY, 0)),
-                { radiusAt: () => armR + 3 * S, tailAt: () => 48 * S,
-                  // Gravity: the slack of the top sleeve hangs DOWN off the rigid arm.
-                  tailDirAt: () => new THREE.Vector3(0, -1, 0),
-                  uvAt: (t, fraction) => [t, fraction] });
-            const armSleeve = new THREE.Mesh(armSweep.geometry, sleeveCloth());
-            group.add(armSleeve);
-            tunnelSleeves.push({ mesh: armSleeve,
-                                 w: armSleeveL, h: tunnel.h, x: poleX + gap, y: armY });
+            const frame = rigidFrame({ tunnel, box, groundY, S });
+            plate.position.x = frame.poleX;
+            group.add(frame.parts);
+            tunnelSleeves.push(...frame.sleeves);
 
             document.getElementById('mastNote').textContent =
                 `maszt Vento Regular: ${Math.round(data.mast_mm / 10)} cm, sztywny (alu + ramię)`
@@ -1409,6 +1963,53 @@ function build(data, cutFrom) {
                              + `${data.base.weight_kg} kg` : '');
         }
     }
+
+    /* ── Two groups the roll moves as wholes ──
+       `rig` is the pole assembly: mast, base plate and the sewn sleeves that wrap it. A cut takes
+       the flag OFF its pole — the owner's script says remove flagpole, cut, insert flagpole, which
+       is also what a cutter does with one — so the whole assembly slides out and back as one thing.
+       `flag` is the job: the cloth, the lines drawn on it, its sewn hem and the rig it hangs from,
+       so a finished flag can slide out of the frame and a fresh sheet slide in behind it. The
+       bench, the waste heaped on it and the mark that clears it stay put — they are the table, not
+       the job. Re-parented rather than built as a hierarchy up front: both groups sit at the
+       origin, so every world position is untouched and the mast code above stays exactly as it was.
+       (`add` re-parents on its own; removing first would be a second, redundant traversal.) */
+    const rig = new THREE.Group();
+    // Everything the mast block added, and that is all of it: with the bench gone there is nothing
+    // in that range which is not part of the pole assembly.
+    for (const child of group.children.slice(beforeMast)) rig.add(child);
+
+    /* ── The SHEET's own frame ──
+       A roll starts on a Regular, and a Regular does not hang on the Vento winder mast this page's
+       template uses: it is different hardware entirely — rigid pole, rigid arm, elbow, and its
+       tunnels sewn round them as full sleeves (the shop, 2026-09-01). So the sheet gets its own
+       frame, and the roll swaps ONCE and only once: the Regular comes off, the cut runs, and the
+       Vento mast goes in behind the Play that came out of it. The two cuts after that leave the
+       mast standing — no more taking flags on and off poles. */
+    let sheetRig = null, sheetTunnel = null;
+    if (stages && mastH > 0 && (cutFrom[0] || {}).rigid) {
+        sheetTunnel = tunnelsOf(stages[0], box, clothW, S);
+        const frame = rigidFrame({ tunnel: sheetTunnel, box, groundY, S });
+        const sheetPlate = basePlate();
+        sheetPlate.position.set(frame.poleX, groundY + 15 * S, 0);
+        frame.parts.add(sheetPlate);
+        sheetRig = frame.parts;
+        tunnelSleeves.push(...frame.sleeves);
+        /* Repaint now that the sheet's strips are known: the first paint further up drew the sheet
+           as whole flat cloth, and with the sleeves standing on top of it that reads as two
+           thicknesses of fabric along the pole and the arm. */
+        paintSilhouette([stages[0]], sheetTunnel);
+    }
+
+    const flag = new THREE.Group();
+    flag.add(cloth, ...guides.map(g => g.line), ...hemFolds.map(f => f.mesh), rig);
+    if (sheetRig) flag.add(sheetRig);
+    group.add(flag);
+    /* Far enough down to leave the frame entirely — and the frame reaches below the bench, where
+       the waste hangs, so clearing the mast's own height is not enough: at mastH + 4 the curved
+       tip sat in shot at the bottom for the whole of every cut. */
+    const poleTravel = mastH + 8;
+
     scene.add(group);
 
     /* Hemisphere instead of flat ambient — sky above, ground bounce below — plus a rim from
@@ -1422,12 +2023,15 @@ function build(data, cutFrom) {
     rim.position.set(-3, 1.5, -3);
     scene.add(rim);
 
+    /* The FLAG's own bounds, and nothing else's. The cloth that comes off it is framed by the front
+       layer's own camera, so the back layer no longer reserves room below the product for it —
+       reserving that room was what shrank the flag. */
     const bounds = new THREE.Box3().setFromObject(group);
     const size = bounds.getSize(new THREE.Vector3());
     const centre = bounds.getCenter(new THREE.Vector3());
     controls.target.copy(centre);
     function fitCamera() {
-        const aspect = Math.max(stage.clientWidth / Math.max(stage.clientHeight, 1), 0.2);
+        const aspect = Math.max(stage.clientWidth / bandHeight(), 0.2);
         const half = Math.max(size.y, size.x / aspect) / 2;
         const distance = half / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.2;
         camera.position.set(centre.x + distance * 0.25, centre.y + distance * 0.06,
@@ -1494,7 +2098,7 @@ function build(data, cutFrom) {
     /* The distance that framed the whole product; every tour step is a multiple of it, so the
        choreography holds whatever size flag this template is. */
     function framingDistance() {
-        const aspect = Math.max(stage.clientWidth / Math.max(stage.clientHeight, 1), 0.2);
+        const aspect = Math.max(stage.clientWidth / bandHeight(), 0.2);
         const half = Math.max(size.y, size.x / aspect) / 2;
         return half / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.2;
     }
@@ -1511,18 +2115,51 @@ function build(data, cutFrom) {
         return 0.28;
     }
 
-    function driveTour(seconds) {
-        const step = tourAt(seconds);
-        step.dist = Math.max(step.dist, closestAllowed());
+    /* One step of any choreography, put on the camera. Shared by the hero tour and by the roll,
+       because "where the camera goes for a { dist, yaw, aim }" is one piece of knowledge and two
+       copies of it drift. */
+    function placeCamera(step) {
         const target = new THREE.Vector3(centre.x, centre.y + (step.aim - 0.5) * size.y, centre.z);
         const radians = THREE.MathUtils.degToRad(step.yaw);
-        const away = framingDistance() * step.dist;
+        const away = framingDistance() * Math.max(step.dist, closestAllowed());
         camera.position.set(target.x + Math.sin(radians) * away,
                             // Rising slightly as the camera pulls back, so a wide shot looks down
                             // the flag instead of up at it.
                             target.y + away * 0.06,
                             target.z + Math.cos(radians) * away);
         camera.lookAt(target);
+    }
+
+    function driveTour(seconds) {
+        placeCamera(tourAt(seconds));
+    }
+
+    /* ── The camera through a roll ──
+       Each flag takes its turn in front of the lens: in, around and out again — the owner's
+       "zoom, swirl, zoomout" as ONE continuous move rather than three cuts. Everything else holds
+       this same wide shot, because the cut, the drop and the sweep all have to be seen whole: a
+       close-up mid-stroke hides the one thing worth watching, and the waste lands at the very
+       bottom of the frame.
+
+       Both ends of the turn land exactly on the wide shot — the swirl is a full sine, so it comes
+       back through centre — which is what keeps the join between a flag's turn and the cut that
+       follows it from being a jump. */
+    const ROLL_WIDE = { dist: 1.0, yaw: -8, aim: 0.5 };
+    const ROLL_SWIRL = 34;                    // degrees the turn swings either side of the wide shot
+    /* How much of the framing distance the zoom eats. The wide shot frames the whole product —
+       flag AND mast, about 30 units — so a modest number is already a real close-up on the cloth:
+       0.34 brings 30 units of frame down to 24, which is the flag and nothing else. It was 0.62
+       first and the flag went out of frame top and bottom at the deepest point, which is a
+       close-up of nothing in particular; 0.42 still clipped the tip once the aim had risen. */
+    const ROLL_CLOSE = 0.34;
+    const ROLL_RISE = 0.10;                   // how far the aim walks up the corpus and back
+    function driveRoll(beat) {
+        if (beat.kind !== 'present') { placeCamera(ROLL_WIDE); return; }
+        placeCamera({
+            dist: ROLL_WIDE.dist - ROLL_CLOSE * Math.sin(Math.PI * beat.k),
+            yaw: ROLL_WIDE.yaw + ROLL_SWIRL * Math.sin(2 * Math.PI * beat.k),
+            aim: ROLL_WIDE.aim + ROLL_RISE * Math.sin(Math.PI * beat.k),
+        });
     }
     /* How far the guide lines float above the cloth. It has to clear the reinforcing hem, which
        stands 2 mm proud: at the old 0.4 mm the red cut line was sunk INSIDE the fabric along every
@@ -1637,6 +2274,29 @@ function build(data, cutFrom) {
         return waveOnly(x, y, 1.35) * 0.22;
     }
 
+    /* DEAD FLAT, for the blade to work on. Not `calmDown`, which keeps a gentle bow: a cut has to
+       run on cloth that is still AND flat, so the only thing left standing proud is the reinforcing
+       hem, which is fabric rather than motion (the shop, 2026-09-01). */
+    function flattenCloth() {
+        for (let i = 0; i < positions.count; i++) positions.setZ(i, withRidge(i, 0));
+        positions.needsUpdate = true;
+        geometry.computeVertexNormals();
+        for (const { line, base } of guides) {
+            const attr = line.geometry.attributes.position;
+            for (let i = 0; i < base.length; i++) attr.setZ(i, GUIDE_LIFT);
+            attr.needsUpdate = true;
+        }
+        for (const fold of hemFolds) {
+            for (let i = 0; i < fold.rest.length; i++) fold.positions.setZ(i, -2 * S);
+            fold.positions.needsUpdate = true;
+        }
+        for (const piece of mastPieces) {
+            piece.positions.array.set(piece.rest);
+            piece.positions.needsUpdate = true;
+        }
+        for (const collar of mastCollars) collar.mesh.position.z = 0;
+    }
+
     function calmDown() {
         for (let i = 0; i < positions.count; i++) {
             const [x, y] = restXY[i];
@@ -1669,8 +2329,10 @@ function build(data, cutFrom) {
     function resize() {
         const w = stage.clientWidth, h = stage.clientHeight;
         renderer.setSize(w, h);
-        camera.aspect = w / h;
+        // The flag is drawn into its band, not the whole canvas, so the band is its aspect.
+        camera.aspect = w / bandHeight();
         camera.updateProjectionMatrix();
+        fitFront();
     }
     window.addEventListener('resize', resize);
     resize();
@@ -1680,53 +2342,215 @@ function build(data, cutFrom) {
 
     /* The other half of the quality ladder: watch what this machine actually manages and step
        down until it keeps up. Sampled in blocks rather than per frame, because one slow frame is
-       a hiccup and a slow BLOCK is a slow device. Only ever steps down — a hero that oscillates
-       between sharp and soft is worse than either. */
-    const QUALITY_TARGET_MS = 22;          // ~45 fps
-    const QUALITY_BLOCK = 45;              // frames per verdict
-    let blockFrames = 0, blockStart = performance.now();
+       a hiccup and a slow BLOCK is a slow device.
 
-    function watchQuality() {
-        if (!HERO || qualityStep >= QUALITY.length - 1) return;
-        blockFrames += 1;
-        if (blockFrames < QUALITY_BLOCK) return;
-        const average = (performance.now() - blockStart) / blockFrames;
-        blockFrames = 0;
-        blockStart = performance.now();
-        if (average <= QUALITY_TARGET_MS) return;
-        qualityStep += 1;
+       It used to step DOWN only, so that whatever the worst moment of a visit was, the hero wore
+       it for the rest of the visit — and the worst moment is usually not the GPU at all but the
+       rest of the page loading, or the tab going to the background. Watched for a minute the hero
+       therefore looked like it was rotting. Three things fix that, and all three are about not
+       believing a slow block too readily:
+
+       * a HIDDEN tab is not measured. Its rAF is clamped to about 1 fps, which reads as a
+         catastrophically slow device and used to cost two rungs per glance at another window.
+       * the block's SLOWEST FRAME is thrown away before the average is taken. A stall — a GC
+         pause, another iframe's decode, a laptop waking — is one or two frames that drag a
+         45-frame mean over the bar on hardware that was keeping up either side of it. Sustained
+         slowness is every frame, and survives losing its worst one. (Not a ceiling on the average,
+         which was the first thing tried and was wrong: at 9 fps the Intel HD 530 this ladder
+         exists for averages 111 ms, so any ceiling low enough to catch a stall also discards every
+         block from the slowest machine there is, and it never steps down at all.)
+       * it steps back UP, but reluctantly: several consecutive blocks with real headroom, not one
+         merely adequate one. The gap between the down bar and the up bar is what stops the
+         oscillation the one-way version was avoiding — a hero flickering between sharp and soft
+         is genuinely worse than either.
+
+       "Headroom" is measured against THE DISPLAY'S OWN FLOOR, not an absolute millisecond count,
+       because rAF cannot run faster than the refresh rate: a 60 Hz panel with nothing to do reports
+       16.7 ms a frame and no more, so an absolute bar of 13 ms is one no 60 Hz machine can ever
+       clear, and the step up never fires (measured over CDP at dpr 2.5, 2026-09-01: the ladder walked
+       2 → 1.5 → 1 → 0.75 → 0.55 under load and then sat at 0.55 for forty seconds at a clean
+       16.7 ms). So the floor is learned — the lowest block average yet seen converges on the vsync
+       interval — and a block is roomy when it is essentially AT that floor. The absolute target has
+       to be met as well, so a slow machine whose floor is itself 57 ms is never called roomy. */
+    const QUALITY_TARGET_MS = 22;          // ~45 fps — over this, the machine is not keeping up
+    const QUALITY_AT_FLOOR = 1.15;         // within 15% of the learned floor = hitting refresh rate
+    const QUALITY_BLOCK = 45;              // frames per verdict
+    const QUALITY_ROOMY_BLOCKS = 4;        // consecutive roomy blocks before stepping back up
+    let paceFloor = Infinity;              // the fastest block this machine has managed
+    let blockFrames = 0, blockStart = performance.now(), roomyBlocks = 0;
+    let frameLast = performance.now(), blockWorst = 0;
+    // What the full fabric shader was, so the bottom rung can hand it back. Read off the material
+    // rather than restated, because a second copy of these values is one that drifts from it.
+    const FABRIC = { sheen: clothMaterial.sheen, bumpMap: clothMaterial.bumpMap,
+                     roughnessMap: clothMaterial.roughnessMap };
+
+    function applyQuality() {
         renderer.setPixelRatio(QUALITY[qualityStep]);
         resize();
         // Bottom of the ladder: resolution alone is not enough, so the fabric shader goes too.
         // Sheen and the weave bump are the expensive part and the least visible at hero size.
-        if (qualityStep === QUALITY.length - 1) {
-            clothMaterial.sheen = 0;
-            clothMaterial.bumpMap = null;
-            clothMaterial.roughnessMap = null;
-            clothMaterial.needsUpdate = true;
-        }
+        const bottom = qualityStep === QUALITY.length - 1;
+        clothMaterial.sheen = bottom ? 0 : FABRIC.sheen;
+        clothMaterial.bumpMap = bottom ? null : FABRIC.bumpMap;
+        clothMaterial.roughnessMap = bottom ? null : FABRIC.roughnessMap;
+        clothMaterial.needsUpdate = true;
     }
 
-    const cutRunner = installCut({ S, fabric: cutFit ? cutFit.ring : fabric, finished: fabric,
+    function watchQuality() {
+        const lowest = layered ? QUALITY_FLOOR : QUALITY.length - 1;
+        if (!HERO) return;
+        const now = performance.now();
+        const sinceLast = now - frameLast;
+        frameLast = now;
+        // Not measurable while hidden, and the frames either side of becoming visible again are
+        // not either — so the block in progress is thrown away rather than finished.
+        if (document.visibilityState !== 'visible') {
+            blockFrames = 0;
+            blockStart = now;
+            blockWorst = 0;
+            return;
+        }
+        blockFrames += 1;
+        blockWorst = Math.max(blockWorst, sinceLast);
+        if (blockFrames < QUALITY_BLOCK) return;
+        // The worst frame comes out of both the numerator and the count, so what is left is the
+        // pace the machine actually held for the rest of the block.
+        const average = (now - blockStart - blockWorst) / (blockFrames - 1);
+        blockFrames = 0;
+        blockStart = now;
+        blockWorst = 0;
+        if (average > QUALITY_TARGET_MS) {
+            roomyBlocks = 0;
+            if (qualityStep >= lowest) return;
+            qualityStep += 1;
+            applyQuality();
+            return;
+        }
+        // Learned from blocks that met the target, so a permanently struggling machine never
+        // teaches the ladder that struggling IS its floor.
+        paceFloor = Math.min(paceFloor, average);
+        if (average > paceFloor * QUALITY_AT_FLOOR || qualityStep === 0) {
+            roomyBlocks = 0;                            // adequate is not roomy: hold this rung
+            return;
+        }
+        roomyBlocks += 1;
+        if (roomyBlocks < QUALITY_ROOMY_BLOCKS) return;
+        roomyBlocks = 0;
+        qualityStep -= 1;
+        applyQuality();
+    }
+
+    /* The guide lines and the sewn hem describe the FINISHED template, so they belong to the
+       finished flag. Drawn over a sheet three cuts away from being one, they claim an edge that is
+       not there yet — with a single cut that was one wrong outline, with a roll of four it is
+       three. The cut reveals them when the ordered shape actually exists. */
+    const trim = guides.map(g => g.line).concat(hemFolds.map(f => f.mesh));
+    const showTrim = (on) => { for (const object of trim) object.visible = on; };
+    if (stages) showTrim(false);
+
+    const cutRunner = installCut({ S, stages, finished: fabric,
                                    morphs: !!(cutFit && cutFit.morph),
-                                   cutSource, box, clothW, clothH,
-                                   paintSilhouette, clothMaterial, group });
+                                   box, clothW, clothH,
+                                   paintSilhouette, clothMaterial, group, front, showTrim,
+                                   rig, sheetRig, sheetTunnel, poleTravel, flag,
+                                   brand: { name: {{ brand_name|tojson }},
+                                            logo: {{ brand_logo|tojson }} } });
+    // A roll drives the camera every frame; a drag would only fight it. Inspecting a template is
+    // what the same page WITHOUT `?cutFrom=` is for, and there the controls are untouched.
+    if (cutRunner) controls.enabled = false;
+
+    /* A FULL TURN, not the old sway: the flag comes round once every SPIN_SECONDS, so both faces
+       are seen and the print is read from every angle. Slow on purpose — this plays behind copy. */
+    const SPIN_SECONDS = 28;
+    const SPIN_RATE = Math.PI * 2 / SPIN_SECONDS;
+    // Awers square to the camera, framed whole: the one shot a cut is allowed to happen in.
+    const SQUARE_ON = { dist: 1.0, yaw: 0, aim: 0.5 };
+
+    /* ── Movement, and where it must stop ──
+       THE BACK LAYER MOVES LIKE THE HERO, because that is what it is: the tour's own zoom and
+       travel, with a full turn under it. But ONLY while a flag is being presented. The moment the
+       roll reaches a cut the flag has to be square, flat and still, so the turn eases to the
+       nearest whole revolution and the camera comes round to straight-on across the `square` beat,
+       and stays there until the next flag's turn. Reduced motion stops the turn outright.
+
+       `spin` is kept rather than computed from the clock: an angle that is a function of time cannot
+       be eased to a stop and picked up again where it left off. */
+    let spin = 0, hold = null, flattened = false;
+    function driveLayered(beat, seconds, delta) {
+        if (beat.kind === 'present') {
+            if (flattened && !windBox.checked) calmDown();   // give the cloth its resting bow back
+            hold = null;
+            flattened = false;
+            if (!calm) spin += delta * SPIN_RATE;
+            group.rotation.y = spin;
+            placeCamera(tourAt(seconds));
+            return true;                                    // wind may blow
+        }
+        // Squaring up, then held there. Captured once, so the ease has a fixed start to run from.
+        if (!hold) {
+            hold = { spin, cam: tourAt(seconds),
+                     whole: Math.round(spin / (Math.PI * 2)) * Math.PI * 2 };
+        }
+        const k = beat.kind === 'square' ? smooth(beat.k) : 1;
+        spin = hold.spin + (hold.whole - hold.spin) * k;
+        group.rotation.y = spin;
+        placeCamera({
+            dist: hold.cam.dist + (SQUARE_ON.dist - hold.cam.dist) * k,
+            yaw: hold.cam.yaw + (SQUARE_ON.yaw - hold.cam.yaw) * k,
+            aim: hold.cam.aim + (SQUARE_ON.aim - hold.cam.aim) * k,
+        });
+        if (!flattened) { flattenCloth(); flattened = true; }
+        return false;                                       // and no wind while the blade is in it
+    }
 
     const clock = new THREE.Clock();
+    let previous = 0;
     renderer.setAnimationLoop(() => {
-        if (cutRunner) cutRunner(clock.getElapsedTime());
+        const seconds = clock.getElapsedTime();
+        // Our own delta: THREE.Clock's getDelta() and getElapsedTime() share an oldTime, so calling
+        // both in one frame counts the same milliseconds twice.
+        const delta = Math.min(Math.max(seconds - previous, 0), 0.1);
+        previous = seconds;
+        const beat = cutRunner ? cutRunner(seconds) : null;
         watchQuality();
-        if (windBox.checked) applyWind(clock.getElapsedTime());
-        // The hero drives its own camera; the flag keeps its slow turn so the tour sees a moving
-        // subject rather than a still one. Reduced motion leaves both alone — that setting exists
-        // to stop exactly this.
-        if (bare && !calm) {
-            const seconds = clock.getElapsedTime();
+        let windAllowed = true;
+        if (beat && layered) {
+            windAllowed = driveLayered(beat, seconds, delta);
+        } else if (beat) {
+            /* A page that is nothing BUT the animation keeps the roll's own held-wide framing, where
+               the blade is the subject and a close-up mid-stroke would hide it. Still no wind and no
+               bow once the cutting starts, for the same reason as above. */
+            driveRoll(beat);
+            windAllowed = beat.kind === 'present';
+            if (!windAllowed && !flattened) { flattenCloth(); flattened = true; }
+            if (windAllowed) flattened = false;
+        } else if (bare && !calm) {
             group.rotation.y = Math.sin(seconds * 0.16) * 0.5;
             driveTour(seconds);
         }
+        if (windBox.checked && windAllowed) applyWind(seconds);
         controls.update();
+
+        /* ── Two passes, one canvas ──
+           The flag is SCISSORED into its own band, so however far the canvas extends below the hero
+           the flag cannot spill onto the page. The cloth is drawn after it, across the whole canvas,
+           with the depth buffer cleared between them — that clear is what makes the front layer
+           genuinely in front rather than merely later. */
+        const w = stage.clientWidth, h = stage.clientHeight, band = bandHeight();
+        if (layered) {
+            renderer.setViewport(0, h - band, w, band);
+            renderer.setScissor(0, h - band, w, band);
+            renderer.setScissorTest(true);
+        }
         renderer.render(scene, camera);
+        if (layered) {
+            renderer.setScissorTest(false);
+            renderer.setViewport(0, 0, w, h);
+            renderer.autoClear = false;
+            renderer.clearDepth();
+            renderer.render(front, frontCamera);
+            renderer.autoClear = true;
+        }
     });
 }
 

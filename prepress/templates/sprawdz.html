@@ -106,6 +106,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
     </div>
 </main>
 
+<script src="{{ asset('last-artwork.js') }}"></script>
 <script>
 /* The whole check loop, client side: file → /api/check → verdict list + the SAME 3D scene the
    template preview uses, wearing the customer's own raster (handed over by postMessage — the bytes
@@ -304,6 +305,12 @@ function renderReport(front, back) {
 function showModel(front, back) {
     el('modelWrap').hidden = false;
     const frame = el('modelFrame');
+    /* Keep a small copy for the landing page's hero, so going back to `/` flies the flag you just
+       checked instead of the bundled demo. Session-scoped and browser-only — see last-artwork.js.
+       Fire and forget: it must not delay, and cannot fail, the verdict the customer is reading. */
+    if (front.preview_png && window.PrepressLastArtwork) {
+        window.PrepressLastArtwork.remember(`data:image/png;base64,${front.preview_png}`);
+    }
     frame.src = `{{ base }}/model/${encodeURIComponent(front.template_token)}?embed=1`;
     frame.addEventListener('load', () => {
         // The scene builds after its own fetch; a short delay beats racing it. Regions come from

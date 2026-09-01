@@ -210,6 +210,7 @@ td.num { text-align: right; white-space: nowrap; }
     </div>
 </main>
 
+<script src="{{ asset('last-artwork.js') }}"></script>
 <script>
 const el = (id) => document.getElementById(id);
 let MATERIALS = [];
@@ -456,11 +457,36 @@ async function loadHeroFlag() {
         const templates = (await (await fetch('api/templates')).json()).templates || [];
         if (!templates.length) return;
         const pick = templates.find((t) => /Play A/i.test(t.name || '')) || templates[0];
-        document.getElementById('heroFlag').src =
-            `model/${encodeURIComponent(pick.token)}?bare=1`;
+        const frame = document.getElementById('heroFlag');
+        dressHero(frame);
+        frame.src = `model/${encodeURIComponent(pick.token)}?bare=1`;
     } catch (e) {
         /* No flag in the hero is a fine hero. */
     }
+}
+
+/* If this session has already checked a file, the hero wears THAT instead of the demo artwork.
+   Handed over exactly the way the check page hands the scene its raster — the `artwork` message,
+   which `wearArtwork` takes at a rank above the demo — so there is no second path into the scene
+   to keep in step with the first, and nothing to change in the 3D page at all.
+
+   The delay is the same 900 ms the check page uses: the scene builds after its own fetch, and its
+   message listener does not exist until it has. Waiting beats racing it, and the cost of losing
+   the race is only that the hero keeps the demo on. */
+const HERO_SCENE_READY_MS = 900;
+
+function dressHero(frame) {
+    const remembered = window.PrepressLastArtwork && window.PrepressLastArtwork.recall();
+    if (!remembered) return;
+    frame.addEventListener('load', () => {
+        setTimeout(() => {
+            try {
+                frame.contentWindow.postMessage({ artwork: remembered }, window.location.origin);
+            } catch (e) {
+                /* The frame went away, or was never same-origin. The demo is already on it. */
+            }
+        }, HERO_SCENE_READY_MS);
+    }, { once: true });
 }
 
 loadHeroFlag();
