@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>{{ model or 'Modele 3D' }} — podgląd 3D | prepress-open</title>
+{% include "_theme.html" %}
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink);
+       font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+       display: flex; flex-direction: column; min-height: 100vh; }
+header b { font-size: 16px; } header a { font-size: 12.5px; }
+header .spacer { flex: 1; }
+#stage { flex: 1; min-height: 320px; position: relative; }
+#stage canvas { display: block; }
+.note-float { position: absolute; right: 12px; bottom: 12px; font-size: 12px; color: var(--muted);
+              background: color-mix(in srgb, var(--surface) 88%, transparent);
+              border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+#err { position: absolute; inset: 0; display: none; place-items: center; font-weight: 600;
+       color: var(--alert); text-align: center; padding: 24px; }
+#loading { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 600;
+           color: var(--muted); }
+.list { padding: 24px; max-width: 720px; }
+.list a { display: block; padding: 10px 0; border-bottom: 1px solid var(--line); }
+body.bare header, body.bare .note-float { display: none; }
+body.bare { background: transparent; }
+body.bare #stage canvas { pointer-events: none; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "{{ asset('three.module.min.js') }}" } }
+</script>
+</head>
+<body class="{{ 'bare' if bare else '' }}">
+{% with page_title = model or 'Modele 3D', page_sub = 'podgląd produktu',
+        extra_actions = '<a href="' ~ base ~ '/produkt3d">← wszystkie modele</a>' %}
+{% include "_brand_header.html" %}{% endwith %}
+
+{% if not model %}
+<div class="list">
+    {% if models %}
+        {% for name in models %}<a href="{{ base }}/produkt3d/{{ name }}">{{ name }}</a>{% endfor %}
+    {% else %}
+        <p>Nie skonfigurowano katalogu z modelami.
+           Ustaw <code>PREPRESS_MODELS_DIR</code> i wgraj tam pliki <code>.glb</code>.</p>
+    {% endif %}
+</div>
+{% else %}
+<div id="stage">
+    <div id="loading">Wczytujemy model…</div>
+    <div class="note-float">Obróć myszką. Kółko przybliża.</div>
+    <div id="err"></div>
+</div>
+
+<script type="module">
+/* A finished product model, shown as it was exported.
+   Some products cannot be described by a flat outline the way a flag can: a pneumatic tent is a
+   sewn three-dimensional object, and the honest source for its shape is the render the graphics
+   team already builds in Blender or Substance. So this viewer draws the .glb as-is rather than
+   reconstructing anything, and the artwork phase later swaps the base-colour texture on the
+   printable panels — which needs the model's UV layout, not more geometry code. */
+import * as THREE from 'three';
+import { OrbitControls } from '{{ asset("OrbitControls.js") }}';
+import { GLTFLoader } from '{{ asset("GLTFLoader.js") }}';
+import { DRACOLoader } from '{{ asset("DRACOLoader.js") }}';
+
+const MODEL = {{ model|tojson }};
+const stage = document.getElementById('stage');
+const errorBox = document.getElementById('err');
+
+function fail(message) {
+    document.getElementById('loading').remove();
+    errorBox.style.display = 'grid';
+    errorBox.textContent = message;
+}
+
+const scene = new THREE.Scene();
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+stage.appendChild(renderer.domElement);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 500);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+/* Hemisphere plus a key light and a rim, the same lighting the flag scene uses: flat ambient makes
+   every normal read the same and a fabric product then looks like a sticker. */
+scene.add(new THREE.HemisphereLight(0xf4f6ff, 0x3a3c40, 1.1));
+const sun = new THREE.DirectionalLight(0xffffff, 1.9);
+sun.position.set(3, 5, 4);
+scene.add(sun);
+const rim = new THREE.DirectionalLight(0xdfe8ff, 0.55);
+rim.position.set(-4, 2, -3);
+scene.add(rim);
+
+let spinning = !document.body.classList.contains('bare')
+    ? false
+    : !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const pivot = new THREE.Group();
+scene.add(pivot);
+
+/* Draco, because an optimised export is a compressed one: glTF-Transform squeezes the phone build
+   of a model down with KHR_draco_mesh_compression, and a plain GLTFLoader answers that with "No
+   DRACOLoader instance provided" rather than a picture. The decoder is vendored beside the loader
+   (the LAN has no CDN) and costs nothing on a model that turns out to be uncompressed. */
+const draco = new DRACOLoader().setDecoderPath('{{ base }}/static/draco/');
+const loader = new GLTFLoader().setDRACOLoader(draco);
+
+loader.load(`{{ base }}/api/models/${encodeURIComponent(MODEL)}`, (gltf) => {
+    document.getElementById('loading').remove();
+    const model = gltf.scene;
+    // Sit the model on the ground and spin it about its own centre, whatever origin the export
+    // happened to use — a designer's scene origin is rarely the middle of the product.
+    const bounds = new THREE.Box3().setFromObject(model);
+    const size = bounds.getSize(new THREE.Vector3());
+    const centre = bounds.getCenter(new THREE.Vector3());
+    model.position.set(-centre.x, -bounds.min.y, -centre.z);
+    pivot.add(model);
+
+    const ground = new THREE.Mesh(
+        new THREE.CircleGeometry(Math.max(size.x, size.z) * 1.6, 48),
+        new THREE.MeshStandardMaterial({ color: 0xe8eaee, roughness: 0.95 }));
+    ground.rotation.x = -Math.PI / 2;
+    scene.add(ground);
+
+    const height = size.y;
+    controls.target.set(0, height * 0.45, 0);
+    const distance = Math.max(size.x, size.z, height) * 1.9;
+    camera.position.set(distance * 0.75, height * 0.9, distance * 0.75);
+    controls.update();
+    resize();
+
+    document.querySelector('.note-float').textContent =
+        `${size.x.toFixed(2)} x ${size.z.toFixed(2)} x ${height.toFixed(2)} m · obróć myszką`;
+}, undefined, (error) => {
+    fail('Nie udało się wczytać modelu. ' + (error && error.message ? error.message : ''));
+});
+
+function resize() {
+    const width = stage.clientWidth || 1;
+    const height = stage.clientHeight || 1;
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+renderer.setAnimationLoop(() => {
+    if (spinning) pivot.rotation.y += 0.0035;
+    controls.update();
+    renderer.render(scene, camera);
+});
+</script>
+{% endif %}
+</body>
+</html>

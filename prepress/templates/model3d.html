@@ -1,0 +1,1743 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>{{ name }} — podgląd 3D | prepress-open</title>
+{% include "_theme.html" %}
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink);
+       font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+       display: flex; flex-direction: column; min-height: 100vh; }
+header b { font-size: 16px; } header a { font-size: 12.5px; }
+header .spacer { flex: 1; }
+/* The stage owns the rest of the viewport; three.js reads its box, so CSS is the layout authority. */
+#stage { flex: 1; min-height: 320px; position: relative; }
+#stage canvas { display: block; }
+.legend { position: absolute; left: 12px; bottom: 12px; display: flex; flex-direction: column;
+          gap: 4px; font-size: 12.5px; background: color-mix(in srgb, var(--surface) 88%, transparent);
+          border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+.legend span { display: flex; gap: 7px; align-items: center; }
+.legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.legend label { display: flex; gap: 7px; align-items: center; font-weight: 600; cursor: pointer;
+                margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); }
+.note-float { position: absolute; right: 12px; bottom: 12px; font-size: 12px; color: var(--muted);
+              background: color-mix(in srgb, var(--surface) 88%, transparent);
+              border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+#err { position: absolute; inset: 0; display: none; place-items: center; font-weight: 600;
+       color: var(--alert); }
+/* Decoration mode, for the hero: the scene only, no chrome, no interaction, transparent ground so
+   the page's own background shows through. Same page, same code — a second copy would drift. */
+body.bare header, body.bare .legend, body.bare .note-float { display: none; }
+body.embed header { display: none; }
+body.embed { background: transparent; min-height: 100vh; }
+body.bare { background: transparent; min-height: 100vh; }
+body.bare #stage canvas { pointer-events: none; }
+/* In a frame the frame IS the viewport, and a hero band can be shorter than a reading page's
+   floor. With #stage's 320 px minimum the body grew taller than its own iframe and the flag was
+   clipped top and bottom on a phone (shop rule, 2026-09-01). No floor here: fit the frame given. */
+body.bare, body.embed { height: 100vh; min-height: 0; overflow: hidden; }
+body.bare #stage, body.embed #stage { min-height: 0; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "{{ asset('three.module.min.js') }}" } }
+</script>
+<!-- Exact polygon booleans (MIT). A UMD bundle rather than the ESM build, because that one imports
+     two more packages and this has to work with no bundler and no CDN. Only the cutting mode uses
+     it; every other page ignores the global. -->
+<script src="{{ asset('polygon-clipping.min.js') }}"></script>
+</head>
+<body class="{{ 'bare' if bare else '' }}{{ ' embed' if embed else '' }}">
+{% with page_title = name, page_sub = 'podgląd 3D szablonu',
+        extra_actions = '<a href="' ~ base ~ '/api/templates/' ~ token ~ '/pdf">pobierz PDF</a>'
+                        ~ '<a href="' ~ base ~ '/">← szablony</a>' %}
+{% include "_brand_header.html" %}{% endwith %}
+
+<div id="stage">
+    <div class="legend">
+        <span><i style="background:#d81a73"></i> linia cięcia — tak zostanie wycięta</span>
+        <span><i style="background:#2f9e52"></i> obszar bezpieczny — tu trzymaj teksty i logo</span>
+        <span class="note" id="mastNote"></span>
+        <label><input type="checkbox" id="wind"> Wiatr</label>
+    </div>
+    <div class="note-float" id="sideNote"></div>
+    <div id="err"></div>
+</div>
+
+<script type="module">
+/* The flag as it will hang: the REAL cut outline as cloth, on the mast the price list actually sells
+   with it (flag top flush with the mast top, bare pole below the foot — the price list's own drawings,
+   pages 3-7). Phase 1 (+ wind) of tasks/plan-prepress-3d.md; artwork texture and finding markers
+   come in later phases.
+
+   The cloth is a densely subdivided PLANE clipped to the outline by an alpha silhouette, not a
+   ShapeGeometry: ShapeGeometry triangulates the boundary only, and waving needs interior vertices
+   to bend. The silhouette canvas is also exactly where the customer's artwork raster lands in the
+   texture phase, so the wind checkbox forced the structure that phase needs anyway. */
+import * as THREE from 'three';
+import { OrbitControls } from '{{ asset("OrbitControls.js") }}';
+import { shears, silhouette, fillSilhouette, pointInRing }
+    from '{{ asset("fabric.js") }}';
+
+/* A window onto a section of an existing curve — what TubeGeometry needs to build one telescoping
+   piece without re-sampling the whole path. */
+class SubCurve extends THREE.Curve {
+    constructor(parent, from, to) {
+        super();
+        this.parent = parent;
+        this.from = from;
+        this.span = to - from;
+    }
+    getPoint(t) {
+        return this.parent.getPointAt(this.from + t * this.span);
+    }
+}
+
+/* The sleeve cross-section: a TEARDROP, not a circle — fabric stretched open by the pole
+   (circular nose of `radius`) whose flanks converge to the seam at `tail` from the pole's
+   centre, where the sleeve is sewn to the corpus. fraction walks the closed profile: 0 at the
+   seam, around the nose the long way, back to the seam at 1. Returns [x, y] in profile space
+   with +x pointing at the seam. */
+function teardropPoint(fraction, radius, tail) {
+    const phi = Math.acos(Math.min(radius / tail, 0.99));
+    const flank = Math.sqrt(Math.max(tail * tail - radius * radius, 1e-9));
+    const arc = radius * (2 * Math.PI - 2 * phi);
+    const perimeter = 2 * flank + arc;
+    let walked = fraction * perimeter;
+    if (walked < flank) {
+        const f = walked / flank;
+        return [tail + f * (radius * Math.cos(phi) - tail), f * radius * Math.sin(phi)];
+    }
+    walked -= flank;
+    if (walked < arc) {
+        const theta = phi + walked / radius;
+        return [radius * Math.cos(theta), radius * Math.sin(theta)];
+    }
+    const f = (walked - arc) / flank;
+    return [radius * Math.cos(phi) + f * (tail - radius * Math.cos(phi)),
+            -radius * Math.sin(phi) * (1 - f)];
+}
+
+function teardropPerimeter(radius, tail) {
+    const phi = Math.acos(Math.min(radius / tail, 0.99));
+    return 2 * Math.sqrt(Math.max(tail * tail - radius * radius, 1e-9))
+        + radius * (2 * Math.PI - 2 * phi);
+}
+
+/* Sweep the teardrop along a curve. Options:
+   - radiusAt(t), tailAt(t): profile size along the sweep (t 0..1);
+   - tailDirAt(t, pos): WORLD direction the seam points at (toward the cloth) — projected onto
+     the profile plane per ring;
+   - uvAt(t, fraction, pos, aroundDist): texture coordinates per vertex; aroundDist is the real
+     distance walked around the profile from the seam, in scene units — what a printed strip
+     sewn into a loop measures.
+   Returns { geometry, ringOfVertex } — the ring index per vertex, for wind riders. */
+function sweepSleeve(curve, { rings = 36, around = 24, radiusAt, tailAt, tailDirAt, uvAt }) {
+    const frames = curve.computeFrenetFrames(rings, false);
+    const positions = [], uvs = [], indices = [], ringOfVertex = [];
+    for (let r = 0; r <= rings; r++) {
+        const t = r / rings;
+        const pos = curve.getPointAt(t);
+        const N = frames.normals[Math.min(r, rings - 1)];
+        const B = frames.binormals[Math.min(r, rings - 1)];
+        const want = tailDirAt(t, pos);
+        // The seam axis: the wanted direction projected into the profile plane.
+        let tx = want.dot(N), ty = want.dot(B);
+        const len = Math.hypot(tx, ty) || 1;
+        tx /= len; ty /= len;
+        const radius = radiusAt(t), tail = tailAt(t);
+        const perimeter = teardropPerimeter(radius, tail);
+        for (let k = 0; k <= around; k++) {
+            const fraction = k / around;
+            const [px, py] = teardropPoint(fraction, radius, tail);
+            // Rotate profile space into the (N, B) plane: +x along the seam axis.
+            const ox = px * tx - py * ty, oy = px * ty + py * tx;
+            positions.push(pos.x + N.x * ox + B.x * oy,
+                           pos.y + N.y * ox + B.y * oy,
+                           pos.z + N.z * ox + B.z * oy);
+            // Distance from the seam the SHORT way round, both flanks alike — a strip sewn into
+            // a loop shows the same artwork depth on both faces.
+            const aroundDist = Math.min(fraction, 1 - fraction) * perimeter;
+            uvs.push(...uvAt(t, fraction, pos, aroundDist));
+            ringOfVertex.push(r);
+        }
+    }
+    const cols = around + 1;
+    for (let r = 0; r < rings; r++) {
+        for (let k = 0; k < around; k++) {
+            const a = r * cols + k, b = a + 1, c = a + cols, d = c + 1;
+            indices.push(a, c, b, b, c, d);
+        }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    return { geometry, ringOfVertex };
+}
+
+const token = {{ token|tojson }};
+const stage = document.getElementById('stage');
+
+function fail(text) {
+    const box = document.getElementById('err');
+    box.textContent = text;
+    box.style.display = 'grid';
+}
+
+const data = await fetch(`{{ base }}/api/templates/${token}/shape`).then(r => r.json()).catch(() => null);
+/* `?cutFrom=<token>` turns this page into the cutting animation: the flag starts as THAT shape and
+   is cut down to this one, on this template's own mast. The end state is what the mast belongs to,
+   which is why the cut runs on the destination's page rather than the source's. */
+const cutFromToken = new URLSearchParams(location.search).get('cutFrom');
+const cutFromData = cutFromToken
+    ? await fetch(`{{ base }}/api/templates/${cutFromToken}/shape`)
+          .then(r => r.json()).catch(() => null)
+    : null;
+if (!data || data.error || !(data.netto || []).length) {
+    fail((data && data.error) || 'Nie udało się wczytać kształtu szablonu.');
+} else {
+    build(data, cutFromData);
+}
+
+/* Ring plumbing the cut needs. polygon-clipping wants a CLOSED ring; walking and averaging want
+   an open one, and mixing the two duplicates a vertex into every boolean. */
+function closedRing(ring) {
+    const closed = ring.slice();
+    const [fx, fy] = closed[0], [lx, ly] = closed[closed.length - 1];
+    if (fx !== lx || fy !== ly) closed.push([fx, fy]);
+    return [closed];
+}
+
+function openRing(ring) {
+    const open = ring.slice();
+    const [fx, fy] = open[0], [lx, ly] = open[open.length - 1];
+    if (fx === lx && fy === ly) open.pop();
+    return open;
+}
+
+// The closest point ON the ring, not the closest vertex: the Regular's outline is nine points
+// long, so its vertices say almost nothing about where a curve meets it.
+function projectOnRing(ring, [px, py]) {
+    let best = { distance: Infinity, index: 0, point: ring[0] };
+    for (let i = 0; i < ring.length; i++) {
+        const [ax, ay] = ring[i], [bx, by] = ring[(i + 1) % ring.length];
+        const dx = bx - ax, dy = by - ay, span = dx * dx + dy * dy;
+        const t = span ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / span)) : 0;
+        const qx = ax + t * dx, qy = ay + t * dy;
+        const distance = Math.hypot(px - qx, py - qy);
+        if (distance < best.distance) best = { distance, index: i, point: [qx, qy] };
+    }
+    return best;
+}
+
+// The stretch of ring between two projected points, forward in index order.
+function walkRing(ring, from, to) {
+    const run = [from.point];
+    const stop = (to.index + 1) % ring.length;
+    let i = (from.index + 1) % ring.length;
+    for (let guard = 0; guard <= ring.length && i !== stop; guard++) {
+        run.push(ring[i]);
+        i = (i + 1) % ring.length;
+    }
+    run.push(to.point);
+    return run;
+}
+
+/* What to actually CUT when a destination will not fit inside its source, and whether the result
+   then has to be transformed into the real outline.
+
+   A template may carry its own `transform` ring: a shape drawn for exactly this, slimmer than the
+   product so that it fits. That is preferred over anything computed, because it is a person's
+   drawing rather than my guess. Whatever the shape, it is then shrunk about its own centroid by
+   the least that makes it fit — and about the CENTROID, never a bbox corner: a feather flag does
+   not reach its own bbox corners, so shrinking towards one carries the whole shape off the sheet
+   (measured 2026-09-01: 0.05 by corner with everything still outside, 0.808 by centroid). */
+function fitInside(destination, source, preferred) {
+    const clip = window.polygonClipping;
+    const outside = (ring) => clip.difference(closedRing(ring), closedRing(source))
+                                  .reduce((sum, polygon) => sum + ringArea(polygon[0]), 0);
+    const NOISE = ringArea(destination) * 2e-4;
+    if (!preferred && outside(destination) <= NOISE) return { ring: destination, morph: false };
+    const shape = preferred && preferred.length > 2 ? preferred : destination;
+    const centre = [shape.reduce((s, p) => s + p[0] / shape.length, 0),
+                    shape.reduce((s, p) => s + p[1] / shape.length, 0)];
+    const scaledTo = (k) => shape.map(([x, y]) => [centre[0] + (x - centre[0]) * k,
+                                                   centre[1] + (y - centre[1]) * k]);
+    let scale = 1;
+    if (outside(shape) > NOISE) {
+        let fits = 0.05, tooBig = 1;
+        for (let i = 0; i < 24; i++) {
+            const middle = (fits + tooBig) / 2;
+            if (outside(scaledTo(middle)) <= NOISE) fits = middle; else tooBig = middle;
+        }
+        scale = Math.floor(fits * 1000) / 1000;     // rounded DOWN, so it really does fit
+    }
+    return { ring: scaledTo(scale), morph: true };
+}
+
+/* Two rings as the same number of points, both wound the same way and both starting at the point
+   nearest the free bottom-right corner, so lerping them index by index turns one into the other
+   instead of twisting it inside out. */
+function alignRings(from, to, count) {
+    const sameWinding = (ring) => {
+        let doubled = 0;
+        for (let i = 0; i < ring.length; i++) {
+            const [x1, y1] = ring[i], [x2, y2] = ring[(i + 1) % ring.length];
+            doubled += x1 * y2 - x2 * y1;
+        }
+        return doubled > 0 ? ring : ring.slice().reverse();
+    };
+    const fromCorner = (ring) => {
+        const wound = sameWinding(ring);
+        let start = 0, best = -Infinity;
+        wound.forEach(([x, y], i) => { if (x - y > best) { best = x - y; start = i; } });
+        const rotated = wound.slice(start).concat(wound.slice(0, start));
+        return resamplePath(rotated.concat([rotated[0]]), count);
+    };
+    return [fromCorner(from), fromCorner(to)];
+}
+
+// Evenly spaced along the path's own length, so the blade travels at one speed.
+function resamplePath(path, count) {
+    const lengths = [0];
+    for (let i = 1; i < path.length; i++) {
+        lengths.push(lengths[i - 1] + Math.hypot(path[i][0] - path[i - 1][0],
+                                                 path[i][1] - path[i - 1][1]));
+    }
+    const total = lengths[lengths.length - 1];
+    const out = [];
+    let j = 0;
+    for (let k = 0; k < count; k++) {
+        const want = total * k / (count - 1);
+        while (j < lengths.length - 2 && lengths[j + 1] < want) j++;
+        const span = lengths[j + 1] - lengths[j] || 1;
+        const t = Math.max(0, Math.min(1, (want - lengths[j]) / span));
+        out.push([path[j][0] + (path[j + 1][0] - path[j][0]) * t,
+                  path[j][1] + (path[j + 1][1] - path[j][1]) * t]);
+    }
+    return out;
+}
+
+/* Which ring of a template is the visible cloth. The CORPUS: the strip between the hem cut and
+   the body cut is folded in half and sewn on as the mast sleeve, so it is not flat cloth. A
+   template with a single cut line and no corpus falls back to its widest ring. */
+function sortedRings(shape) {
+    return shape.netto.map(points => ({ points, area: ringArea(points) }))
+                      .sort((a, b) => b.area - a.area);
+}
+
+function outlineOf(shape, scale) {
+    const ring = (shape.corpus && shape.corpus.length)
+        ? shape.corpus[0] : sortedRings(shape)[0].points;
+    return ring.map(([x, y]) => [x * scale, y * scale]);
+}
+
+/* ── The cut ─────────────────────────────────────────────────────────────────
+   Returns a per-frame runner, or null when this page is not a cutting page. Everything it needs
+   is passed in: it wants the scene's numbers, not build()'s 1300-line scope.
+
+   What comes away is difference(SOURCE, DESTINATION) from a real boolean library, and every frame
+   only ever INTERSECTS with that. Three earlier attempts reconstructed the waste side by hand and
+   each one, somewhere, kept the scrap and dropped the banner. This cannot: everything the
+   animation removes is by construction part of the true offcut. */
+function installCut({ S, fabric, finished, morphs, cutSource, box, clothW, clothH,
+                      paintSilhouette, clothMaterial, group }) {
+    if (!cutSource || !window.polygonClipping) return null;
+    const clip = window.polygonClipping;
+
+    /* Where two outlines share a stretch, difference() emits a crumb per coincident vertex pair.
+       Play A and Play C are the SAME shape above 800 mm and differ only in the bottom-right
+       corner, so their difference came back as one real 914 cm² piece plus 57 crumbs totalling
+       23 mm². Those are arithmetic, not cloth. The threshold names what it dropped, because a
+       rule that decides what counts as real has to be able to say what it excluded. */
+    const REAL_PIECE = 0.002;               // of the source's own area
+    const sourceArea = ringArea(cutSource);
+    const everything = clip.difference(closedRing(cutSource), closedRing(fabric));
+    const waste = everything.filter(poly => ringArea(poly[0]) / sourceArea >= REAL_PIECE);
+    if (waste.length !== everything.length) {
+        const crumbs = everything.length - waste.length;
+        const area = everything.filter(poly => ringArea(poly[0]) / sourceArea < REAL_PIECE)
+                               .reduce((sum, poly) => sum + ringArea(poly[0]), 0);
+        console.info(`cut: ignored ${crumbs} coincident-edge crumb(s), ` +
+                     `${(area * 1e4).toFixed(1)} mm² in total`);
+    }
+
+    /* Where the blade travels: EVERY stretch of the destination outline that is not already an
+       edge of the source. The Play A and the Regular share their bottom hem and a knife has
+       nothing to do there; a Drop parts from a Play B in three separate places. Each stretch is
+       one STROKE, and each keeps the shared point at either end — a straight edge is two points
+       long, so dropping the points that sit on it deletes the whole edge (that is what hid the
+       Regular's right-hand side). Taking only the longest stretch, as this did while every offcut
+       was a single piece, left a Drop's other two pieces on stretches the blade never visited. */
+    const ON_EXISTING_EDGE = 3 * S;
+    const shared = fabric.map(p => projectOnRing(cutSource, p).distance <= ON_EXISTING_EDGE);
+    const strokes = [];
+    const firstShared = shared.indexOf(true);
+    if (firstShared === -1) {
+        strokes.push(fabric.concat([fabric[0]]));      // nothing is shared: cut the whole ring
+    } else {
+        let stroke = [], anchor = null;
+        for (let k = 0; k <= fabric.length; k++) {
+            const i = (firstShared + k) % fabric.length;
+            if (shared[i]) {
+                if (stroke.length) { stroke.push(fabric[i]); strokes.push(stroke); stroke = []; }
+                anchor = fabric[i];
+            } else {
+                if (!stroke.length && anchor) stroke.push(anchor);
+                stroke.push(fabric[i]);
+            }
+        }
+        if (stroke.length > 1) strokes.push(stroke);
+    }
+    if (!strokes.length || !waste.length) return null;
+
+    /* The free corner is the bottom-right: the one the wind moves and the one a cutter reaches
+       for. Each stroke runs from its far end TOWARDS that corner, and the strokes are ordered the
+       same way, so the knife works inwards to the corner the offcut will hang from
+       (shop rule, 2026-09-01 — this ran the other way round until it was asked to be flipped). */
+    const freeCorner = cutSource.reduce((a, b) => (b[0] - b[1] > a[0] - a[1] ? b : a));
+    const toCorner = (p) => (p[0] - freeCorner[0]) ** 2 + (p[1] - freeCorner[1]) ** 2;
+    for (const stroke of strokes) {
+        if (toCorner(stroke[stroke.length - 1]) > toCorner(stroke[0])) stroke.reverse();
+    }
+    strokes.sort((a, b) => toCorner(b[0]) - toCorner(a[0]));
+    /* Constant blade speed, with the points shared out by real length so a long stroke is not
+       rushed to keep pace with a short one. The stored outline is hundreds of points around a
+       curve and two points down a straight side, so raw point order crawls the curve and
+       teleports the edge. */
+    const lengthOf = (r) => r.reduce(
+        (sum, p, i) => (i ? sum + Math.hypot(p[0] - r[i - 1][0], p[1] - r[i - 1][1]) : 0), 0);
+    const totalLength = strokes.reduce((sum, r) => sum + lengthOf(r), 0) || 1;
+    let cutPath = [];
+    for (const stroke of strokes) {
+        cutPath = cutPath.concat(resamplePath(
+            stroke, Math.max(2, Math.round(220 * lengthOf(stroke) / totalLength))));
+    }
+    if (cutPath.length <= 2) return null;
+
+    /* ── Timing ── one beat on the sheet before the first stroke, one on the finished flag after
+       the offcut has gone. A single pass is over in six seconds, not long enough to look twice.
+       GROW only exists for a destination that had to be cut undersized; when the shape fitted, it
+       is skipped and the cycle is what it always was. */
+    const SHEET = 1.2, CUT_SECONDS = 3.6, FALL_SECONDS = 1.2;
+    const GROW = morphs ? 1.3 : 0, FLAG = 2.3;
+    const CYCLE = SHEET + CUT_SECONDS + FALL_SECONDS + GROW + FLAG;
+    /* The piece that was cut becoming the piece that was ordered. A morph and not a scale: the two
+       are different outlines, so there is no factor that takes one to the other. The mast, the
+       base and the guide lines stand at true size throughout — they are what it grows into. */
+    const MORPH_STEPS = 24;                 // a 2048-wide mask repaint is not free
+    const [morphFrom, morphTo] = morphs ? alignRings(fabric, finished, 260) : [null, null];
+    const morphedAt = (step) => {
+        const t = step / MORPH_STEPS;
+        const eased = t * t * (3 - 2 * t);
+        return morphFrom.map(([x, y], i) => [x + (morphTo[i][0] - x) * eased,
+                                             y + (morphTo[i][1] - y) * eased]);
+    };
+    // Real g. One scene unit is 100 mm, so 9.81 m/s² is 98.1 units/s², and a 2.3 m flag's offcut
+    // clears the shot in about two thirds of a second — which is what it does.
+    const GRAVITY = 98.1;
+
+    /* ── Every step of the cut, computed once ──
+       Freeing is decided PER OFFCUT PIECE, against that piece's own ring. The single closure this
+       replaces walked the SOURCE boundary between the two ends of the whole cut, which spans
+       pieces the blade has not reached — that is what made Play C → Play B free area
+       backwards. Every piece here is entirely waste, so a wrong closure can only free LESS of that
+       piece; it can never reach the banner.
+
+       Both halves are stored, freed AND kept. The kept half used to be computed in the frame loop
+       as an argument to the repaint — which meant a ~3 ms boolean ran 60 times a second forever,
+       to feed a function whose first line was a cache check. */
+    const bannerInside = fabric.reduce(
+        (a, p) => [a[0] + p[0] / fabric.length, a[1] + p[1] / fabric.length], [0, 0]);
+    // When the blade first and last runs along each piece's own boundary.
+    const pieces = waste.map((polygon) => {
+        const ring = openRing(polygon[0]);
+        let first = Infinity, last = -Infinity;
+        for (let i = 0; i < cutPath.length; i++) {
+            if (projectOnRing(ring, cutPath[i]).distance <= ON_EXISTING_EDGE) {
+                if (i < first) first = i;
+                if (i > last) last = i;
+            }
+        }
+        /* Nothing separates until the stroke closes, and that is not a fallback — it is what
+           happens when the offcut SURROUNDS the destination. Cutting a Drop out of the middle of a
+           Play B leaves a frame, whose outer edge is the sheet's own and whose inner edge is the
+           cut; a frame holds together right up to the moment the cut meets itself. The test above
+           looks at the outer ring only, so exactly those pieces land here. */
+        if (first === Infinity) { first = cutPath.length - 2; last = cutPath.length - 1; }
+        return { polygon, ring, first, last };
+    });
+    const stepAt = (headLength) => {
+        const freed = [];
+        for (const piece of pieces) {
+            if (headLength <= piece.first) continue;               // not reached yet
+            if (headLength > piece.last) { freed.push(piece.polygon); continue; }
+            const head = cutPath.slice(piece.first, headLength);
+            if (head.length < 2) continue;
+            const a = projectOnRing(piece.ring, head[0]);
+            const b = projectOnRing(piece.ring, head[head.length - 1]);
+            const forward = head.concat(walkRing(piece.ring, b, a));
+            const backward = head.concat(walkRing(piece.ring, a, b).reverse());
+            let candidate = pointInRing(forward, bannerInside) ? backward : forward;
+            if (pointInRing(candidate, bannerInside)) {
+                candidate = ringArea(forward) < ringArea(backward) ? forward : backward;
+            }
+            try {
+                freed.push(...clip.intersection([piece.polygon], closedRing(candidate)));
+            } catch (error) {
+                // a degenerate step frees nothing from this piece, which is not a crash
+            }
+        }
+        const rings = freed.flat();
+        return { freed: rings,
+                 kept: rings.length ? clip.difference(closedRing(cutSource), freed).flat()
+                                    : [cutSource] };
+    };
+
+    /* Off the critical path and in small bites: two booleans a step is ~6 ms, and 120 of them in
+       one macrotask froze the page for a third of a second on the office Intel HD 530. */
+    const CUT_FRAMES = 120, PER_TICK = 6;
+    const steps = [];
+    const precompute = () => {
+        const until = Math.min(steps.length + PER_TICK, CUT_FRAMES);
+        while (steps.length < until) {
+            steps.push(stepAt(Math.round(cutPath.length * (steps.length + 1) / CUT_FRAMES)));
+        }
+        if (steps.length < CUT_FRAMES) setTimeout(precompute, 0);
+    };
+    setTimeout(precompute, 0);
+
+    /* ── The offcut mesh ──
+       Its own plane rather than a clone of the cloth's: it never takes wind, so it does not need
+       the cloth's segment count, and every vertex it carries is paid for twice — once in the
+       hinge search below and again in computeVertexNormals on every frame of the cut. Same size
+       and same UVs, so it wears the printed sheet exactly as the cloth does. */
+    const OFFCUT_ACROSS = 20;
+    const offcutGeometry = new THREE.PlaneGeometry(
+        clothW, clothH, OFFCUT_ACROSS,
+        Math.min(72, Math.round(OFFCUT_ACROSS * clothH / clothW)));
+    offcutGeometry.translate(box.x0 + clothW / 2, box.y0 + clothH / 2, 0);
+    const cutMesh = new THREE.Mesh(offcutGeometry, clothMaterial.clone());
+    // Half resolution: this mask only has to carry the edge of a piece that is on screen for
+    // three seconds and then falls, while the banner's own mask is what you inspect.
+    const OFFCUT_MASK_WIDTH = 1024;
+    const offcut = silhouette(OFFCUT_MASK_WIDTH,
+                              Math.min(4096, Math.round(OFFCUT_MASK_WIDTH * clothH / clothW)));
+    cutMesh.material.alphaMap = offcut.texture;
+    cutMesh.material.needsUpdate = true;
+    cutMesh.visible = false;
+
+    /* Pinned at the offcut's OWN middle. Rotating the mesh itself turns it about the plane's
+       centre, which is not on the piece — that is what threw the offcut sideways out of shot
+       instead of dropping it. */
+    const wastePoints = waste.flat().flat();
+    const dropX = (Math.min(...wastePoints.map(p => p[0]))
+                   + Math.max(...wastePoints.map(p => p[0]))) / 2;
+    const dropY = (Math.min(...wastePoints.map(p => p[1]))
+                   + Math.max(...wastePoints.map(p => p[1]))) / 2;
+    const falling = new THREE.Group();
+    falling.position.set(dropX, dropY, 0);
+    cutMesh.position.set(-dropX, -dropY, 0);
+    falling.add(cutMesh);
+    group.add(falling);
+
+    /* The offcut is the SAME printed sheet, so it wears whatever the cloth is wearing. The artwork
+       arrives asynchronously and lands on clothMaterial after this clone was taken, which is why
+       the freed strip came away blank on the first run. */
+    const matchCloth = () => {
+        if (cutMesh.material.map === clothMaterial.map) return;
+        cutMesh.material.map = clothMaterial.map;
+        cutMesh.material.color.copy(clothMaterial.color);
+        cutMesh.material.needsUpdate = true;
+    };
+
+    /* ── How the freed cloth moves ──
+       Which stroke of the cut freed each vertex, and which way the blade was pointing there.
+       Computed once: it is the plane's own grid against the path, and neither moves. The direction
+       is the hinge the freed cloth folds over. */
+    const flat = offcutGeometry.attributes.position.array.slice();
+    const vertexCount = offcutGeometry.attributes.position.count;
+    const hinge = new Uint16Array(vertexCount);
+    const freedWhen = new Float32Array(vertexCount);
+    for (let v = 0; v < vertexCount; v++) {
+        const x = flat[v * 3], y = flat[v * 3 + 1];
+        let best = Infinity, bestStep = 0;
+        for (let i = 0; i < cutPath.length; i++) {
+            const d = (cutPath[i][0] - x) ** 2 + (cutPath[i][1] - y) ** 2;
+            if (d < best) { best = d; bestStep = i; }
+        }
+        hinge[v] = bestStep;
+        freedWhen[v] = bestStep / (cutPath.length - 1);
+    }
+    const alongX = new Float32Array(cutPath.length);
+    const alongY = new Float32Array(cutPath.length);
+    for (let i = 0; i < cutPath.length; i++) {
+        const a = cutPath[Math.max(0, i - 1)], b = cutPath[Math.min(cutPath.length - 1, i + 1)];
+        const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
+        alongX[i] = dx / len;
+        alongY[i] = dy / len;
+    }
+
+    /* Cloth the blade has passed is held only by whatever is still uncut above it: it peels off
+       the plane along the cut line and it sags. Both grow with the SQUARE of the time since it
+       came loose, because acceleration is what the eye reads as weight — the first version moved
+       every freed vertex by the same amount and then stopped, which looked like a wipe. The
+       ceilings are the attachment itself; cloth still joined above cannot fall further than the
+       join lets it. */
+    const LOOSE_FULL = 1.1;                  // seconds to reach the ceilings
+    const HELD_SAG = clothH * 0.15;
+    const PEEL_MAX = 1.15;                   // radians it folds off the plane
+    const sagOffcut = (progress) => {
+        const position = offcutGeometry.attributes.position;
+        for (let v = 0; v < vertexCount; v++) {
+            const x = flat[v * 3], y = flat[v * 3 + 1];
+            const loose = Math.max(0, progress - freedWhen[v]) * CUT_SECONDS;
+            if (loose <= 0) {
+                position.array[v * 3] = x;
+                position.array[v * 3 + 1] = y;
+                position.array[v * 3 + 2] = 0;
+                continue;
+            }
+            const weight = Math.min(loose / LOOSE_FULL, 1) ** 2;
+            const i = hinge[v];
+            const hx = cutPath[i][0], hy = cutPath[i][1];
+            const ux = alongX[i], uy = alongY[i];
+            const rx = x - hx, ry = y - hy;
+            const along = ux * rx + uy * ry;
+            /* Rodrigues about the cut line, which lies in the plane, so the only new depth comes
+               from the component across it. Written out rather than through Vector3.applyAxisAngle
+               on purpose: this is every vertex of every frame, and that call would allocate two
+               vectors each time round. */
+            const turn = PEEL_MAX * weight;
+            const c = Math.cos(turn), s = Math.sin(turn);
+            position.array[v * 3] = hx + rx * c + ux * along * (1 - c);
+            position.array[v * 3 + 1] = hy + ry * c + uy * along * (1 - c) - HELD_SAG * weight;
+            position.array[v * 3 + 2] = (ux * ry - uy * rx) * s;
+        }
+        position.needsUpdate = true;
+        offcutGeometry.computeVertexNormals();
+    };
+
+    const blades = shears(1.35);
+    blades.visible = false;
+    group.add(blades);
+
+    /* Both masks are 1000+ pixels wide and re-upload to the GPU when repainted, so each is drawn
+       only when the step it shows actually changes — the silhouette moves 120 times over three
+       and a half seconds, not sixty times a second. */
+    let firstFrame = 0, shownBanner = null, shownOffcut = null;
+    return (elapsed) => {
+        if (!firstFrame) firstFrame = elapsed;
+        if (steps.length < CUT_FRAMES) return;         // still precomputing
+        const at = (elapsed - firstFrame) % CYCLE;
+        matchCloth();
+
+        if (at < SHEET) {                              // the uncut sheet
+            if (shownBanner !== 'sheet') { paintSilhouette([cutSource]); shownBanner = 'sheet'; }
+            cutMesh.visible = false;
+            blades.visible = false;
+            return;
+        }
+
+        if (at >= SHEET + CUT_SECONDS) {               // nothing holds it any more
+            blades.visible = false;
+            if (shownBanner !== 'flag') {
+                paintSilhouette([fabric]);
+                shownBanner = 'flag';
+                sagOffcut(1);                          // freeze it fully peeled, then let it go
+            }
+            const seconds = at - SHEET - CUT_SECONDS;
+            // alphaTest compares the FINAL alpha, so fading opacity would blink the piece out in
+            // one frame. It falls out of shot instead.
+            cutMesh.visible = seconds < FALL_SECONDS;
+            falling.position.y = dropY - 0.5 * GRAVITY * seconds * seconds;
+            falling.rotation.z = -0.55 * seconds;
+            // Once the scrap is clear, what was cut becomes what was ordered.
+            if (morphs) {
+                const step = Math.max(0, Math.min(
+                    Math.round((seconds - FALL_SECONDS) / GROW * MORPH_STEPS), MORPH_STEPS));
+                const key = 'morph' + step;
+                if (shownBanner !== key) { paintSilhouette([morphedAt(step)]); shownBanner = key; }
+            }
+            return;
+        }
+
+        const progress = (at - SHEET) / CUT_SECONDS;
+        const index = Math.min(CUT_FRAMES - 1, Math.floor(progress * CUT_FRAMES));
+        const step = steps[index];
+        if (shownBanner !== index) { paintSilhouette(step.kept); shownBanner = index; }
+        if (step.freed.length) {
+            if (shownOffcut !== index) {
+                fillSilhouette(offcut.ctx, step.freed, box, offcut.canvas);
+                offcut.texture.needsUpdate = true;
+                shownOffcut = index;
+            }
+            cutMesh.visible = true;
+            falling.position.set(dropX, dropY, 0);
+            falling.rotation.z = 0;
+            sagOffcut(progress);
+        }
+
+        const along = Math.round(progress * (cutPath.length - 1));
+        const tip = cutPath[Math.min(cutPath.length - 1, along)];
+        const behind = cutPath[Math.max(0, along - 4)];
+        blades.visible = true;
+        blades.position.set(tip[0], tip[1], 0.05);
+        blades.rotation.z = Math.atan2(tip[1] - behind[1], tip[0] - behind[0]);
+    };
+}
+
+function build(data, cutFrom) {
+    /* mm → scene units 1:100, so a 5 m flag is a 5-unit mesh. The stored outlines are in the PDF
+       frame, where y grows UP — same as the scene — so NO flip here (the first version added one
+       and hung every flag upside down). */
+    const S = 0.01;
+
+    const rings = sortedRings(data);              // the guide lines below draw every one of them
+    const fabric = outlineOf(data, S);
+
+    /* The shape being cut FROM, laid the way a cutter lays it: the two corpuses meet at their
+       BOTTOM-RIGHT corners (shop rule, 2026-08-31). That corner is the one both flags share — the
+       free corner, away from the mast — and nesting there is what makes the leftover a single
+       piece instead of a frame wrapped round the banner.
+
+       The union is a hairline clamp, not a design choice: after the corners meet the two bottom
+       edges still differ by hundredths of a millimetre, and a destination poking outside its
+       source makes "offcut = source minus destination" no longer the offcut. */
+    let cutSource = null, cutFit = null;
+    if (cutFrom && (cutFrom.netto || []).length && window.polygonClipping) {
+        const scaled = outlineOf(cutFrom, S);
+        const toRight = Math.max(...fabric.map(p => p[0])) - Math.max(...scaled.map(p => p[0]));
+        const toBottom = Math.min(...fabric.map(p => p[1])) - Math.min(...scaled.map(p => p[1]));
+        const nested = scaled.map(([x, y]) => [x + toRight, y + toBottom]);
+        /* A Drop is not a trimmed Play B: 400 cm² of it lies OUTSIDE, so no cut produces one.
+           It is cut as the template's own `transform` shape — slimmer, drawn for this — and that
+           is transformed into the real outline once the scrap is gone (shop rule, 2026-09-01).
+           Every other pair fits as it is, and this returns the destination unchanged. */
+        cutFit = fitInside(fabric, nested,
+                           (data.transform || []).map(([x, y]) => [x * S, y * S]));
+        cutSource = openRing(window.polygonClipping
+            .union(closedRing(nested), closedRing(cutFit.ring))
+            .flat().sort((a, b) => ringArea(b) - ringArea(a))[0]);
+    }
+
+    // The plane has to hold BOTH shapes, or the bigger one is clipped by a canvas sized for the
+    // smaller. Without a cut this is exactly the fabric's own box, as before.
+    const framed = cutSource ? fabric.concat(cutSource) : fabric;
+    const xs = framed.map(p => p[0]), ys = framed.map(p => p[1]);
+    const box = { x0: Math.min(...xs), x1: Math.max(...xs),
+                  y0: Math.min(...ys), y1: Math.max(...ys) };
+    const clothW = box.x1 - box.x0, clothH = box.y1 - box.y0;
+
+    /* Dominance tolerance for the sleeve edge (the Pareto frontier of the outline): a real corpus
+       edge BOWS a few millimetres, and with zero tolerance an 11 mm bow on the Play A disqualified
+       the lower quarter of the edge — the mast entered the flag mid-height and the hem band was
+       painted onto the tunnel side. The outline only contains boundary points, so a tolerance
+       comfortably above any bow and below the shoulder's real step keeps the frontier honest. */
+    const SLEEVE_EDGE_TOLERANCE = 15 * S;
+
+    /* The Regular's tunnels, measured off its own cut outline: the notch in the top-left corner
+       exists so the elbow clears the fabric, so its width IS the left tunnel and its height IS
+       the top one. The strips wrap the rigid frame as full sleeves (The shop: NOT folded in
+       half), so they are not flat cloth — they are erased from the silhouette below and built as
+       fabric cylinders in the mast block. */
+    const construction = data.construction || (data.rigid ? 'rigid' : 'winder');
+    let tunnel = null;
+    if (construction === 'top') {
+        // The hung flag: the only tunnel is the top one, its width straight from the template.
+        tunnel = { h: ((data.sewn_sides_mm || {}).top || 130) * S };
+    }
+    if (data.rigid) {
+        const leftEdgeTop = Math.max(...fabric.filter(([x]) => x < box.x0 + 1e-4)
+                                            .map(([, y]) => y));
+        const topEdgeLeft = Math.min(...fabric.filter(([, y]) => y > box.y1 - 1e-4)
+                                             .map(([x]) => x));
+        const notchW = topEdgeLeft - box.x0, notchH = box.y1 - leftEdgeTop;
+        const plausible = (v) => v > 20 * S && v < clothW / 3;
+        tunnel = { w: plausible(notchW) ? notchW : 110 * S,
+                   h: plausible(notchH) ? notchH : 110 * S };
+    }
+
+    /* Hero mode: the decorative strip behind the landing copy, as opposed to the page you open
+       to inspect a template. It buys a cheaper material, a coarser cloth and a lower render
+       resolution, because the office PC is an Intel HD 530 and the full fabric shader gave it
+       9 fps. Declared HERE, above everything that reads it: a const used before its declaration
+       is a TDZ ReferenceError, which has killed this file twice already. */
+    const HERO = document.body.classList.contains('bare');
+
+    const scene = new THREE.Scene();
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    /* Resolution is the hero's whole quality budget, and the right number depends on the machine.
+       Rather than pick one that is soft everywhere so the slowest device survives, the hero starts
+       at full device resolution and walks DOWN this ladder if it cannot hold ~45 fps. Measured,
+       not assumed: the office PC (Intel HD 530) settles near the bottom, anything newer stays at
+       the top. The inspectable pages are not on the ladder — they render sharp and that is that. */
+    const QUALITY = [Math.min(window.devicePixelRatio, 2),
+                     Math.min(window.devicePixelRatio, 1.5),
+                     1, 0.75, 0.55];
+    let qualityStep = 0;
+    renderer.setPixelRatio(HERO ? QUALITY[0] : Math.min(window.devicePixelRatio, 2));
+    stage.appendChild(renderer.domElement);
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 200);
+    const controls = new OrbitControls(camera, renderer.domElement);
+
+    /* ── The cloth: subdivided plane + alpha silhouette of the real outline ── */
+    const alpha = document.createElement('canvas');
+    alpha.width = 2048;
+    alpha.height = Math.min(8192, Math.round(2048 * clothH / clothW));
+    const ctx = alpha.getContext('2d');
+    // Canvas y grows down, scene y grows up — the ONE flip in this file, into texture space.
+    const toAlpha = ([x, y]) => [(x - box.x0) / clothW * alpha.width,
+                                 (box.y1 - y) / clothH * alpha.height];
+
+    /* Painted from whatever rings the cloth currently IS, rather than once at build time: the cut
+       repaints this every frame, and a silhouette drawn once could only ever show one shape. */
+    const alphaMap = new THREE.CanvasTexture(alpha);
+    function paintSilhouette(rings) {
+        fillSilhouette(ctx, rings, box, alpha);
+        if (tunnel) {
+            // The tunnel strips leave the flat cloth: they wrap the frame as sleeves, built below.
+            ctx.fillStyle = '#000';
+            if (tunnel.w) ctx.fillRect(0, 0, tunnel.w / clothW * alpha.width, alpha.height);
+            ctx.fillRect(0, 0, alpha.width, tunnel.h / clothH * alpha.height);
+        }
+        alphaMap.needsUpdate = true;
+    }
+    paintSilhouette([cutSource || fabric]);
+
+    /* The reinforcing seam (shop rule, 2026-08-27): 30 mm along the FREE edges is folded in half
+       and sewn to a 15 mm double-fabric hem. Double fabric reads as a slightly darker, denser
+       band, so the seam is an ambient-occlusion stroke along the non-sleeve boundary — the
+       complement of the Pareto frontier the mast follows. A stroke centred on the cut edge is
+       30 mm wide, so exactly the inner 15 mm survives the alpha cut: the seam's true width. */
+    const hem = document.createElement('canvas');
+    hem.width = alpha.width;
+    hem.height = alpha.height;
+    const hemCtx = hem.getContext('2d');
+    hemCtx.fillStyle = '#fff';
+    hemCtx.fillRect(0, 0, hem.width, hem.height);
+    const sleevePoint = fabric.map(([x, y]) =>
+        construction === 'top'
+            // Hung flag: only the top edge is the sleeve — the hem runs left, right and bottom.
+            ? y > box.y1 - 1e-4
+            : !fabric.some(([ox, oy]) => ox < x - SLEEVE_EDGE_TOLERANCE && oy > y + 1e-6));
+    hemCtx.strokeStyle = '#b6b6b6';
+    hemCtx.lineWidth = 30 * S / clothW * hem.width;
+    hemCtx.lineCap = 'round';
+    hemCtx.beginPath();
+    for (let i = 0; i < fabric.length - 1; i++) {
+        // Only a segment lying FULLY on the sleeve edge is the sleeve — 'either endpoint'
+        // skipped both vertical hems of a 4-corner rectangle, because each touches a top corner
+        // (the hem physically runs right up to the sleeve seam anyway).
+        if (sleevePoint[i] && sleevePoint[i + 1]) continue;
+        const [ax, ay] = fabric[i], [bx, by] = fabric[i + 1];
+        hemCtx.moveTo((ax - box.x0) / clothW * hem.width, (box.y1 - ay) / clothH * hem.height);
+        hemCtx.lineTo((bx - box.x0) / clothW * hem.width, (box.y1 - by) / clothH * hem.height);
+    }
+    hemCtx.stroke();
+    const hemMap = new THREE.CanvasTexture(hem);
+
+    const SEG_ACROSS = HERO ? 16 : 48;
+    const SEG_X = SEG_ACROSS,
+          SEG_Y = Math.min(HERO ? 54 : 160, Math.round(SEG_ACROSS * clothH / clothW));
+    const geometry = new THREE.PlaneGeometry(clothW, clothH, SEG_X, SEG_Y);
+    geometry.translate(box.x0 + clothW / 2, box.y0 + clothH / 2, 0);
+    // aoMap reads the second UV channel; the plane only ships the first, and they are the same.
+    geometry.setAttribute('uv1', geometry.attributes.uv);
+    /* ── The fabric, close up ──
+       Vento flags are 117 g flag polyester. Three things make that read as CLOTH instead of a
+       textured plane, and none needs an asset file (the LAN has no internet):
+       - a procedural WEAVE bump: threads drawn once on a tiny canvas, repeated at the real pitch
+         (~0.4 mm a thread), so zooming in meets fibres instead of blur;
+       - SHEEN (MeshPhysicalMaterial): polyester's soft grazing-angle glow, which flat roughness
+         cannot fake;
+       - the show-through: the BACK renders the mirrored front DIMMED, like light through thin
+         fabric — that is what „przebicie lustrzane" looks like, and it is now shown, not merely
+         named in the corner note. */
+    /* Two octaves, because the two matter at different distances: the thread grid carries the
+       extreme close-up, and the SLUBS — irregular streaks a few millimetres wide — are what reads
+       as fabric from half a metre, where a 0.4 mm thread is under a pixel and mip-averages away.
+       A deterministic LCG instead of Math.random, so the cloth looks the same on every visit. */
+    const weave = document.createElement('canvas');
+    weave.width = weave.height = 256;
+    const wctx = weave.getContext('2d');
+    wctx.fillStyle = '#8c8c8c';
+    wctx.fillRect(0, 0, 256, 256);
+    /* Warp-knit 2-bar (Ikonos ST-110 datasheet), not a square weave: the visible structure is
+       VERTICAL wales with much fainter horizontal courses — a knit reads as fine striping. */
+    for (let i = 0; i < 256; i += 4) {
+        wctx.fillStyle = (i / 4) % 2 ? '#5c5c5c' : '#b2b2b2';
+        wctx.fillRect(i, 0, 2, 256);
+    }
+    for (let i = 0; i < 256; i += 4) {
+        wctx.fillStyle = (i / 4) % 2 ? 'rgba(160,160,160,0.35)' : 'rgba(110,110,110,0.35)';
+        wctx.fillRect(0, i, 256, 1);
+    }
+    let seed = 1275;
+    const rand = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+    for (let i = 0; i < 90; i++) {
+        const along = rand() > 0.5;
+        const grey = 120 + Math.floor(rand() * 40);
+        wctx.fillStyle = `rgba(${grey},${grey},${grey},0.34)`;
+        const at = rand() * 256, size = 8 + rand() * 40;
+        wctx.fillRect(along ? 0 : at, along ? at : 0,
+                      along ? 256 : 2 + rand() * 3, along ? 2 + rand() * 3 : 256);
+        void size;
+    }
+    const weaveMap = new THREE.CanvasTexture(weave);
+    weaveMap.wrapS = weaveMap.wrapT = THREE.RepeatWrapping;
+    // 256 px of canvas = 64 threads; at 0.4 mm a thread one tile spans 25.6 mm of cloth, which is
+    // 0.256 SCENE units at 1:100 (an earlier version dropped a zero and the threads averaged into
+    // invisibility at a tenth of a pixel each).
+    weaveMap.repeat.set(clothW / 0.256, clothH / 0.256);
+    weaveMap.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+    /* The hero runs on whatever the customer has, and the office PC is an Intel HD 530: the
+       full fabric shader gave it 9 fps over a 1265x400 canvas. Sheen roughly doubles the lighting
+       cost, and the weave's bump and roughness maps buy nothing at hero size, where a thread is
+       far under a pixel. The close-up page keeps all of it — that is where the fabric is the
+       subject (measured 2026-08-31). */
+    const clothMaterial = new THREE.MeshPhysicalMaterial({
+        color: 0xf4f4f6, roughness: 0.72, metalness: 0.0,
+        sheen: 0.5, sheenRoughness: 0.55, sheenColor: new THREE.Color(0xffffff),
+        bumpMap: weaveMap, bumpScale: 5.0,
+        // The same canvas modulates roughness: slubs catch the sheen differently, which is most of
+        // what the eye calls "cloth" at arm's length.
+        roughnessMap: weaveMap,
+        alphaMap, transparent: true, alphaTest: 0.5,
+        // The reinforcing hem: double fabric along the free edges, as painted occlusion.
+        aoMap: hemMap, aoMapIntensity: 0.85,
+        side: THREE.DoubleSide,
+    });
+    if (data.sides !== 2) {
+        // The mirrored show-through: the back face is the front's image seen THROUGH the fabric,
+        // so it comes out dimmer and slightly flattened. gl_FrontFacing is the cheapest honest way
+        // to say that — one material, no second mesh to drift.
+        clothMaterial.onBeforeCompile = (shader) => {
+            shader.fragmentShader = shader.fragmentShader.replace(
+                '#include <dithering_fragment>',
+                `#include <dithering_fragment>
+                 // 0.88, not darker: the ST-110 datasheet sells the "excellent double
+                 // penetration effect" — dye-sub soaks the knit through, so the back is nearly
+                 // as saturated as the front. The mirror is the tell, not heavy dimming.
+                 if (!gl_FrontFacing) { gl_FragColor.rgb = mix(vec3(dot(gl_FragColor.rgb,
+                     vec3(0.299, 0.587, 0.114))), gl_FragColor.rgb, 0.88) * 0.88; }`);
+        };
+    }
+    const cloth = new THREE.Mesh(geometry, clothMaterial);
+    scene.add(cloth);
+
+    /* The artwork, when the shop configured a demo one (or, later, when the customer uploaded).
+       The page it was laid out on IS this template's page, so the plane's own UVs place it — the
+       fabric box is a sub-rectangle of that page, so the UVs are offset and scaled to match, and
+       nothing is stretched. A missing texture leaves bare cloth; it is decoration, not a verdict. */
+    /* The customer's artwork OUTRANKS the demo. Both load asynchronously, so without a rank the
+       slower one wins the material — and the demo, fetched over HTTP, reliably finishes AFTER the
+       postMessage's data URI, dressing the customer's flag in somebody else's job. */
+    /* The tunnel sleeves (rigid frames only), filled in by the mast block; each knows which
+       strip of the PAGE wraps around it, in scene units — wearArtwork divides by the page. */
+    const tunnelSleeves = [];
+    let artworkRank = 0;
+    function wearArtwork(url, rank = 0) {
+        if (!data.page_mm || rank < artworkRank) return;
+        artworkRank = rank;
+        const [pageW, pageH] = data.page_mm.map(v => v * S);
+        new THREE.TextureLoader().load(url, texture => {
+            if (rank < artworkRank) return;         // something more authoritative landed meanwhile
+            texture.colorSpace = THREE.SRGBColorSpace;
+            // Anisotropy is what keeps the print readable at an angle — without it the mipmap
+            // picked for an oblique surface is the blurry one, whatever the texture's resolution.
+            texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+            // The plane spans the FABRIC box; the artwork spans the PAGE. Map one onto the other.
+            texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+            texture.repeat.set(clothW / pageW, clothH / pageH);
+            texture.offset.set(box.x0 / pageW, box.y0 / pageH);
+            clothMaterial.map = texture;
+            clothMaterial.color.set(0xffffff);      // stop tinting the artwork with the cloth grey
+            clothMaterial.needsUpdate = true;
+            // The sleeves wear THEIR strip of the same page, wrapped around the
+            // circumference. A page-mapped sleeve (the winder's) carries page fractions in its
+            // own UVs, so its texture stays untransformed.
+            for (const sleeve of tunnelSleeves) {
+                const wrap = texture.clone();
+                if (sleeve.page) {
+                    wrap.wrapS = wrap.wrapT = THREE.ClampToEdgeWrapping;
+                    wrap.repeat.set(1, 1);
+                    wrap.offset.set(0, 0);
+                } else {
+                    wrap.wrapS = wrap.wrapT = THREE.RepeatWrapping;
+                    wrap.repeat.set(sleeve.w / pageW, sleeve.h / pageH);
+                    wrap.offset.set(sleeve.x / pageW, sleeve.y / pageH);
+                }
+                wrap.needsUpdate = true;
+                sleeve.mesh.material.map = wrap;
+                sleeve.mesh.material.color.set(0xffffff);
+                sleeve.mesh.material.needsUpdate = true;
+            }
+        }, undefined, () => { /* no artwork — bare cloth is the correct fallback */ });
+    }
+    wearArtwork('{{ base }}/api/demo-artwork.jpg', 0);
+
+    /* The check page hands over the CUSTOMER's raster and the findings' regions. Same origin only:
+       the message carries a data URI and rectangles, and nothing else is trusted. Regions join the
+       guides list, so they ride the wind like every other line on the cloth. */
+    const LEVEL_COLOURS = { red: 0xd21f3c, amber: 0xc77700 };
+    window.addEventListener('message', (event) => {
+        if (event.origin !== window.location.origin || !event.data) return;
+        if (typeof event.data.artwork === 'string'
+                && event.data.artwork.startsWith('data:image/')) {
+            wearArtwork(event.data.artwork, 1);
+        }
+        if (typeof event.data.artworkBack === 'string'
+                && event.data.artworkBack.startsWith('data:image/')) {
+            /* Two files = a REAL dwustronna: the back is its own print, not show-through. A second
+               mesh with a BackSide material replaces the mirror: the texture flips in X so it reads
+               correctly when viewed from behind (two prints sewn back to back both read forward),
+               and the front material stops rendering the back face at all. */
+            clothMaterial.side = THREE.FrontSide;
+            clothMaterial.onBeforeCompile = () => {};
+            clothMaterial.needsUpdate = true;
+            const backMaterial = clothMaterial.clone();
+            backMaterial.side = THREE.BackSide;
+            backMaterial.onBeforeCompile = () => {};
+            new THREE.TextureLoader().load(event.data.artworkBack, (texture) => {
+                texture.colorSpace = THREE.SRGBColorSpace;
+                texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+                texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+                const [pageW, pageH] = data.page_mm.map(v => v * S);
+                texture.repeat.set(-clothW / pageW, clothH / pageH);
+                texture.offset.set((box.x0 + clothW) / pageW, box.y0 / pageH);
+                backMaterial.map = texture;
+                backMaterial.color.set(0xffffff);
+                backMaterial.needsUpdate = true;
+                group.add(new THREE.Mesh(geometry, backMaterial));
+            });
+            const note = document.getElementById('sideNote');
+            if (note) note.textContent = 'Flaga dwustronna — tył ma własną grafikę (nie lustro).';
+        }
+        for (const region of (event.data.regions || [])) {
+            const [x, y, w, h] = (region.rect_mm || []).map(Number);
+            if (!(w > 0 && h > 0)) continue;
+            // Regions arrive in page mm, top-left frame (the measurement frame); the scene is the
+            // PDF frame, y up — one flip, here.
+            const pageH_mm = data.page_mm[1];
+            const y0 = (pageH_mm - y - h) * S, y1 = (pageH_mm - y) * S;
+            const x0 = x * S, x1 = (x + w) * S;
+            const base = [new THREE.Vector3(x0, y0, 0), new THREE.Vector3(x1, y0, 0),
+                          new THREE.Vector3(x1, y1, 0), new THREE.Vector3(x0, y1, 0),
+                          new THREE.Vector3(x0, y0, 0)];
+            const line = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(base),
+                new THREE.LineBasicMaterial({
+                    color: LEVEL_COLOURS[region.level] || LEVEL_COLOURS.amber, linewidth: 2 }));
+            guides.push({ line, base });
+            group.add(line);
+        }
+        if ((event.data.regions || []).length) calmDown();   // re-stamp z offsets onto new lines
+    });
+
+    // Guide lines: separate objects so they stay crisp, but displaced by the SAME wind function
+    // each frame — lines floating off waving cloth would claim geometry the fabric does not have.
+    const guides = [];
+    // Only lines that lie ON the fabric. The hem cut sits ~90 mm outside the corpus, and after the
+    // fold it physically becomes the sleeve edge — drawing it flat would float a magenta ring in
+    // mid-air beside the flag. The PDF (one click away) still shows every line.
+    const onFabric = points => points.every(([x, y]) =>
+        x * S >= box.x0 - 0.06 && x * S <= box.x1 + 0.06 &&
+        y * S >= box.y0 - 0.06 && y * S <= box.y1 + 0.06);
+    for (const [points, colour] of [...data.safe.map(p => [p, 0x2f9e52]),
+                                    ...rings.map(r => [r.points, 0xd81a73])].filter(
+                                        ([points]) => onFabric(points))) {
+        const base = points.map(([x, y]) => new THREE.Vector3(x * S, y * S, 0));
+        const line = new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints(base),
+            new THREE.LineBasicMaterial({ color: colour }));
+        guides.push({ line, base });
+        scene.add(line);
+    }
+
+    /* The folded hem, as GEOMETRY: the sewn strip folded onto the BACK of the flag — a 15 mm
+       ribbon 2 mm behind the cloth along every hem edge (the non-sleeve boundary), wearing the
+       artwork like the sleeves do. The earlier paint-only fold (AO + a bump) vanished exactly
+       where the real fold lives: on the shadowed back. Each ribbon rides the wind with the cloth
+       it is sewn to. */
+    const hemFolds = [];
+    {
+        const FOLD = 15 * S;
+        const pageWs2 = data.page_mm[0] * S, pageHs2 = data.page_mm[1] * S;
+        const inwardOf = ([ax, ay], [bx, by]) => {
+            let nx = -(by - ay), ny = bx - ax;
+            const len = Math.hypot(nx, ny) || 1;
+            nx /= len; ny /= len;
+            const toCentre = ((box.x0 + box.x1) / 2 - (ax + bx) / 2) * nx
+                           + ((box.y0 + box.y1) / 2 - (ay + by) / 2) * ny;
+            return toCentre >= 0 ? [nx, ny] : [-nx, -ny];
+        };
+        const buildRibbon = (indices) => {
+            const pts = indices.map(i => fabric[i]);
+            const positions = [], uvs = [], rest = [], tri = [];
+            for (let k = 0; k < pts.length; k++) {
+                const [nx, ny] = inwardOf(pts[Math.max(k - 1, 0)],
+                                          pts[Math.min(k + 1, pts.length - 1)]);
+                const [x, y] = pts[k];
+                for (const depth of [0, FOLD]) {
+                    const px = x + nx * depth, py = y + ny * depth;
+                    positions.push(px, py, 0);
+                    uvs.push(px / pageWs2, py / pageHs2);
+                    rest.push([px, py]);
+                }
+            }
+            for (let k = 0; k < pts.length - 1; k++) {
+                const a = k * 2;
+                tri.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+            }
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+            geometry.setIndex(tri);
+            geometry.computeVertexNormals();
+            const mesh = new THREE.Mesh(geometry, new THREE.MeshPhysicalMaterial({
+                color: 0xeceff1, roughness: 0.74, metalness: 0.0,
+                sheen: 0.5, sheenRoughness: 0.55, sheenColor: new THREE.Color(0xffffff),
+                side: THREE.DoubleSide,
+            }));
+            scene.add(mesh);
+            // Dressed by wearArtwork like a page-mapped sleeve: the fold shows the print.
+            tunnelSleeves.push({ mesh, page: true });
+            hemFolds.push({ positions: geometry.attributes.position, rest,
+                            geometry, mesh });
+        };
+        let run = [];
+        for (let i = 0; i < fabric.length - 1; i++) {
+            if (sleevePoint[i] && sleevePoint[i + 1]) {
+                if (run.length >= 2) buildRibbon(run);
+                run = [];
+                continue;
+            }
+            if (!run.length) run.push(i);
+            run.push(i + 1);
+        }
+        if (run.length >= 2) buildRibbon(run);
+    }
+
+    /* The mast pieces the wind bends, filled while the mast is built. Declared BEFORE that block:
+       a const declared lower in the same scope is a TDZ ReferenceError at the push — the exact
+       trap that once killed the whole admin panel. */
+    const mastPieces = [];
+    const mastCollars = [];
+    let mastArcOf = null;
+
+    /* ── The mast: bent through the sleeve, not stuck through it ──
+       The real arm is fiberglass and FOLLOWS the sewn tunnel, so its path is the fabric's own
+       upper-left boundary — the Pareto frontier of the outline (no other point has both smaller x
+       and larger y). That hugs the straight left edge, turns with the shoulder, and ends at the
+       curve's tip, for every Play and Drop shape alike, with no per-shape code. Below the fabric
+       the pole drops straight to the ground plate (the shop's price list: the flag's top is flush with the mast
+       top and the leftover is bare pole).
+
+       Telescoping like the real thing (sklepzreklamami tech sheet, Standard S: 4 elements,
+       72 / 72.2 / 70 / 90.5 cm, Ø16.5 mm, aluminium + fiberglass): four sections of one curve with
+       stepped radii — the visible joints ARE how the product looks. */
+    const mastH = (data.mast_mm || 0) * S;
+    const group = new THREE.Group();
+    group.add(cloth);
+    guides.forEach(g => group.add(g.line));
+    hemFolds.forEach(f => group.add(f.mesh));
+    if (mastH > 0) {
+        const frontier = fabric
+            .filter(([x, y]) => !fabric.some(([ox, oy]) => ox < x - SLEEVE_EDGE_TOLERANCE && oy > y + 1e-6))
+            .sort((a, b) => a[1] - b[1]);
+        const groundY = box.y1 - mastH;
+        /* Barely metallic on purpose. A metal in three.js is lit by what it REFLECTS, and this
+           scene has no environment map to reflect, so metalness 0.7 rendered the mast as a black
+           spike down the flag rather than a pole (shop rule, spotted it on a phone, 2026-08-31).
+           Low metalness lets the hemisphere and key light land on it diffusely, which is what
+           brushed aluminium looks like anyway. An env map would be the richer fix and costs a
+           cube render the hero cannot afford. */
+        const steel = new THREE.MeshStandardMaterial({ color: 0xb4b9c1, roughness: 0.42,
+                                                       metalness: 0.12 });
+        // The base is a SQUARE plate sized per flag size (the price list gives its diagonal).
+        const baseSide = ((data.base || {}).side_mm || 300) * S;
+        const plate = new THREE.Mesh(new THREE.BoxGeometry(baseSide, 30 * S, baseSide),
+            new THREE.MeshStandardMaterial({ color: 0x2c2f36, roughness: 0.8 }));
+        plate.position.set(frontier[0][0], groundY + 15 * S, 0);
+        group.add(plate);
+
+        if (construction === 'top') {
+            /* The hung flag: a vertical mast beside the left edge, a rigid crossarm through the
+               top tunnel, cloth hanging free below it. The mast height is ILLUSTRATIVE (a real
+               stadium mast is many times the flag) — the point is the fold and the hang, so the
+               note says none of the Vento the shop's price list numbers. Nothing joins mastPieces: the frame is
+               rigid, and the wind model reads construction directly. */
+            // Folded in half, like every tunnel here: the strip becomes a loop of HALF its
+            // width, and its seam lands exactly on the flat cloth's top edge — the gap in the
+            // owner's screenshot was a full-width sleeve floating above a fully clipped strip.
+            const fold = tunnel.h / 2;
+            const poleX = box.x0 - 60 * S;
+            const poleR = 20 * S, armR = 15 * S;
+            const tail = Math.max(fold - armR, 25 * S);
+            const armY = (box.y1 - tunnel.h) + tail;
+            const topGroundY = box.y0 - 500 * S;
+            plate.position.set(poleX, topGroundY + 15 * S, 0);
+            const pole = new THREE.Mesh(
+                new THREE.CylinderGeometry(poleR, poleR, (box.y1 + 150 * S) - topGroundY, 16),
+                steel);
+            pole.position.set(poleX, (topGroundY + box.y1 + 150 * S) / 2, 0);
+            group.add(pole);
+            const cap = new THREE.Mesh(new THREE.SphereGeometry(poleR * 1.3, 14, 12), steel);
+            cap.position.set(poleX, box.y1 + 150 * S, 0);
+            group.add(cap);
+            const arm = new THREE.Mesh(
+                new THREE.CylinderGeometry(armR, armR, box.x1 - poleX + 30 * S, 12),
+                new THREE.MeshStandardMaterial({ color: 0xe8e8ea, roughness: 0.4 }));
+            arm.rotation.z = Math.PI / 2;
+            arm.position.set((poleX + box.x1 + 30 * S) / 2, armY, 0);
+            group.add(arm);
+
+            // The top tunnel as the sleeve: slack fabric hanging off the arm, the flag's weight
+            // pulling it down — seam at the bottom of the strip, where it meets the flat cloth.
+            const sleeveCloth = new THREE.MeshPhysicalMaterial({
+                color: 0xf4f4f6, roughness: 0.72, metalness: 0.0,
+                sheen: 0.5, sheenRoughness: 0.55, sheenColor: new THREE.Color(0xffffff),
+                side: THREE.DoubleSide,
+            });
+            const sweep = sweepSleeve(
+                new THREE.LineCurve3(new THREE.Vector3(box.x0, armY, 0),
+                                     new THREE.Vector3(box.x1, armY, 0)),
+                { radiusAt: () => armR + 3 * S,
+                  tailAt: () => tail,
+                  tailDirAt: () => new THREE.Vector3(0, -1, 0),
+                  uvAt: (t, fraction) => [t, fraction] });
+            const topSleeve = new THREE.Mesh(sweep.geometry, sleeveCloth);
+            group.add(topSleeve);
+            tunnelSleeves.push({ mesh: topSleeve,
+                                 w: clothW, h: tunnel.h, x: box.x0, y: box.y1 - tunnel.h });
+
+            document.getElementById('mastNote').textContent =
+                'maszt poglądowy — flaga wieszana za tunel górny (poprzeczka w tunelu)';
+        } else if (data.rigid) {
+            /* Vento REGULAR: rigid hardware (from a photo — dark aluminium pole, rigid white arm on
+               an elbow), tunnel sewn as a FULL sleeve, not folded. The pole stands at the corpus
+               left edge and the arm at the corpus top edge — exactly where the tunnel strips
+               (erased from the flat cloth) wrap around them — and the elbow sits in the notch the
+               template cuts for it. Nothing here joins mastPieces and mastArcOf stays null: this
+               frame does not move, and the wind model knows it. */
+            const poleX = box.x0 + tunnel.w, armY = box.y1 - tunnel.h;
+            const poleR = 14 * S, armR = 5 * S;
+            plate.position.x = poleX;
+            const pole = new THREE.Mesh(
+                new THREE.CylinderGeometry(poleR, poleR, armY - groundY, 16), steel);
+            pole.position.set(poleX, (groundY + armY) / 2, 0);
+            group.add(pole);
+            const arm = new THREE.Mesh(
+                new THREE.CylinderGeometry(armR, armR, box.x1 - poleX, 12),
+                new THREE.MeshStandardMaterial({ color: 0xe8e8ea, roughness: 0.4 }));
+            arm.rotation.z = Math.PI / 2;
+            arm.position.set((poleX + box.x1) / 2, armY, 0);
+            group.add(arm);
+            // The elbow fitting joining pole and arm, inside the notch cut for it.
+            const elbow = new THREE.Mesh(
+                new THREE.SphereGeometry(poleR * 1.25, 14, 12),
+                new THREE.MeshStandardMaterial({ color: 0x2c2f36, roughness: 0.55 }));
+            elbow.position.set(poleX, armY, 0);
+            group.add(elbow);
+
+            /* The tunnels: fabric PANCAKES stretched open by the frame — the teardrop
+               profile, seam pointing at the corpus (pole sleeve) and hanging down with the
+               cloth's weight (arm sleeve). Each remembers which strip of the page wraps it, so
+               wearArtwork can dress it. */
+            const sleeveCloth = () => new THREE.MeshPhysicalMaterial({
+                color: 0xf4f4f6, roughness: 0.72, metalness: 0.0,
+                sheen: 0.5, sheenRoughness: 0.55, sheenColor: new THREE.Color(0xffffff),
+                side: THREE.DoubleSide,
+            });
+            const gap = 25 * S;
+            const poleSleeveH = armY - gap - box.y0;
+            const poleSweep = sweepSleeve(
+                new THREE.LineCurve3(new THREE.Vector3(poleX, box.y0, 0),
+                                     new THREE.Vector3(poleX, box.y0 + poleSleeveH, 0)),
+                { radiusAt: () => poleR + 3 * S, tailAt: () => 62 * S,
+                  tailDirAt: () => new THREE.Vector3(1, 0, 0),
+                  uvAt: (t, fraction) => [fraction, t] });
+            const poleSleeve = new THREE.Mesh(poleSweep.geometry, sleeveCloth());
+            group.add(poleSleeve);
+            tunnelSleeves.push({ mesh: poleSleeve,
+                                 w: tunnel.w, h: poleSleeveH, x: box.x0, y: box.y0 });
+
+            const armSleeveL = box.x1 - (poleX + gap);
+            const armSweep = sweepSleeve(
+                new THREE.LineCurve3(new THREE.Vector3(poleX + gap, armY, 0),
+                                     new THREE.Vector3(box.x1, armY, 0)),
+                { radiusAt: () => armR + 3 * S, tailAt: () => 48 * S,
+                  // Gravity: the slack of the top sleeve hangs DOWN off the rigid arm.
+                  tailDirAt: () => new THREE.Vector3(0, -1, 0),
+                  uvAt: (t, fraction) => [t, fraction] });
+            const armSleeve = new THREE.Mesh(armSweep.geometry, sleeveCloth());
+            group.add(armSleeve);
+            tunnelSleeves.push({ mesh: armSleeve,
+                                 w: armSleeveL, h: tunnel.h, x: poleX + gap, y: armY });
+
+            document.getElementById('mastNote').textContent =
+                `maszt Vento Regular: ${Math.round(data.mast_mm / 10)} cm, sztywny (alu + ramię)`
+                + (data.base ? ` · podstawa ${(data.base.side_mm / 10).toFixed(1)} cm, `
+                             + `${data.base.weight_kg} kg` : '');
+        } else {
+            // INSIDE the hem: the sleeve wraps the tube, so the path shifts off the edge into the
+            // fabric by most of the tube's radius. The tube bulging through the flat cloth on
+            // both sides is not a glitch — that is what a sewn sleeve looks like from outside.
+            const centre2d = [(box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2];
+            const tucked = frontier.map(([x, y]) => {
+                const dx = centre2d[0] - x, dy = centre2d[1] - y;
+                const len = Math.hypot(dx, dy) || 1;
+                return [x + dx / len * 6 * S, y + dy / len * 6 * S];
+            });
+            const path = [new THREE.Vector3(tucked[0][0], groundY, 0),
+                          ...tucked.map(([x, y]) => new THREE.Vector3(x, y, 0))];
+            const curve = new THREE.CatmullRomCurve3(path, false, 'centripetal', 0.2);
+
+            // Section shares of the real mast, base to tip; radii step down from Ø16.5 mm.
+            // In millimetres THROUGH S like every other dimension — the first version wrote them
+            // mm*0.001 in an mm*0.01 scene and the pole rendered ten times too thin.
+            const SECTIONS = [[0.00, 0.245, 8.25], [0.245, 0.49, 7.2],
+                              [0.49, 0.73, 6.2], [0.73, 1.0, 5.0]];
+            for (const [from, to, radiusMm] of SECTIONS) {
+                const radius = radiusMm * S;
+                const piece = new THREE.TubeGeometry(
+                    new SubCurve(curve, from, to), 36, radius, 12, false);
+                group.add(new THREE.Mesh(piece, steel));
+                // The wind bends this piece: every ring of the tube knows its arc position, so
+                // the sway that moves the cloth's sleeve moves the SAME arc of the tube — a pole
+                // standing still under waving cloth was the exact complaint.
+                const rings = 36 + 1, radial = 12 + 1;
+                const sPerVertex = new Float32Array(piece.attributes.position.count);
+                for (let v = 0; v < sPerVertex.length; v++) {
+                    sPerVertex[v] = from + (Math.floor(v / radial) / (rings - 1)) * (to - from);
+                }
+                mastPieces.push({ positions: piece.attributes.position,
+                                  rest: piece.attributes.position.array.slice(),
+                                  s: sPerVertex, geometry: piece });
+                if (from > 0) {
+                    // The joint collar: the fatter section's mouth the next one telescopes in.
+                    const at = curve.getPointAt(from);
+                    const collar = new THREE.Mesh(
+                        new THREE.SphereGeometry(radius * 1.5, 12, 10), steel);
+                    collar.position.copy(at);
+                    collar.scale.y = 1.6;
+                    group.add(collar);
+                    mastCollars.push({ mesh: collar, s: from });
+                }
+            }
+            /* Where the FABRIC hangs on that arc — by ARC LENGTH, the same measure the tube's own
+               s uses (SubCurve samples getPointAt), so the sleeve and the tube inside it get the
+               SAME sway and move as one thing; "connected" was the exact word. Low points
+               hang off the vertical run at their own height; points near the top hang off the arm
+               above them, so their attachment slides outward with x — blended by the square of
+               the height fraction, because the arm only matters near the top. */
+            const cum = [0];
+            for (let i = 1; i < path.length; i++) {
+                cum.push(cum[i - 1] + path[i].distanceTo(path[i - 1]));
+            }
+            const total = cum[cum.length - 1] || 1;
+            const arcWhere = (value, axis) => {
+                for (let i = 1; i < path.length; i++) {
+                    if (path[i][axis] >= value) {
+                        const lo = path[i - 1][axis], hi = path[i][axis];
+                        const f = hi > lo ? (value - lo) / (hi - lo) : 1;
+                        return cum[i - 1] + f * (cum[i] - cum[i - 1]);
+                    }
+                }
+                return total;
+            };
+            mastArcOf = (x, y) => {
+                const w = Math.pow(Math.min(Math.max((y - box.y0) / clothH, 0), 1), 2);
+                return Math.min(1,
+                    ((1 - w) * arcWhere(y, 'y') + w * arcWhere(x, 'x')) / total);
+            };
+
+            /* The winder's sleeve: the folded tunnel strip as a fabric pancake around the mast,
+               from where the fabric starts to the tip — the pole is INSIDE it, and only the bare
+               run below the flag shows metal. The seam points into the cloth (the tuck
+               direction); the profile follows the mast's taper. Going around the sleeve maps the
+               artwork by real distance outward into the page's hem strip: that is what sewing
+               the printed strip into a loop does, so the awers graphic wraps and meets the
+               mirrored rewers, exactly as sewn. */
+            const sleeveFrom = cum[1] / total;
+            const radiusOn = (s) => (SECTIONS.find(([f, to]) => s <= to) || SECTIONS[3])[2] * S;
+            const pageWs = data.page_mm[0] * S, pageHs = data.page_mm[1] * S;
+            const mastSleeveCurve = new SubCurve(curve, sleeveFrom, 1);
+            const inwardAt = (pos) => new THREE.Vector3(
+                centre2d[0] - pos.x, centre2d[1] - pos.y, 0).normalize();
+            const sweep = sweepSleeve(mastSleeveCurve, {
+                rings: 44,
+                radiusAt: (t) => radiusOn(sleeveFrom + t * (1 - sleeveFrom)) + 3 * S,
+                // The folded strip hugs the mast: both strip edges are sewn into the corpus cut
+                // edge with a ~15 mm seam, so the sleeve reaches just past that seam and NEVER
+                // onto the safe area — the first version's 42 mm tail sat on top of the print
+                // (owner's correction). Path is tucked 6 mm in; 6 + ~15 = the seam line.
+                tailAt: () => 20 * S,
+                tailDirAt: (t, pos) => inwardAt(pos),
+                uvAt: (t, fraction, pos, aroundDist) => {
+                    const out = inwardAt(pos).multiplyScalar(-1);
+                    return [(pos.x + out.x * aroundDist) / pageWs,
+                            (pos.y + out.y * aroundDist) / pageHs];
+                },
+            });
+            const mastSleeve = new THREE.Mesh(sweep.geometry, new THREE.MeshPhysicalMaterial({
+                color: 0xf4f4f6, roughness: 0.72, metalness: 0.0,
+                sheen: 0.5, sheenRoughness: 0.55, sheenColor: new THREE.Color(0xffffff),
+                side: THREE.DoubleSide,
+            }));
+            group.add(mastSleeve);
+            // Dressed with the page itself (uv already IS the page fraction), and bent by the
+            // wind with the tube inside it — same arc measure, same sway.
+            tunnelSleeves.push({ mesh: mastSleeve, page: true });
+            const sleeveS = new Float32Array(sweep.ringOfVertex.length);
+            for (let v = 0; v < sleeveS.length; v++) {
+                sleeveS[v] = sleeveFrom + (sweep.ringOfVertex[v] / 44) * (1 - sleeveFrom);
+            }
+            mastPieces.push({ positions: sweep.geometry.attributes.position,
+                              rest: sweep.geometry.attributes.position.array.slice(),
+                              s: sleeveS, geometry: sweep.geometry });
+            document.getElementById('mastNote').textContent =
+                `maszt Vento Standard: ${Math.round(data.mast_mm / 10)} cm, 4-częściowy, Ø16,5 mm`
+                + (data.base ? ` · podstawa ${(data.base.side_mm / 10).toFixed(1)} cm, `
+                             + `${data.base.weight_kg} kg` : '');
+        }
+    }
+    scene.add(group);
+
+    /* Hemisphere instead of flat ambient — sky above, ground bounce below — plus a rim from
+       behind-left. Flat ambient was why the tube and the cloth read as depthless: every normal got
+       the same light. */
+    scene.add(new THREE.HemisphereLight(0xf4f6ff, 0x3a3c40, 0.95));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.7);
+    sun.position.set(2, 3, 4);
+    scene.add(sun);
+    const rim = new THREE.DirectionalLight(0xdfe8ff, 0.5);
+    rim.position.set(-3, 1.5, -3);
+    scene.add(rim);
+
+    const bounds = new THREE.Box3().setFromObject(group);
+    const size = bounds.getSize(new THREE.Vector3());
+    const centre = bounds.getCenter(new THREE.Vector3());
+    controls.target.copy(centre);
+    function fitCamera() {
+        const aspect = Math.max(stage.clientWidth / Math.max(stage.clientHeight, 1), 0.2);
+        const half = Math.max(size.y, size.x / aspect) / 2;
+        const distance = half / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.2;
+        camera.position.set(centre.x + distance * 0.25, centre.y + distance * 0.06,
+                            centre.z + distance);
+        camera.lookAt(centre);
+    }
+
+    document.getElementById('sideNote').textContent = data.sides === 2
+        ? 'Flaga dwustronna — tył ma własną grafikę (nie lustro).'
+        : 'Flaga jednostronna — tył to lustrzane przebicie przodu.';
+
+    /* ── Wind ──
+       The cloth hangs from the mast side and the top arm, so displacement grows with distance from
+       BOTH anchors: waves travel outward and downward, and the free bottom-outer corner moves the
+       most — which is what a winder does. Amplitude and wavelength are proportioned to the flag,
+       not absolute, so an XL billows like an XL. */
+    const windBox = document.getElementById('wind');
+    /* The hero: wind on, slowly turning, no controls. Respects prefers-reduced-motion — a flag
+       spinning behind text is exactly what that setting exists to stop. */
+    const bare = document.body.classList.contains('bare');
+    const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (bare) {
+        windBox.checked = !calm;
+        controls.enabled = false;
+        camera.position.x = centre.x + (camera.position.z - centre.z) * 0.35;
+        camera.lookAt(centre);
+    }
+
+    /* ── The hero tour ──
+       A hero that only turns on the spot shows the flag's silhouette and nothing else. What is
+       worth looking at is the CORPUS: the printed cloth, its weave, the sleeve seam. So the camera
+       walks a loop — establish the whole product, come in close across the fabric, pull back out —
+       and the flag keeps turning underneath it.
+
+       `aim` is a fraction of the product's height (0 at the plate, 1 at the mast tip), `dist` a
+       multiple of the framing distance fitCamera worked out, `yaw` degrees around the flag. Keys
+       are held in one table because the timing is the design; scattering it through the loop is
+       how a tour becomes impossible to retune. */
+    const TOUR = [
+        { at: 0.00, dist: 1.00, yaw: -20, aim: 0.50 },   // the whole product, slightly off-axis
+        { at: 0.18, dist: 0.94, yaw:  16, aim: 0.52 },   // turning, still full height
+        { at: 0.36, dist: 0.34, yaw:  12, aim: 0.74 },   // in on the upper corpus
+        { at: 0.54, dist: 0.28, yaw:  -6, aim: 0.52 },   // down the printed face
+        { at: 0.70, dist: 0.32, yaw: -26, aim: 0.36 },   // past the sleeve, near the foot
+        { at: 0.86, dist: 0.70, yaw: -30, aim: 0.48 },   // easing back out
+        { at: 1.00, dist: 1.00, yaw: -20, aim: 0.50 },   // home, so the loop does not jump
+    ];
+    const TOUR_SECONDS = 17;
+
+    function smooth(t) { return t * t * (3 - 2 * t); }
+
+    function tourAt(seconds) {
+        const t = (seconds % TOUR_SECONDS) / TOUR_SECONDS;
+        let i = 0;
+        while (i < TOUR.length - 2 && TOUR[i + 1].at <= t) i++;
+        const a = TOUR[i], b = TOUR[i + 1];
+        const span = Math.max(b.at - a.at, 1e-6);
+        const k = smooth(Math.min(Math.max((t - a.at) / span, 0), 1));
+        return { dist: a.dist + (b.dist - a.dist) * k,
+                 yaw: a.yaw + (b.yaw - a.yaw) * k,
+                 aim: a.aim + (b.aim - a.aim) * k };
+    }
+
+    /* The distance that framed the whole product; every tour step is a multiple of it, so the
+       choreography holds whatever size flag this template is. */
+    function framingDistance() {
+        const aspect = Math.max(stage.clientWidth / Math.max(stage.clientHeight, 1), 0.2);
+        const half = Math.max(size.y, size.x / aspect) / 2;
+        return half / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.2;
+    }
+
+    /* How close the tour may come, given the shape of the window it is playing in. A close-up that
+       frames a hand's width of fabric is a nice detail on a wide strip and a wall of blue on a
+       phone, where the same distance shows a fraction of the flag (shop rule, 2026-08-31). The
+       floor rises as the stage narrows. */
+    function closestAllowed() {
+        const width = stage.clientWidth || 1;
+        if (width < 420) return 0.78;
+        if (width < 620) return 0.62;
+        if (width < 900) return 0.44;
+        return 0.28;
+    }
+
+    function driveTour(seconds) {
+        const step = tourAt(seconds);
+        step.dist = Math.max(step.dist, closestAllowed());
+        const target = new THREE.Vector3(centre.x, centre.y + (step.aim - 0.5) * size.y, centre.z);
+        const radians = THREE.MathUtils.degToRad(step.yaw);
+        const away = framingDistance() * step.dist;
+        camera.position.set(target.x + Math.sin(radians) * away,
+                            // Rising slightly as the camera pulls back, so a wide shot looks down
+                            // the flag instead of up at it.
+                            target.y + away * 0.06,
+                            target.z + Math.cos(radians) * away);
+        camera.lookAt(target);
+    }
+    /* How far the guide lines float above the cloth. It has to clear the reinforcing hem, which
+       stands 2 mm proud: at the old 0.4 mm the red cut line was sunk INSIDE the fabric along every
+       hem edge and surfaced through it in patches, which is the "clipping" a hero close-up made
+       obvious (shop rule, 2026-08-31). 2.4 mm on a three-metre flag is invisible from any distance
+       that is not a close-up, and at a close-up it reads as a line lying ON the cloth. */
+    const GUIDE_LIFT = 2.4 * S;
+    const positions = geometry.attributes.position;
+    const restXY = [];
+    for (let i = 0; i < positions.count; i++) {
+        restXY.push([positions.getX(i), positions.getY(i)]);
+    }
+    /* The reinforcing hem is sewn DOUBLE — a flat pancake of fabric, not paint. Every cloth
+       vertex inside the hem band (read off the same canvas the AO uses) sits 2 mm proud, so the
+       seam catches light as a real ridge on top of the darker AO. */
+    const hemPixels = hemCtx.getImageData(0, 0, hem.width, hem.height).data;
+    const hemRidge = new Float32Array(positions.count);
+    for (let i = 0; i < positions.count; i++) {
+        const [x, y] = restXY[i];
+        const u = Math.min(hem.width - 1, Math.max(0,
+            Math.round((x - box.x0) / clothW * hem.width)));
+        const v = Math.min(hem.height - 1, Math.max(0,
+            Math.round((box.y1 - y) / clothH * hem.height)));
+        hemRidge[i] = hemPixels[(v * hem.width + u) * 4] < 250 ? 2 * S : 0;
+    }
+    const AMPLITUDE = clothW * 0.10;
+    const WAVE_K = 2 * Math.PI / (clothH * 0.8);
+    // The cantilever: sway grows with the SQUARE of the arc position (a tapering tube bends ever
+    // more the further from the base) and the tip gets a faster second harmonic — the whip.
+    const SWAY = clothH * 0.045;
+
+    function poleSway(s, t) {
+        return SWAY * s * s * (Math.sin(t * 1.15) * 0.8 + Math.sin(t * 2.55 + 1.2) * 0.2 * s);
+    }
+
+    function waveOnly(x, y, t) {
+        /* The cloth's OWN wave grows with distance from its attachment — the sleeve along the left
+           edge and the arm along the top. The envelope reaches EXACTLY zero at the attachment: the
+           sleeve is sewn around the tube, so at that line the cloth's motion IS the tube's motion
+           (poleSway) and nothing else — an extra residual wave there is the disconnect the shop
+           saw. On a RIGID Regular frame there is no sway at all and the cloth breathes only near
+           the free bottom-right corner, furthest from both rigid members. */
+        const fromMast = Math.min(Math.max((x - box.x0) / clothW, 0), 1);
+        const fromArm = Math.min(Math.max((box.y1 - y) / clothH, 0), 1);
+        if (construction === 'top') {
+            /* Hung by the top edge only: the cloth is anchored along the arm and FREE everywhere
+               else, so the wave grows straight down — the bottom edge moves most. */
+            return AMPLITUDE * Math.pow(fromArm, 1.25)
+                * Math.sin(WAVE_K * (x * 0.9 + y) - t * 2.6)
+                * (0.75 + 0.25 * Math.sin(t * 0.7 + y * 0.5));
+        }
+        if (data.rigid) {
+            return AMPLITUDE * 0.6 * Math.pow(fromMast * fromArm, 1.9)
+                * Math.sin(WAVE_K * (x * 0.9 + y) - t * 2.6)
+                * (0.75 + 0.25 * Math.sin(t * 0.7 + y * 0.5));
+        }
+        const fromAttachment = Math.min(fromMast, fromArm);
+        const envelope = Math.pow(Math.min(fromAttachment * 1.6, 1), 1.15);
+        return AMPLITUDE * envelope
+            * Math.sin(WAVE_K * (x * 0.9 + y) - t * 2.6)
+            * (0.75 + 0.25 * Math.sin(t * 0.7 + y * 0.5));
+    }
+
+    function displacement(x, y, t) {
+        const sway = mastArcOf ? poleSway(mastArcOf(x, y), t) : 0;
+        return sway + waveOnly(x, y, t);
+    }
+
+    function withRidge(i, z) {
+        return z + hemRidge[i];
+    }
+
+    function applyWind(t) {
+        for (let i = 0; i < positions.count; i++) {
+            const [x, y] = restXY[i];
+            positions.setZ(i, withRidge(i, displacement(x, y, t)));
+        }
+        positions.needsUpdate = true;
+        geometry.computeVertexNormals();
+        for (const { line, base } of guides) {
+            const attr = line.geometry.attributes.position;
+            for (let i = 0; i < base.length; i++) {
+                attr.setZ(i, displacement(base[i].x, base[i].y, t) + GUIDE_LIFT);
+            }
+            attr.needsUpdate = true;
+        }
+        // The fold is sewn to the cloth: same wind, 2 mm behind it.
+        for (const fold of hemFolds) {
+            for (let i = 0; i < fold.rest.length; i++) {
+                const [x, y] = fold.rest[i];
+                fold.positions.setZ(i, displacement(x, y, t) - 2 * S);
+            }
+            fold.positions.needsUpdate = true;
+        }
+        // The mast rides its own sway — the sleeve and the tube inside it move as one thing.
+        for (const piece of mastPieces) {
+            for (let v = 0; v < piece.s.length; v++) {
+                piece.positions.setZ(v, piece.rest[v * 3 + 2] + poleSway(piece.s[v], t));
+            }
+            piece.positions.needsUpdate = true;
+        }
+        for (const collar of mastCollars) {
+            collar.mesh.position.z = poleSway(collar.s, t);
+        }
+    }
+
+    /* Still air is not a plane: real cloth keeps a gentle bow and a soft fold near the free
+       corner. The same shape the wind displaces, frozen at a whisper — so "calm" has depth and
+       toggling the wind does not snap between two different objects. */
+    function restingBow(x, y) {
+        // Wave only: at rest the POLE is straight, so the cloth's bow must not inherit sway.
+        return waveOnly(x, y, 1.35) * 0.22;
+    }
+
+    function calmDown() {
+        for (let i = 0; i < positions.count; i++) {
+            const [x, y] = restXY[i];
+            positions.setZ(i, withRidge(i, restingBow(x, y)));
+        }
+        positions.needsUpdate = true;
+        geometry.computeVertexNormals();
+        for (const { line, base } of guides) {
+            const attr = line.geometry.attributes.position;
+            for (let i = 0; i < base.length; i++) {
+                attr.setZ(i, restingBow(base[i].x, base[i].y) + GUIDE_LIFT);
+            }
+            attr.needsUpdate = true;
+        }
+        for (const piece of mastPieces) {
+            piece.positions.array.set(piece.rest);
+            piece.positions.needsUpdate = true;
+        }
+        for (const collar of mastCollars) collar.mesh.position.z = 0;
+        for (const fold of hemFolds) {
+            for (let i = 0; i < fold.rest.length; i++) {
+                const [x, y] = fold.rest[i];
+                fold.positions.setZ(i, restingBow(x, y) - 2 * S);
+            }
+            fold.positions.needsUpdate = true;
+        }
+    }
+    calmDown();
+
+    function resize() {
+        const w = stage.clientWidth, h = stage.clientHeight;
+        renderer.setSize(w, h);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', resize);
+    resize();
+    fitCamera();
+
+    windBox.addEventListener('change', () => { if (!windBox.checked) calmDown(); });
+
+    /* The other half of the quality ladder: watch what this machine actually manages and step
+       down until it keeps up. Sampled in blocks rather than per frame, because one slow frame is
+       a hiccup and a slow BLOCK is a slow device. Only ever steps down — a hero that oscillates
+       between sharp and soft is worse than either. */
+    const QUALITY_TARGET_MS = 22;          // ~45 fps
+    const QUALITY_BLOCK = 45;              // frames per verdict
+    let blockFrames = 0, blockStart = performance.now();
+
+    function watchQuality() {
+        if (!HERO || qualityStep >= QUALITY.length - 1) return;
+        blockFrames += 1;
+        if (blockFrames < QUALITY_BLOCK) return;
+        const average = (performance.now() - blockStart) / blockFrames;
+        blockFrames = 0;
+        blockStart = performance.now();
+        if (average <= QUALITY_TARGET_MS) return;
+        qualityStep += 1;
+        renderer.setPixelRatio(QUALITY[qualityStep]);
+        resize();
+        // Bottom of the ladder: resolution alone is not enough, so the fabric shader goes too.
+        // Sheen and the weave bump are the expensive part and the least visible at hero size.
+        if (qualityStep === QUALITY.length - 1) {
+            clothMaterial.sheen = 0;
+            clothMaterial.bumpMap = null;
+            clothMaterial.roughnessMap = null;
+            clothMaterial.needsUpdate = true;
+        }
+    }
+
+    const cutRunner = installCut({ S, fabric: cutFit ? cutFit.ring : fabric, finished: fabric,
+                                   morphs: !!(cutFit && cutFit.morph),
+                                   cutSource, box, clothW, clothH,
+                                   paintSilhouette, clothMaterial, group });
+
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+        if (cutRunner) cutRunner(clock.getElapsedTime());
+        watchQuality();
+        if (windBox.checked) applyWind(clock.getElapsedTime());
+        // The hero drives its own camera; the flag keeps its slow turn so the tour sees a moving
+        // subject rather than a still one. Reduced motion leaves both alone — that setting exists
+        // to stop exactly this.
+        if (bare && !calm) {
+            const seconds = clock.getElapsedTime();
+            group.rotation.y = Math.sin(seconds * 0.16) * 0.5;
+            driveTour(seconds);
+        }
+        controls.update();
+        renderer.render(scene, camera);
+    });
+}
+
+function ringArea(points) {
+    let doubled = 0;
+    for (let i = 0; i < points.length; i++) {
+        const [x1, y1] = points[i];
+        const [x2, y2] = points[(i + 1) % points.length];
+        doubled += x1 * y2 - x2 * y1;
+    }
+    return Math.abs(doubled / 2);
+}
+</script>
+</body>
+</html>

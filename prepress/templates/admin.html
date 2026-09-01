@@ -1,0 +1,1322 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Materiały — panel | prepress-open</title>
+{% include "_theme.html" %}
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink);
+       font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; }
+header b { font-size: 16px; } header a { font-size: 12.5px; }
+main { max-width: 1040px; margin: 0 auto; padding: 20px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+        padding: 16px; margin-bottom: 18px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+     margin: 0 0 12px; }
+label { display: block; font-size: 12px; font-weight: 600; margin: 8px 0 4px; }
+input, select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+                background: var(--surface); color: var(--ink); font: inherit; }
+.grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+button { padding: 9px 14px; border-radius: 8px; border: 1px solid var(--accent-mid);
+         background: var(--accent-mid); color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+button.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+button.danger { background: transparent; color: var(--alert); border-color: var(--line); }
+.acts { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+/* A hairline and a kicker group these as well as a box did, with less furniture on screen. */
+.sec { margin: 0 0 30px; }
+.sec > h2, .sec > summary { border-bottom: 1px solid var(--line); padding-bottom: 7px; }
+.sec > summary { font-size: 13px; text-transform: uppercase; letter-spacing: .05em;
+                 color: var(--muted); cursor: pointer; list-style: none; display: flex;
+                 gap: 8px; align-items: baseline; }
+.sec > summary::-webkit-details-marker { display: none; }
+.sec > summary::before { content: "▸"; font-size: 10px; }
+.sec[open] > summary::before { content: "▾"; }
+.sec > summary:focus-visible { outline: 2px solid var(--accent-mid); outline-offset: 2px; }
+.sec .body { padding-top: 14px; }
+/* Section nav. Sticky so the four names stay reachable from anywhere in the column. */
+.nav { position: sticky; top: 0; z-index: 5; background: var(--canvas); display: flex; gap: 6px;
+       flex-wrap: wrap; align-items: center; padding: 10px 0; margin-bottom: 22px;
+       border-bottom: 1px solid var(--line); }
+.nav a { text-decoration: none; font-size: 13px; font-weight: 600; color: var(--muted);
+         padding: 6px 13px; border-radius: 999px; border: 1px solid transparent;
+         transition: color .12s, background-color .12s; }
+.nav a:hover { color: var(--ink); background: rgba(127,127,127,.10); }
+.nav a[aria-current="true"] { color: var(--accent-text); background: var(--accent-soft);
+                              border-color: var(--accent-mid); }
+.nav a:focus-visible { outline: 2px solid var(--accent-mid); outline-offset: 2px; }
+.nav .spacer { flex: 1; }
+.nav input { width: auto; min-width: 150px; padding: 6px 10px; font-size: 12.5px; }
+.nav .remember { display: flex; align-items: center; gap: 6px; font-size: 12.5px;
+                 color: var(--muted); font-weight: 500; margin: 0; cursor: pointer; }
+.nav .remember input { min-width: 0; width: auto; }
+.token-hint { font-size: 12.5px; color: var(--muted); margin: -12px 0 18px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--muted);
+     border-bottom: 1px solid var(--line); padding: 6px 6px; }
+td { padding: 8px 6px; border-bottom: 1px solid var(--line); }
+td.num { text-align: right; white-space: nowrap; }
+/* A handle rather than a draggable row: the rows hold buttons and selectable text, and a row that
+   starts dragging when you try to read it is worse than no dragging at all. */
+td.grip, th.grip { width: 26px; padding-left: 2px; padding-right: 2px; text-align: center;
+                   color: var(--muted); cursor: grab; user-select: none; line-height: 1; }
+td.grip:active { cursor: grabbing; }
+tr.dragging { opacity: .35; }
+tr.drop-here { background: var(--accent-soft); }
+.msg { font-size: 12.5px; font-weight: 600; margin-top: 10px; }
+.msg.bad { color: var(--alert); } .msg.good { color: var(--accent-mid); }
+.note { font-size: 12.5px; color: var(--muted); }
+code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+/* The preview: a render of the uploaded page with its outlines drawn over it, so the person picking
+   the cut line looks at a shape instead of a column of millimetres. */
+.stage { position: relative; height: 58vh; border: 1px solid var(--line); border-radius: 8px;
+         overflow: hidden; background: #fff; touch-action: none; cursor: grab; }
+.stage.dragging { cursor: grabbing; }
+/* Everything that must stay registered with the picture lives in ONE transformed box, so the overlay
+   cannot drift from the render no matter how far it is zoomed. */
+.stage-inner { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.stage-inner img { display: block; height: 58vh; width: auto; }
+.stage-inner svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* --sw is the base stroke width, in the svg's own units, recomputed by applyStage on every zoom.
+   The two failure modes it sits between: a plain width grows with the zoom, because the zoom is a
+   CSS transform on the whole box (at 2274 % a hover line was ~27 px and buried the outline 8 mm
+   next to it), while a constant screen width goes to a hairline you cannot see against the
+   upscaled preview. So it grows, slowly, and stops. `vector-effect: non-scaling-stroke` cannot
+   help either way — it only cancels transforms INSIDE the svg, never one on an ancestor. */
+.stage path { fill: none; stroke: #9aa0ad; stroke-width: var(--sw, 1.5); cursor: pointer; }
+.stage path:hover, .stage path.hot { stroke: #3ea855; stroke-width: calc(var(--sw, 1.5) * 1.9); }
+.stage path.picked { stroke: #d81b60; stroke-width: calc(var(--sw, 1.5) * 1.5); }
+.stage path.sheet { stroke: #cfd3db;
+                    stroke-dasharray: calc(var(--sw, 1.5) * 4) calc(var(--sw, 1.5) * 3.5); }
+.stage-tools { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px;
+               align-items: center; background: rgba(255,255,255,.92); border-radius: 8px;
+               padding: 4px 6px; border: 1px solid var(--line); }
+.stage-tools button { padding: 3px 9px; font-size: 13px; background: transparent; color: #23262f;
+                      border-color: var(--line); }
+.stage-tools span { font-size: 12px; color: #6b7080; font-variant-numeric: tabular-nums;
+                    min-width: 46px; text-align: right; }
+.cand.hot { background: rgba(62,168,85,.14); }
+.cand { display: grid; grid-template-columns: 1fr minmax(150px, 190px); gap: 8px 10px;
+        align-items: center; padding: 6px 8px; border-radius: 8px; font-size: 13px;
+        border: 1px solid transparent; }
+/* The margin comes off ONE line, so it is one radio group asked once — not a checkbox per row.
+   With a checkbox per row nothing stopped two being ticked, and the two halves then disagreed:
+   this panel took the smallest, the server unioned them (320 mm here, 520 mm there). */
+.basebox { border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+           padding: 11px 13px; margin-top: 12px; }
+.basebox .q { font-size: 13px; font-weight: 600; display: block; margin-bottom: 8px; }
+.basebox .opts { display: flex; gap: 8px; flex-wrap: wrap; }
+.basebox .opt { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line);
+                border-radius: 999px; padding: 5px 13px 5px 10px; font-size: 13px; cursor: pointer;
+                margin: 0; font-weight: 500; }
+.basebox .opt input { width: auto; margin: 0; }
+.basebox .opt:has(input:checked) { border-color: var(--accent-mid); background: var(--accent-soft);
+                                   color: var(--accent-text); font-weight: 700; }
+.basebox .opt:focus-within { outline: 2px solid var(--accent-mid); outline-offset: 2px; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600;
+         cursor: pointer; margin: 8px 0 0; }
+.check input { width: auto; }
+.cand:hover { background: rgba(127,127,127,.10); }
+.cand.used { border-color: var(--accent-mid); background: rgba(62,168,85,.07); }
+.cand b { font-variant-numeric: tabular-nums; }
+.cand select { padding: 5px 7px; font-size: 12.5px; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px;
+          vertical-align: baseline; background: #9aa0ad; }
+.netto { font-size: 13px; font-weight: 700; margin: 10px 0 0; }
+.two { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+/* Drop zone for the template file. The dashed border IS the affordance, so it stays visible rather
+   than appearing only mid-drag — a target you cannot see until you are already dragging is no target. */
+.dropzone { border: 2px dashed var(--line); border-radius: 10px; padding: 14px; text-align: center;
+            transition: border-color .12s, background-color .12s; }
+.dropzone.is-over { border-color: var(--accent-mid); background: rgba(62,168,85,.08); }
+.dropzone label { display: block; margin: 0 0 8px; cursor: pointer; font-size: 13px; }
+.dropzone label b { display: block; font-size: 14px; }
+.dropzone input[type=file] { font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+    <b>Panel</b>
+    <span class="note" style="color:rgba(255,255,255,.65)">Reguły, które stosuje generator i kontrola plików</span>
+    <a href="./">← generator</a>
+    <button type="button" id="themeToggle" class="theme-toggle">Motyw: auto</button>
+</header>
+
+<main>
+{% if not configured %}
+    <div class="card">
+        <h2>Panel wyłączony</h2>
+        <p class="note">
+            Ustaw zmienną środowiskową <code>{{ token_env }}</code> i uruchom aplikację ponownie.
+            Bez tokenu panel nie działa — świadomie, bo edytuje reguły produkcyjne.
+        </p>
+    </div>
+{% else %}
+    <!-- The token lives here rather than in a card of its own: it is a session credential, not
+         content, and every save below reads it. -->
+    <nav class="nav" id="nav">
+        <a href="#s-tpl">Szablony</a>
+        <a href="#s-mat">Materiały</a>
+        <a href="#s-rules">Reguły</a>
+        <a href="#s-msg">Komunikaty</a>
+        <span class="spacer"></span>
+        <input id="token" type="password" placeholder="token panelu" autocomplete="off"
+               aria-label="Token panelu">
+        <label class="remember" for="tokenRemember">
+            <input id="tokenRemember" type="checkbox"> zapamiętaj
+        </label>
+    </nav>
+    <p id="tokenHint" class="token-hint" hidden>
+        Token siedzi w zmiennej <code>{{ token_env }}</code> — ustawia ją linia, którą startuje
+        konsola <code>prepress-open</code>, więc przewinięcie jej na górę zawsze go odda.
+    </p>
+
+    <section class="sec" id="s-tpl">
+        <h2>Szablon produkcyjny → szablon dla klienta</h2>
+        <p class="note" style="margin:0 0 12px">
+            Wgraj szablon produkcyjny — flagę, ulotkę, aluminium, szkło, bramę. Pokażemy każdy
+            obrys, jaki w nim jest. Nadaj typ tym, które mają znaczenie, podaj spad i obszar
+            bezpieczny, zapisz. Klient wybiera gotowy szablon z listy.
+            Typ nadaje człowiek, bo w tych plikach warstwy nazywają się „Layer 1”, wszystkie
+            kreski są tym samym szarym, a ramka strony wygląda jak obrys.
+        </p>
+        <div class="two">
+            <div>
+                <div id="tplDrop" class="dropzone">
+                    <label for="tplFile">
+                        <b>Przeciągnij tu plik szablonu</b>
+                        <span class="note">albo kliknij i wybierz — PDF lub .ai</span>
+                    </label>
+                    <input id="tplFile" type="file" accept=".pdf,.ai,application/pdf">
+                    <p id="tplFileName" class="note" style="margin:8px 0 0" hidden></p>
+                </div>
+                <div class="acts">
+                    <button id="tplInspect" class="ghost">Wczytaj i pokaż obrysy</button>
+                    <span id="tplPageWrap" class="note" hidden>strona
+                        <input id="tplPage" type="number" min="1" value="1"
+                               style="width:70px;display:inline-block"> z <span id="tplPages">1</span>
+                    </span>
+                </div>
+                <div id="tplStage" style="margin-top:12px"></div>
+            </div>
+            <div>
+                <div id="tplList"><p class="note">Wgraj plik, żeby zobaczyć obrysy.</p></div>
+                <div class="grid" style="margin-top:12px">
+                    <div style="grid-column:1/-1"><label for="tplName">Nazwa dla klienta</label>
+                        <input id="tplName" placeholder="np. Flaga VENTO M"></div>
+                    <div><label for="tplBleed">Spad (mm)</label>
+                        <input id="tplBleed" type="number" step="0.5" value="20"></div>
+                    <div><label for="tplSafe">Obszar bezpieczny (mm)</label>
+                        <input id="tplSafe" type="number" step="0.5" value="30"></div>
+                    <div style="grid-column:1/-1">
+                        <label class="check" for="tplSafeSides">
+                            <input id="tplSafeSides" type="checkbox">
+                            <span>Wykończenie zjada materiał z boków — tunel, zakładka, zgrzew</span>
+                        </label>
+                        <div id="tplSidesRow" class="grid" hidden style="margin-top:8px">
+                            <div><label for="tplSafeL">Lewa (mm)</label>
+                                <input id="tplSafeL" type="number" step="0.5" value="0"></div>
+                            <div><label for="tplSafeG">Góra (mm)</label>
+                                <input id="tplSafeG" type="number" step="0.5" value="0"></div>
+                            <div><label for="tplSafeP">Prawa (mm)</label>
+                                <input id="tplSafeP" type="number" step="0.5" value="0"></div>
+                            <div><label for="tplSafeD">Dół (mm)</label>
+                                <input id="tplSafeD" type="number" step="0.5" value="0"></div>
+                        </div>
+                        <p class="note" style="margin:6px 0 0">
+                            To materiał, który zostanie <b>zaszyty</b> — nie margines. Obszar
+                            bezpieczny liczy się dopiero od krawędzi, która zostaje widoczna: czyli
+                            zakładka <b>plus</b> „Obszar bezpieczny (mm)”. Na Vento Regular tunel
+                            na maszt bierze 110 mm z lewej i z góry.
+                        </p>
+                    </div>
+                    <div style="grid-column:1/-1">
+                        <label class="check" for="tplSides">
+                            <input id="tplSides" type="checkbox">
+                            <span>Szablon dwustronny — przód i tył, tył lustrzany</span>
+                        </label>
+                        <p class="note" style="margin:4px 0 0">
+                            Ustawiane przy szablonie, nie przy zamówieniu: na flagach dwustronnych
+                            obszar bezpieczny jest inny niż na jednostronnych, więc taki szablon
+                            potrzebuje własnej liczby powyżej. Na PCV różnicy nie ma, ale zaznaczenie
+                            i tak decyduje, czy dostaniesz jedną stronę czy dwie.
+                        </p>
+                    </div>
+                    <div style="grid-column:1/-1"><label for="tplMaterial">Materiał
+                        <span class="note">(z niego biorą się reguły: DPI, kolory)</span></label>
+                        <select id="tplMaterial"></select></div>
+                    <div style="grid-column:1/-1"><label for="tplNote">Uwagi dla klienta</label>
+                        <input id="tplNote" placeholder="np. tunel na maszt zjada 90 mm z lewej"></div>
+                </div>
+                <div class="acts">
+                    <button id="tplSave">Zapisz szablon</button>
+                </div>
+                <p id="msgTpl" class="msg" hidden></p>
+            </div>
+        </div>
+        <h2 style="margin-top:26px">Zapisane szablony (<span id="tplCount">0</span>)</h2>
+        <div style="overflow-x:auto">
+        <table>
+            <thead><tr><th class="grip"></th><th>Token</th><th>Nazwa</th><th class="num">Strona</th>
+                       <th class="num">Netto</th><th class="num">Spad</th>
+                       <th class="num">Bezpieczny</th><th>Strony</th><th>Linie</th>
+                       <th>Materiał</th><th></th></tr></thead>
+            <tbody id="tplRows"></tbody>
+        </table>
+        </div>
+        <p id="tplNone" class="note" style="margin-top:10px">Brak zapisanych szablonów.</p>
+    </section>
+
+    <section class="sec" id="s-mat">
+        <h2 id="formTitle">Nowy materiał</h2>
+        <div class="grid">
+            <div><label for="id">Id <span class="note">(w URL-ach i w pieczątce)</span></label>
+                 <input id="id" placeholder="banner-frontlit-510"></div>
+            <div><label for="name">Nazwa</label><input id="name" placeholder="Banner frontlit 510 g"></div>
+            <div><label for="bleed_mm">Spad (mm)</label><input id="bleed_mm" type="number" step="0.5" value="20"></div>
+            <div><label for="safe_mm">Obszar bezpieczny (mm)</label><input id="safe_mm" type="number" step="0.5" value="30"></div>
+            <div><label for="min_dpi">Min. DPI <span class="note">(puste = nie sprawdzamy)</span></label>
+                 <input id="min_dpi" type="number" step="1" placeholder=""></div>
+            <div><label for="max_width_mm">Szerokość roli (mm) <span class="note">(puste = arkusz)</span></label>
+                 <input id="max_width_mm" type="number" step="1" placeholder=""></div>
+            <div><label for="panel_max_long_mm">Maks. bryt — dłuższy bok (mm)
+                 <span class="note">(puste = 25000)</span></label>
+                 <input id="panel_max_long_mm" type="number" step="100" placeholder="25000"></div>
+            <div><label for="panel_max_short_mm">Maks. bryt — krótszy bok (mm)
+                 <span class="note">(puste = 15000)</span></label>
+                 <input id="panel_max_short_mm" type="number" step="100" placeholder="15000"></div>
+            <div><label for="colour">Kolory</label>
+                 <select id="colour"><option value="cmyk">CMYK</option><option value="any">dowolne</option></select></div>
+            <div><label for="spec_position">Opis na szablonie
+                 <span class="note">(gdzie stoi ramka z wymiarami)</span></label>
+                 <select id="spec_position">
+                     <option value="panel">panel na grafice &mdash; najbardziej widoczny</option>
+                     <option value="below">pasek pod grafik&#261; &mdash; grafika zostaje czysta</option>
+                     <option value="margin">pole w spadzie &mdash; wymaga spadu &ge; 12 mm</option>
+                     <option value="none">bez opisu &mdash; tylko niewidoczna piecz&#261;tka</option>
+                 </select></div>
+            <div><label for="cut_path">Materia&#322; ci&#281;ty
+                 <span class="note">(wymaga wykrojnika w kolorze „Cut”)</span></label>
+                 <select id="cut_path"><option value="">nie</option><option value="1">tak</option></select></div>
+            <div style="grid-column:1/-1"><label for="notes">Uwagi</label>
+                 <input id="notes" placeholder="np. zgrzew i oczka co 50 cm"></div>
+        </div>
+        <div class="acts">
+            <button id="save">Zapisz materiał</button>
+            <button id="reset" class="ghost">Wyczyść formularz</button>
+        </div>
+        <h2 style="margin-top:26px">Zdefiniowane materiały (<span id="count">0</span>)</h2>
+        <!-- Nine columns cannot fit a phone. The table scrolls inside its own box rather than
+             dragging the page sideways, and no column is dropped — a hidden column is a lost rule. -->
+        <div style="overflow-x:auto">
+        <table>
+            <thead><tr><th class="grip"></th><th>Id</th><th>Nazwa</th><th class="num">Spad</th>
+                       <th class="num">Bezpieczny</th>
+                       <th class="num">Min DPI</th><th class="num">Rola</th><th>Kolory</th>
+                       <th>Opis</th><th></th></tr></thead>
+            <tbody id="rows"></tbody>
+        </table>
+        </div>
+        <p id="none" class="note" style="margin-top:14px">Brak materiałów — dodaj pierwszy powyżej.</p>
+    </section>
+
+    <details class="sec" id="s-rules">
+        <summary>Ostrość reguł</summary>
+        <div class="body">
+            <p class="note" style="margin:0 0 12px">
+                Jak poważnie traktujemy każdą regułę przy sprawdzaniu plików. „Domyślnie” = tak,
+                jak ocenia sama reguła. „Wyłączona” = w ogóle nie pokazujemy tej pozycji.
+                To decyzja handlowa: RGB na banerze i RGB na wydruku wystawowym to nie ten sam
+                problem.
+            </p>
+            <div id="ruleRows"><p class="note">Podaj token, żeby wczytać reguły.</p></div>
+            <div class="acts">
+                <button id="saveRules">Zapisz ostrość</button>
+                <button id="resetRules" class="ghost">Wszystkie domyślne</button>
+            </div>
+            <p id="msgRules" class="msg" hidden></p>
+        </div>
+    </details>
+
+    <details class="sec" id="s-msg">
+        <summary>Komunikaty dla klienta</summary>
+        <div class="body">
+            <p class="note" style="margin:0 0 12px">
+                To, co widzi klient. Puste pole = tekst domyślny. W nawiasach klamrowych są
+                wartości wstawiane przez system — zostaw je, jeśli mają się pokazać.
+                Nie każde ograniczenie produkcyjne warto pokazywać klientowi.
+            </p>
+            <!-- Sixty-eight inputs cannot be scanned by eye, so they are searchable. -->
+            <label for="msgFilter">Szukaj</label>
+            <input id="msgFilter" type="search" placeholder="kod albo fragment tekstu"
+                   autocomplete="off">
+            <p id="msgFilterCount" class="note" style="margin:6px 0 0" hidden></p>
+            <div id="messageRows" style="margin-top:12px"></div>
+            <div class="acts">
+                <button id="saveMessages">Zapisz komunikaty</button>
+                <button id="resetMessages" class="ghost">Przywróć domyślne</button>
+            </div>
+            <p id="msgMessages" class="msg" hidden></p>
+        </div>
+    </details>
+{% endif %}
+</main>
+
+<!-- Sortable 1.15.6, MIT. Kept in the repository rather than pulled from a CDN, because the panel
+     runs on the shop's own network and a template import must not depend on the internet. -->
+<script src="{{ asset('sortable.min.js') }}"></script>
+<script>
+const el = (id) => document.getElementById(id);
+const FIELDS = ['id', 'name', 'bleed_mm', 'safe_mm', 'min_dpi', 'max_width_mm',
+                'panel_max_long_mm', 'panel_max_short_mm', 'colour', 'spec_position',
+                'cut_path', 'notes'];
+// A select needs a real default — an empty value shows a blank option instead of the shipped choice.
+const FIELD_DEFAULTS = { colour: 'cmyk', spec_position: 'panel', cut_path: '' };
+let DEFAULT_MESSAGES = {}, INFO_CODES = [];
+// What each severity means, in the words an admin thinks in. '' is "leave the rule's own judgement".
+const LEVEL_LABELS = { '': 'domyślnie — jak ocenia reguła', off: 'wyłączona',
+                       info: 'informacja', amber: 'uwaga', red: 'błąd' };
+
+// An admin token should not outlive the browser session, so sessionStorage stays the default and a
+// shop that never ticks the box keeps exactly the old behaviour. Persisting it is offered as an
+// explicit choice rather than taken silently, because a panel with one admin who has now lost the
+// token twice is a usability problem, not a security win.
+const TOKEN_KEY = 'prepress_admin_token';
+
+function readToken() {
+    return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || '';
+}
+
+function storeToken(value, remember) {
+    sessionStorage.setItem(TOKEN_KEY, value);
+    if (remember) localStorage.setItem(TOKEN_KEY, value);
+    else localStorage.removeItem(TOKEN_KEY);
+}
+
+// Where the token comes from, said out loud exactly when it is missing. Nothing to look up and
+// nobody to ask.
+function updateTokenHint() {
+    const hint = el('tokenHint');
+    if (hint) hint.hidden = !!el('token').value.trim();
+}
+
+if (el('token')) {
+    el('token').value = readToken();
+    el('tokenRemember').checked = !!localStorage.getItem(TOKEN_KEY);
+    updateTokenHint();
+    const keepToken = () => {
+        storeToken(el('token').value.trim(), el('tokenRemember').checked);
+        updateTokenHint();
+        loadMessages();
+        loadRules();
+    };
+    el('token').addEventListener('change', keepToken);
+    el('tokenRemember').addEventListener('change', keepToken);
+    el('save').addEventListener('click', save);
+    el('saveMessages').addEventListener('click', saveMessages);
+    el('resetMessages').addEventListener('click', () => {
+        if (!confirm('Przywrócić wszystkie domyślne teksty?')) return;
+        document.querySelectorAll('[data-code]').forEach((t) => { t.value = ''; });
+        saveMessages();
+    });
+    el('saveRules').addEventListener('click', saveRules);
+    el('resetRules').addEventListener('click', () => {
+        if (!confirm('Ustawić wszystkie reguły na domyślne?')) return;
+        document.querySelectorAll('[data-rule]').forEach((s) => { s.value = ''; });
+        saveRules();
+    });
+    el('tplInspect').addEventListener('click', inspectTemplate);
+    initFileDropZone(el('tplDrop'), acceptTemplateFile);
+    el('tplFile').addEventListener('change', showTemplateFileName);
+    el('tplSave').addEventListener('click', saveTemplate);
+    el('tplPage').addEventListener('change', inspectTemplate);
+    el('tplSafe').addEventListener('input', updateNetto);
+    el('tplSafeSides').addEventListener('change', toggleSafeSides);
+    ['tplSafeL', 'tplSafeG', 'tplSafeP', 'tplSafeD'].forEach((id) =>
+        el(id).addEventListener('input', updateNetto));
+    initNav();
+    initMessageFilter();
+    initReordering();
+    loadMessages();
+    loadRules();
+    loadTemplates();
+    el('reset').addEventListener('click', () => { fill({}); el('formTitle').textContent = 'Nowy materiał'; });
+    load();
+}
+
+// ── Drag to reorder ─────────────────────────────────────────────────────────
+// Both lists are stored as arrays and their order is already what a customer sees in the picker, so
+// dragging writes straight through rather than living in the browser. Bound to the <tbody>, which is
+// never replaced — only its innerHTML is — so one instance survives every re-render.
+// The list lives INSIDE the function on purpose. As a module-level `const` below the init block
+// that calls this, it sat in the temporal dead zone: the ReferenceError took down the whole script,
+// so nothing loaded at all — not the templates, not the rules, not the messages. Function
+// declarations hoist and hid it, which is what made it look like only dragging was broken.
+function initReordering() {
+    if (typeof Sortable === 'undefined') return;      // no library, no dragging, everything else works
+    const lists = [
+        { body: 'tplRows', attribute: 'tpl', endpoint: 'api/admin/templates/order',
+          message: 'msgTpl' },
+        { body: 'rows', attribute: 'mat', endpoint: 'api/admin/materials/order', message: 'msg' },
+    ];
+    for (const list of lists) {
+        const body = el(list.body);
+        if (!body) continue;
+        Sortable.create(body, {
+            handle: '.grip',
+            animation: 140,
+            ghostClass: 'drop-here',
+            dragClass: 'dragging',
+            onEnd: () => saveOrder(list),
+        });
+    }
+}
+
+async function saveOrder(list) {
+    const token = el('token').value.trim();
+    if (!token) return messageAt(list.message, 'Podaj token.', false);
+    const order = [...el(list.body).querySelectorAll(`[data-${list.attribute}]`)]
+        .map((row) => row.dataset[list.attribute]);
+    const response = await fetch(list.endpoint, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+        body: JSON.stringify({ order }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        // Put the rows back where they were, rather than leaving the screen claiming an order the
+        // store does not have.
+        if (data.templates || data.materials) renderTemplates(data.templates || []);
+        return messageAt(list.message, data.error || 'Nie udało się zapisać kolejności.', false);
+    }
+    messageAt(list.message, 'Zapisano kolejność.', true);
+}
+
+// ── Section nav ─────────────────────────────────────────────────────────────
+// Clicking colours the name and opens the section when it is one of the collapsed ones. Scrolling
+// moves the colour along too, so the highlight never claims you are somewhere you are not.
+function initNav() {
+    const links = [...document.querySelectorAll('.nav a')];
+    if (!links.length) return;
+    const sectionOf = (link) => document.querySelector(link.getAttribute('href'));
+    const mark = (active) => links.forEach((link) =>
+        link.setAttribute('aria-current', String(sectionOf(link) === active)));
+
+    links.forEach((link) => link.addEventListener('click', () => {
+        const section = sectionOf(link);
+        if (section.tagName === 'DETAILS') section.open = true;
+        mark(section);
+    }));
+    mark(sectionOf(links[0]));
+
+    const observer = new IntersectionObserver((entries) => {
+        const onScreen = entries.filter((entry) => entry.isIntersecting)
+            .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (onScreen.length) mark(onScreen[0].target);
+    // The top strip is the sticky nav's own height; the bottom one keeps the highlight on the
+    // section you are READING rather than the one just entering from below.
+    }, { rootMargin: '-70px 0px -60% 0px' });
+    links.forEach((link) => observer.observe(sectionOf(link)));
+}
+
+// Sixty-eight inputs cannot be scanned by eye. Searches the code, the label and the default text,
+// because the default is what you recognise a message by when you have not overridden it yet.
+function initMessageFilter() {
+    const box = el('msgFilter');
+    if (!box) return;
+    box.addEventListener('input', () => {
+        const needle = box.value.trim().toLowerCase();
+        const rows = el('messageRows').querySelectorAll('[data-msgrow]');
+        let shown = 0;
+        rows.forEach((row) => {
+            const field = row.querySelector('input');
+            const haystack = `${row.textContent} ${field.placeholder} ${field.value}`.toLowerCase();
+            const hit = !needle || haystack.includes(needle);
+            row.hidden = !hit;
+            if (hit) shown += 1;
+        });
+        // A heading left standing over nothing reads as a broken list.
+        el('messageRows').querySelectorAll('[data-msghead]').forEach((head) => {
+            let next = head.nextElementSibling;
+            let any = false;
+            while (next && !next.hasAttribute('data-msghead')) {
+                if (!next.hidden) { any = true; break; }
+                next = next.nextElementSibling;
+            }
+            head.hidden = !any;
+        });
+        const count = el('msgFilterCount');
+        count.hidden = !needle;
+        count.textContent = `${shown} z ${rows.length} komunikatów`;
+    });
+}
+
+// Drag-depth mechanics, ported from the in-house `initFileDropZone`. The counter is the whole
+// point: a zone with children gets dragenter/dragleave as the pointer crosses THEIR borders too, so
+// "did it leave" alone makes the highlight flicker. In-house this bug was fixed three times in three
+// files before the helper was extracted — worth carrying the reason, not just the code.
+function isFileDrag(event) {
+    const types = Array.from(event.dataTransfer?.types || []);
+    return types.includes('Files') || types.includes('application/x-moz-file');
+}
+
+function initFileDropZone(zone, onFile) {
+    if (!zone) return;
+    let depth = 0;
+    const setOver = (active) => zone.classList.toggle('is-over', active);
+
+    zone.addEventListener('dragenter', (event) => {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        depth += 1;
+        setOver(true);
+    });
+    zone.addEventListener('dragover', (event) => {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        // Without this the cursor says "move" and some browsers refuse the drop outright.
+        event.dataTransfer.dropEffect = 'copy';
+        setOver(true);
+    });
+    zone.addEventListener('dragleave', (event) => {
+        if (!isFileDrag(event)) return;
+        depth = Math.max(0, depth - 1);
+        if (depth === 0 && !zone.contains(event.relatedTarget)) setOver(false);
+    });
+    zone.addEventListener('drop', (event) => {
+        if (!isFileDrag(event)) return;
+        // Without preventDefault the browser navigates away and OPENS the dropped PDF.
+        event.preventDefault();
+        depth = 0;
+        setOver(false);
+        const file = (event.dataTransfer.files || [])[0];
+        if (file) onFile(file);
+    });
+}
+
+const TEMPLATE_EXTENSIONS = ['.pdf', '.ai'];
+
+function acceptTemplateFile(file) {
+    const name = (file.name || '').toLowerCase();
+    if (!TEMPLATE_EXTENSIONS.some((ext) => name.endsWith(ext))) {
+        // Said out loud rather than ignored: a drop that does nothing reads as a broken page.
+        return messageAt('msgTpl',
+            `„${file.name}” to nie PDF ani .ai — te dwa umiemy przeczytać.`, false);
+    }
+    // Put it INTO the input, so the field shows what was dropped and every other path stays the same.
+    const carrier = new DataTransfer();
+    carrier.items.add(file);
+    el('tplFile').files = carrier.files;
+    showTemplateFileName();
+    inspectTemplate();
+}
+
+function showTemplateFileName() {
+    const file = el('tplFile').files[0];
+    const label = el('tplFileName');
+    label.hidden = !file;
+    if (file) {
+        label.textContent = `${file.name} — ${(file.size / 1024 / 1024).toFixed(1)} MB`;
+    }
+}
+
+// The inspected upload lives only in this tab until it is saved: nothing is stored server-side
+// before the admin has said which outline is the cut.
+let TPL = { candidates: [], page_mm: null, source_name: '', pages: 1, lineTypes: [] };
+
+async function inspectTemplate() {
+    const token = el('token').value.trim();
+    if (!token) return messageAt('msgTpl', 'Podaj token.', false);
+    const file = el('tplFile').files[0];
+    if (!file) return messageAt('msgTpl', 'Wybierz plik.', false);
+    const body = new FormData();
+    body.append('file', file);
+    body.append('page', String(Math.max(0, (parseInt(el('tplPage').value, 10) || 1) - 1)));
+    messageAt('msgTpl', 'Czytam obrysy…', true);
+    const response = await fetch('api/admin/inspect',
+        { method: 'POST', headers: { 'X-Admin-Token': token }, body });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return messageAt('msgTpl', data.error || 'Nie udało się wczytać.', false);
+    el('tplPages').textContent = data.pages;
+    el('tplPageWrap').hidden = data.pages <= 1;
+    if (!el('tplName').value.trim() && data.source_name) {
+        el('tplName').value = data.source_name.replace(/\.(pdf|ai)$/i, '');
+    }
+    renderStage(data);
+    messageAt('msgTpl', `Znaleziono ${data.candidates.length} obrysów. Nadaj typ każdemu, `
+        + 'który ma znaczenie — linii cięcia może być kilka (np. tunel i korpus).', true);
+}
+
+function renderStage(data) {
+    // Own the state rather than trusting the caller to have set it: a stage drawn from one payload
+    // and clicks resolved against another is a silent mismatch.
+    TPL = { candidates: data.candidates, page_mm: data.page_mm, source_name: data.source_name,
+            pages: data.pages, lineTypes: data.line_types || TPL.lineTypes || [] };
+    const [w, h] = data.page_mm;
+    const paths = data.candidates.map((c) =>
+        `<path d="${esc(c.svg_path)}" data-cand="${c.index}"` +
+        `${c.page_sized ? ' class="sheet"' : ''}></path>`).join('');
+    const picture = data.preview_png
+        ? `<img src="data:image/png;base64,${data.preview_png}" alt="podgląd szablonu">`
+        : `<div style="width:320px;height:420px;display:grid;place-items:center"
+                class="note">bez podglądu</div>`;
+    el('tplStage').innerHTML =
+        `<div class="stage" id="stage">
+            <div class="stage-inner" id="stageInner">${picture}
+                <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${paths}</svg>
+            </div>
+            <div class="stage-tools">
+                <button type="button" class="ghost" data-zoom="out">−</button>
+                <button type="button" class="ghost" data-zoom="in">+</button>
+                <button type="button" class="ghost" data-zoom="fit">dopasuj</button>
+                <span id="stageZoom">100%</span>
+            </div>
+         </div>
+         <p class="note" style="margin-top:6px">strona ${w.toFixed(1)} × ${h.toFixed(1)} mm
+            · kółkiem myszy przybliżasz, przeciąganiem przesuwasz</p>`;
+    initStageZoom();
+
+    const options = ['<option value="">— nie używam —</option>'].concat(
+        TPL.lineTypes.map((t) => `<option value="${esc(t.id)}">${esc(t.label)}</option>`)).join('');
+    el('tplList').innerHTML = data.candidates.map((c) => `
+        <div class="cand" data-row="${c.index}">
+            <div><span class="swatch" data-swatch="${c.index}"></span>
+                <b>${c.width_mm.toFixed(1)} × ${c.height_mm.toFixed(1)} mm</b><br>
+                <span class="note">${c.page_sized ? 'wielkość strony' : c.painted === 'clip'
+                    ? 'ścieżka tnąca' : c.painted === 'fill' ? 'wypełnienie' : 'obrys'}</span></div>
+            <select data-type="${c.index}">${options}</select>
+        </div>`).join('')
+        + `<div class="basebox" id="tplBase" hidden>
+               <span class="q">Margines bezpieczny odejmujemy od linii:</span>
+               <div class="opts" id="tplBaseOpts"></div>
+               <p class="note" style="margin:8px 0 0">Na fladze VENTO S tnie się tunel
+                  (722,9 mm) i korpus (633,0 mm), a margines odejmuje się od korpusu.</p>
+           </div>`
+        + '<p id="tplNetto" class="netto"></p>';
+
+    document.querySelectorAll('[data-type]').forEach((select) => {
+        select.addEventListener('change', () => applyType(Number(select.dataset.type)));
+    });
+    // Hover links the two halves. On a 1:6 sheet the outlines sit a couple of pixels apart, so
+    // "which row is which line" has to be answerable WITHOUT hitting the curve.
+    document.querySelectorAll('[data-row]').forEach((row) => {
+        const index = row.dataset.row;
+        row.addEventListener('mouseenter', () => highlight(index, true));
+        row.addEventListener('mouseleave', () => highlight(index, false));
+    });
+    document.querySelectorAll('.stage svg path').forEach((node) => {
+        const index = node.dataset.cand;
+        node.addEventListener('mouseenter', () => highlight(index, true));
+        node.addEventListener('mouseleave', () => highlight(index, false));
+    });
+    renderBaseChoice();
+    // Clicking the outline on the picture focuses its row, so the two halves stay connected.
+    document.querySelectorAll('.stage svg path').forEach((node) => {
+        node.addEventListener('click', () => {
+            const select = document.querySelector(`[data-type="${node.dataset.cand}"]`);
+            if (select) { select.focus(); select.scrollIntoView({ block: 'nearest' }); }
+        });
+    });
+    updateNetto();
+}
+
+function highlight(index, on) {
+    const path = document.querySelector(`.stage svg path[data-cand="${index}"]`);
+    const row = document.querySelector(`[data-row="${index}"]`);
+    if (path) path.classList.toggle('hot', on);
+    if (row) row.classList.toggle('hot', on);
+}
+
+// ── Zoom and pan on the preview ─────────────────────────────────────────────
+// Both the render and the outline overlay live in one transformed box, so they cannot drift apart.
+// Stroke widths are re-derived from the live scale on every change, so lines stay a few pixels
+// wide at every zoom instead of growing into bands that hide whatever sits next to them.
+const STAGE = { zoom: 1, x: 0, y: 0, min: 1, max: 40 };
+
+function initStageZoom() {
+    const stage = el('stage');
+    const inner = el('stageInner');
+    if (!stage || !inner) return;
+    STAGE.zoom = 1; STAGE.x = 0; STAGE.y = 0;
+    applyStage();
+
+    stage.addEventListener('wheel', (event) => {
+        event.preventDefault();
+        const box = stage.getBoundingClientRect();
+        // Zoom about the POINTER, not the corner: zooming about the origin walks the thing you are
+        // looking at off the screen within two clicks.
+        zoomAt(event.clientX - box.left, event.clientY - box.top,
+               event.deltaY < 0 ? 1.25 : 1 / 1.25);
+    }, { passive: false });
+
+    let dragging = null;
+    stage.addEventListener('pointerdown', (event) => {
+        if (event.target.closest('.stage-tools')) return;
+        dragging = { x: event.clientX, y: event.clientY, ox: STAGE.x, oy: STAGE.y, moved: 0 };
+        stage.setPointerCapture(event.pointerId);
+        stage.classList.add('dragging');
+    });
+    stage.addEventListener('pointermove', (event) => {
+        if (!dragging) return;
+        const dx = event.clientX - dragging.x;
+        const dy = event.clientY - dragging.y;
+        dragging.moved = Math.max(dragging.moved, Math.abs(dx) + Math.abs(dy));
+        STAGE.x = dragging.ox + dx;
+        STAGE.y = dragging.oy + dy;
+        applyStage();
+    });
+    const endDrag = () => { dragging = null; stage.classList.remove('dragging'); };
+    stage.addEventListener('pointerup', endDrag);
+    stage.addEventListener('pointercancel', endDrag);
+
+    stage.querySelectorAll('[data-zoom]').forEach((button) => {
+        button.addEventListener('click', () => {
+            const box = stage.getBoundingClientRect();
+            if (button.dataset.zoom === 'fit') { STAGE.zoom = 1; STAGE.x = 0; STAGE.y = 0; applyStage(); }
+            else zoomAt(box.width / 2, box.height / 2, button.dataset.zoom === 'in' ? 1.6 : 1 / 1.6);
+        });
+    });
+}
+
+function zoomAt(pointerX, pointerY, factor) {
+    const next = Math.min(STAGE.max, Math.max(STAGE.min, STAGE.zoom * factor));
+    const ratio = next / STAGE.zoom;
+    // Keep whatever is under the pointer under the pointer.
+    STAGE.x = pointerX - (pointerX - STAGE.x) * ratio;
+    STAGE.y = pointerY - (pointerY - STAGE.y) * ratio;
+    STAGE.zoom = next;
+    applyStage();
+}
+
+// Zoom in 22x and the line should get heavier — but 22x heavier is the band that started this.
+// A fractional exponent grows it enough to read and stops it well short of its neighbour: 1.6 px
+// fitted, 5.6 px at 2274 %, capped at 7 px. Outlines 8 mm apart are ~58 px apart at that zoom.
+const STROKE_BASE_PX = 1.6;
+const STROKE_GROWTH = 0.4;
+const STROKE_MAX_PX = 7;
+
+function strokePixelsAt(zoom) {
+    return Math.min(STROKE_MAX_PX, STROKE_BASE_PX * Math.pow(zoom, STROKE_GROWTH));
+}
+
+function applyStage() {
+    const inner = el('stageInner');
+    if (!inner) return;
+    inner.style.transform = `translate(${STAGE.x}px, ${STAGE.y}px) scale(${STAGE.zoom})`;
+    // How wide the line should BE on screen at this zoom, then that width converted into the svg's
+    // own units. getBoundingClientRect reports the size after the transform above, so the
+    // conversion falls out of a measurement instead of tracking the zoom factor by hand.
+    const svg = inner.querySelector('svg');
+    const drawnWidth = svg ? svg.getBoundingClientRect().width : 0;
+    if (drawnWidth) {
+        const unitsPerPixel = svg.viewBox.baseVal.width / drawnWidth;
+        inner.style.setProperty('--sw', strokePixelsAt(STAGE.zoom) * unitsPerPixel);
+    }
+    const label = el('stageZoom');
+    if (label) label.textContent = `${Math.round(STAGE.zoom * 100)}%`;
+}
+
+function typeById(id) {
+    return TPL.lineTypes.find((t) => t.id === id) || null;
+}
+
+function applyType(index) {
+    const chosen = document.querySelector(`[data-type="${index}"]`).value;
+    const kind = typeById(chosen);
+    const path = document.querySelector(`.stage svg path[data-cand="${index}"]`);
+    const swatch = document.querySelector(`[data-swatch="${index}"]`);
+    if (path) {
+        // An assigned line is drawn in its own colour, so the picture and the list agree at a glance.
+        path.style.stroke = kind ? kind.stroke : '';
+        path.style.strokeDasharray = kind && kind.dash ? kind.dash : '';
+        path.classList.toggle('picked', !!kind);
+    }
+    if (swatch) swatch.style.background = kind ? kind.stroke : '';
+    document.querySelector(`[data-row="${index}"]`).classList.toggle('used', !!kind);
+    // Changing a type changes which lines can even be the base, so the question is re-asked.
+    renderBaseChoice();
+    updateNetto();
+}
+
+// The lines that define the finished size — the only ones a safe margin can be measured from.
+function trimRows() {
+    return [...document.querySelectorAll('[data-type]')]
+        .filter((select) => { const kind = typeById(select.value); return kind && kind.defines_trim; })
+        .map((select) => {
+            const index = Number(select.dataset.type);
+            const candidate = TPL.candidates[index];
+            return { index, label: `${candidate.width_mm.toFixed(1)} × `
+                                 + `${candidate.height_mm.toFixed(1)} mm` };
+        });
+}
+
+// One question, one answer. With no cut line there is nothing to ask; with exactly one there is no
+// choice to make, so the panel states which line it used rather than pretending to offer a decision.
+function renderBaseChoice() {
+    const box = el('tplBase');
+    if (!box) return;
+    const rows = trimRows();
+    box.hidden = rows.length === 0;
+    if (!rows.length) return;
+    if (rows.length === 1) {
+        el('tplBaseOpts').innerHTML =
+            `<p class="note">Jest jedna linia cięcia (${esc(rows[0].label)}), `
+            + 'więc margines liczymy od niej.</p>';
+        return;
+    }
+    // Carried over so re-typing an unrelated row does not silently move the base.
+    const previous = (document.querySelector('[name="safeBase"]:checked') || {}).value;
+    const keep = rows.some((row) => String(row.index) === previous) ? previous : '';
+    const options = [{ index: '', label: 'od wszystkich linii cięcia' }].concat(rows);
+    el('tplBaseOpts').innerHTML = options.map((option) => `
+        <label class="opt">
+            <input type="radio" name="safeBase" value="${option.index}"
+                   ${String(option.index) === keep ? 'checked' : ''}>
+            <span>${esc(option.label)}</span>
+        </label>`).join('');
+    el('tplBaseOpts').querySelectorAll('input').forEach((radio) =>
+        radio.addEventListener('change', updateNetto));
+}
+
+const SIDE_FIELDS = { left: 'tplSafeL', top: 'tplSafeG', right: 'tplSafeP', bottom: 'tplSafeD' };
+const SIDE_LABELS = { left: 'L', top: 'G', right: 'P', bottom: 'D' };
+
+// What finishing eats per side, or null when it eats nothing. NOT the margin: a sewn tunnel is
+// material that is GONE, and the margin is then measured from the edge that stays visible.
+function sewnPayload() {
+    if (!el('tplSafeSides') || !el('tplSafeSides').checked) return null;
+    const sides = {};
+    for (const [side, id] of Object.entries(SIDE_FIELDS)) sides[side] = el(id).value || 0;
+    return sides;
+}
+
+function toggleSafeSides() {
+    el('tplSidesRow').hidden = !el('tplSafeSides').checked;
+    // The four start at zero, not at the shared margin: ticking the box only says "something here
+    // is sewn", and until a number is typed nothing is, so the result must not move.
+    updateNetto();
+}
+
+function safeBaseIndex() {
+    const picked = document.querySelector('[name="safeBase"]:checked');
+    return picked ? picked.value : '';
+}
+
+function selectedOutlines() {
+    return [...document.querySelectorAll('[data-type]')]
+        .filter((select) => select.value)
+        .map((select) => {
+            const index = Number(select.dataset.type);
+            return { ...TPL.candidates[index].outline, type: select.value,
+                     safe_base: String(index) === safeBaseIndex() };
+        });
+}
+
+function updateNetto() {
+    const label = el('tplNetto');
+    if (!label) return;
+    const trim = selectedOutlines().filter((o) => {
+        const kind = typeById(o.type);
+        return kind && kind.defines_trim;
+    });
+    if (!trim.length) {
+        label.textContent = 'Rozmiar gotowy: oznacz co najmniej jedną linię cięcia.';
+        label.style.color = 'var(--muted)';
+        return;
+    }
+    // The union, not the biggest: on a flag the hem reaches further than the body.
+    const x0 = Math.min(...trim.map((o) => o.origin_mm[0]));
+    const y0 = Math.min(...trim.map((o) => o.origin_mm[1]));
+    const x1 = Math.max(...trim.map((o) => o.origin_mm[0] + o.width_mm));
+    const y1 = Math.max(...trim.map((o) => o.origin_mm[1] + o.height_mm));
+    const chosen = selectedOutlines();
+    const drawnSafe = chosen.some((o) => o.type === 'safe');
+    // Exactly one outline can carry the flag, so this is the same box the server derives.
+    const base = chosen.find((o) => o.safe_base);
+    const margin = parseFloat(el('tplSafe').value) || 0;
+    const raw = sewnPayload();
+    const sewn = raw && Object.fromEntries(
+        Object.entries(raw).map(([side, value]) => [side, parseFloat(value) || 0]));
+    // The safe area starts after BOTH: what is sewn away, then the margin.
+    const sides = sewn && Object.fromEntries(
+        Object.entries(sewn).map(([side, value]) => [side, value + margin]));
+    let safeText;
+    if (drawnSafe) {
+        safeText = 'obszar bezpieczny: wzięty z szablonu';
+    } else if (sides && Object.values(sewn).some((value) => value > 0)) {
+        const from = base ? 'z zaznaczonej linii' : 'ze wszystkich linii cięcia';
+        const width = base ? base.width_mm : x1 - x0;
+        const height = base ? base.height_mm : y1 - y0;
+        const eaten = Object.entries(sewn).filter(([, value]) => value > 0)
+            .map(([side, value]) => `${SIDE_LABELS[side]} ${value}`).join(' / ');
+        safeText = `obszar bezpieczny: `
+            + `${(width - sides.left - sides.right).toFixed(1)} × `
+            + `${(height - sides.top - sides.bottom).toFixed(1)} mm — ${from} `
+            + `minus ${margin} mm, po odjęciu wykończenia (${eaten} mm)`;
+    } else if (base) {
+        safeText = `obszar bezpieczny: ${(base.width_mm - 2 * margin).toFixed(1)} × `
+            + `${(base.height_mm - 2 * margin).toFixed(1)} mm `
+            + `(z linii ${base.width_mm.toFixed(1)} × ${base.height_mm.toFixed(1)} − 2×${margin})`;
+    } else {
+        safeText = `obszar bezpieczny: ze wszystkich linii cięcia − 2×${margin} mm`;
+    }
+    label.innerHTML = `Rozmiar gotowy (netto): ${(x1 - x0).toFixed(1)} × ${(y1 - y0).toFixed(1)}`
+        + ` mm — z ${trim.length} ${trim.length === 1 ? 'linii cięcia' : 'linii cięcia'}`
+        + `<br><span class="note">${esc(safeText)}</span>`;
+    label.style.color = 'var(--accent-mid)';
+}
+
+async function saveTemplate() {
+    const token = el('token').value.trim();
+    if (!token) return messageAt('msgTpl', 'Podaj token.', false);
+    const outlines = selectedOutlines();
+    if (!outlines.length) {
+        return messageAt('msgTpl', 'Nadaj typ przynajmniej jednej linii.', false);
+    }
+    const response = await fetch('api/admin/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+        body: JSON.stringify({
+            name: el('tplName').value.trim(),
+            bleed_mm: el('tplBleed').value,
+            safe_mm: el('tplSafe').value,
+            sewn_sides_mm: sewnPayload(),
+            sides: el('tplSides').checked ? 2 : 1,
+            material: el('tplMaterial').value || null,
+            note: el('tplNote').value.trim(),
+            page_mm: TPL.page_mm,
+            source_name: TPL.source_name,
+            outlines: outlines,
+        }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return messageAt('msgTpl', data.error || 'Nie udało się zapisać.', false);
+    renderTemplates(data.templates);
+    const trim = data.template.trim_mm;
+    messageAt('msgTpl', `Zapisano „${data.template.name}”. Token: ${data.template.token}`
+        + (trim ? `. Netto ${trim[0]} × ${trim[1]} mm z ${data.template.outlines.length} linii.` : ''),
+        true);
+}
+
+async function loadTemplates() {
+    const data = await (await fetch('api/templates')).json();
+    renderTemplates(data.templates || []);
+}
+
+// Kept so an edit can read the row back without another round trip.
+let TEMPLATES = [];
+
+function renderTemplates(list) {
+    TEMPLATES = list;
+    el('tplCount').textContent = list.length;
+    el('tplNone').hidden = list.length > 0;
+    el('tplRows').innerHTML = list.map((t) => `<tr data-tpl="${esc(t.token)}">
+        <td class="grip" title="Przeciągnij, żeby zmienić kolejność">⠿</td>
+        <td><code>${esc(t.token)}</code></td>
+        <td>${esc(t.name)}</td>
+        <td class="num">${(t.page_mm || []).map((v) => Math.round(v)).join(' × ')}</td>
+        <td class="num">${(t.trim_mm || []).map((v) => Math.round(v)).join(' × ') || '—'}</td>
+        <td class="num">${t.bleed_mm} mm</td>
+        <td class="num">${t.safe_mm} mm</td>
+        <td>${t.sides === 2 ? 'dwustronny' : 'jednostronny'}</td>
+        <td>${esc((t.lines || []).join(', ') || '—')}</td>
+        <td>${esc(t.material || '—')}</td>
+        <td style="white-space:nowrap">
+            <button class="ghost" data-tpl-edit="${esc(t.token)}">Edytuj</button>
+            <button class="danger" data-tpl-del="${esc(t.token)}">Usuń</button></td>
+    </tr>`).join('');
+    el('tplRows').querySelectorAll('[data-tpl-del]').forEach((b) =>
+        b.addEventListener('click', () => removeTemplate(b.dataset.tplDel)));
+    el('tplRows').querySelectorAll('[data-tpl-edit]').forEach((b) =>
+        b.addEventListener('click', () => openTemplateEdit(b.dataset.tplEdit)));
+}
+
+// Editing a saved template. Only what can be judged WITHOUT the file: its name, its numbers, which
+// material's rules apply. The outlines stay untouched, and the row says so rather than leaving
+// somebody to wonder why the geometry is missing.
+function openTemplateEdit(token) {
+    const template = TEMPLATES.find((t) => t.token === token);
+    const row = el('tplRows').querySelector(`tr[data-tpl="${token}"]`);
+    if (!template || !row) return;
+    const sewn = template.sewn_sides_mm || null;
+    row.innerHTML = `
+        <td class="grip">⠿</td>
+        <td><code>${esc(token)}</code></td>
+        <td colspan="8">
+            <div class="grid">
+                <div style="grid-column:1/-1"><label for="edName">Nazwa dla klienta</label>
+                    <input id="edName" data-edit="name" value="${esc(template.name || '')}"></div>
+                <div><label for="edBleed">Spad (mm)</label>
+                    <input id="edBleed" data-edit="bleed_mm" type="number" step="0.5"
+                           value="${esc(String(template.bleed_mm ?? ''))}"></div>
+                <div><label for="edSafe">Obszar bezpieczny (mm)</label>
+                    <input id="edSafe" data-edit="safe_mm" type="number" step="0.5"
+                           value="${esc(String(template.safe_mm ?? ''))}"></div>
+                <div style="grid-column:1/-1">
+                    <label class="check" for="edSides">
+                        <input id="edSides" type="checkbox"${sewn ? ' checked' : ''}>
+                        <span>Wykończenie zjada materiał z boków — tunel, zakładka, zgrzew</span>
+                    </label>
+                    <div id="edSidesRow" class="grid"${sewn ? '' : ' hidden'} style="margin-top:8px">
+                        <div><label for="edSafeL">Lewa (mm)</label>
+                            <input id="edSafeL" type="number" step="0.5"
+                                   value="${esc(String(sewn ? sewn.left : 0))}"></div>
+                        <div><label for="edSafeG">Góra (mm)</label>
+                            <input id="edSafeG" type="number" step="0.5"
+                                   value="${esc(String(sewn ? sewn.top : 0))}"></div>
+                        <div><label for="edSafeP">Prawa (mm)</label>
+                            <input id="edSafeP" type="number" step="0.5"
+                                   value="${esc(String(sewn ? sewn.right : 0))}"></div>
+                        <div><label for="edSafeD">Dół (mm)</label>
+                            <input id="edSafeD" type="number" step="0.5"
+                                   value="${esc(String(sewn ? sewn.bottom : 0))}"></div>
+                    </div>
+                    <p class="note" style="margin:6px 0 0">Materiał zaszyty, nie margines —
+                        obszar bezpieczny to zakładka plus liczba powyżej.</p>
+                </div>
+                <div><label for="edSides">Strony</label>
+                    <select id="edSides" data-edit="sides">
+                        <option value="1">jednostronny</option>
+                        <option value="2">dwustronny — przód i tył</option>
+                    </select></div>
+                <div><label for="edMaterial">Materiał</label>
+                    <select id="edMaterial" data-edit="material">${el('tplMaterial').innerHTML}</select></div>
+                <div style="grid-column:1/-1"><label for="edNote">Uwagi dla klienta</label>
+                    <input id="edNote" data-edit="note" value="${esc(template.note || '')}"></div>
+            </div>
+            <p class="note" style="margin-top:8px">Obrysy, rozmiar strony i token zostają bez zmian.
+                Role obrysów ocenia się przy obrazku, a tutaj go nie ma — żeby je poprawić, wgraj
+                plik jeszcze raz. Token zostaje, bo siedzi już w wydanych szablonach PDF.</p>
+        </td>
+        <td style="white-space:nowrap">
+            <button data-tpl-save="${esc(token)}">Zapisz</button>
+            <button class="ghost" data-tpl-cancel="1">Anuluj</button></td>`;
+    // Set after insertion so the stored value wins over whichever option was marked selected.
+    el('edSides').value = String(template.sides === 2 ? 2 : 1);
+    el('edMaterial').value = template.material || '';
+    el('edSides').addEventListener('change', () => {
+        el('edSidesRow').hidden = !el('edSides').checked;
+    });
+    el('edName').focus();
+    row.querySelector('[data-tpl-save]').addEventListener('click', () => saveTemplateEdit(token));
+    row.querySelector('[data-tpl-cancel]').addEventListener('click', () => renderTemplates(TEMPLATES));
+}
+
+async function saveTemplateEdit(token) {
+    const admin = el('token').value.trim();
+    if (!admin) return messageAt('msgTpl', 'Podaj token.', false);
+    const row = el('tplRows').querySelector(`tr[data-tpl="${token}"]`);
+    const changes = {};
+    row.querySelectorAll('[data-edit]').forEach((field) => {
+        changes[field.dataset.edit] = field.value;
+    });
+    // Unticked sends null, which the server stores as "nothing is sewn away".
+    changes.sewn_sides_mm = el('edSides').checked
+        ? { left: el('edSafeL').value, top: el('edSafeG').value,
+            right: el('edSafeP').value, bottom: el('edSafeD').value }
+        : null;
+    const response = await fetch('api/admin/templates/' + encodeURIComponent(token), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': admin },
+        body: JSON.stringify(changes),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return messageAt('msgTpl', data.error || 'Nie udało się zapisać.', false);
+    renderTemplates(data.templates);
+    messageAt('msgTpl', `Zapisano „${data.template.name}”.`, true);
+}
+
+async function removeTemplate(token) {
+    const admin = el('token').value.trim();
+    if (!admin) return messageAt('msgTpl', 'Podaj token.', false);
+    if (!confirm(`Usunąć szablon ${token}? Klienci przestaną go widzieć.`)) return;
+    const response = await fetch('api/admin/templates/' + encodeURIComponent(token),
+        { method: 'DELETE', headers: { 'X-Admin-Token': admin } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return messageAt('msgTpl', data.error || 'Nie udało się usunąć.', false);
+    renderTemplates(data.templates);
+    messageAt('msgTpl', `Usunięto ${token}.`, true);
+}
+
+async function loadRules() {
+    const token = el('token').value.trim();
+    if (!token) { el('ruleRows').innerHTML =
+        '<p class="note">Podaj token, żeby wczytać reguły.</p>'; return; }
+    const response = await fetch('api/admin/rules', { headers: { 'X-Admin-Token': token } });
+    if (!response.ok) { el('ruleRows').innerHTML =
+        '<p class="note">Nie udało się wczytać reguł (token?).</p>'; return; }
+    const data = await response.json();
+    const levels = ['', ...(data.levels || [])];
+    el('ruleRows').innerHTML = (data.rule_ids || []).map((id) => {
+        const current = data.overrides[id] || '';
+        const options = levels.map((level) =>
+            `<option value="${esc(level)}"${level === current ? ' selected' : ''}>` +
+            `${esc(LEVEL_LABELS[level] || level)}</option>`).join('');
+        return `<div class="grid" style="margin-bottom:8px;align-items:center">
+            <div><code>${esc(id)}</code><br>
+                 <span class="note">${esc(data.labels[id] || '')}</span></div>
+            <select data-rule="${esc(id)}">${options}</select>
+        </div>`;
+    }).join('');
+}
+
+async function saveRules() {
+    const token = el('token').value.trim();
+    if (!token) return messageAt('msgRules', 'Podaj token.', false);
+    const overrides = {};
+    document.querySelectorAll('[data-rule]').forEach((select) => {
+        if (select.value) overrides[select.dataset.rule] = select.value;
+    });
+    const response = await fetch('api/admin/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+        body: JSON.stringify({ rules: overrides }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return messageAt('msgRules', data.error || 'Nie udało się zapisać.', false);
+    messageAt('msgRules',
+        `Zapisano. Reguł ustawionych ręcznie: ${Object.keys(data.overrides).length}.`, true);
+}
+
+async function loadMessages() {
+    const token = el('token').value.trim();
+    if (!token) { el('messageRows').innerHTML =
+        '<p class="note">Podaj token, żeby wczytać komunikaty.</p>'; return; }
+    const response = await fetch('api/admin/messages', { headers: { 'X-Admin-Token': token } });
+    if (!response.ok) { el('messageRows').innerHTML =
+        '<p class="note">Nie udało się wczytać komunikatów (token?).</p>'; return; }
+    const data = await response.json();
+    DEFAULT_MESSAGES = data.defaults; INFO_CODES = data.info_codes || [];
+    let headed = false;
+    el('messageRows').innerHTML = Object.keys(DEFAULT_MESSAGES).map((code) => {
+        const isCheck = code.startsWith('check.') || code.startsWith('summary.');
+        const kind = isCheck ? 'kontrola pliku'
+                             : (INFO_CODES.includes(code) ? 'informacja' : 'odmowa');
+        // One divider where the wording stops being about ordering and starts being about the file
+        // that came back — otherwise it is forty inputs in a row.
+        const heading = (isCheck && !headed) ? (headed = true,
+            '<h2 data-msghead style="margin-top:18px">Wynik kontroli pliku</h2>') : '';
+        const current = data.overrides[code] || '';
+        return `${heading}<div data-msgrow style="margin-bottom:12px">
+            <label for="m-${esc(code)}"><code>${esc(code)}</code>
+                <span class="note">· ${kind}</span></label>
+            <input id="m-${esc(code)}" data-code="${esc(code)}" value="${esc(current)}"
+                   placeholder="${esc(DEFAULT_MESSAGES[code])}">
+        </div>`;
+    }).join('');
+}
+
+async function saveMessages() {
+    const token = el('token').value.trim();
+    if (!token) return messageAt('msgMessages', 'Podaj token.', false);
+    const overrides = {};
+    document.querySelectorAll('[data-code]').forEach((input) => {
+        const value = input.value.trim();
+        if (value) overrides[input.dataset.code] = value;
+    });
+    const response = await fetch('api/admin/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+        body: JSON.stringify({ messages: overrides }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return messageAt('msgMessages', data.error || 'Nie udało się zapisać.', false);
+    messageAt('msgMessages',
+        `Zapisano. Własnych tekstów: ${Object.keys(data.overrides).length}.`, true);
+}
+
+async function load() {
+    const data = await (await fetch('api/materials')).json();
+    render(data.materials || []);
+}
+
+function render(list) {
+    const picker = el('tplMaterial');
+    if (picker) {
+        picker.innerHTML = '<option value="">— bez materiału —</option>' + list.map((m) =>
+            `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
+    }
+    el('count').textContent = list.length;
+    el('none').hidden = list.length > 0;
+    el('rows').innerHTML = list.map((m) => `<tr data-mat="${esc(m.id)}">
+        <td class="grip" title="Przeciągnij, żeby zmienić kolejność">⠿</td>
+        <td><code>${esc(m.id)}</code></td>
+        <td>${esc(m.name)}</td>
+        <td class="num">${m.bleed_mm} mm</td>
+        <td class="num">${m.safe_mm} mm</td>
+        <td class="num">${m.min_dpi ?? '—'}</td>
+        <td class="num">${m.max_width_mm ?? '—'}</td>
+        <td>${m.colour}</td>
+        <td>${esc(m.spec_position || 'panel')}${m.cut_path ? ' · cięty' : ''}</td>
+        <td style="white-space:nowrap">
+            <button class="ghost" data-edit='${esc(JSON.stringify(m))}'>Edytuj</button>
+            <button class="danger" data-del="${esc(m.id)}">Usuń</button>
+        </td></tr>`).join('');
+    el('rows').querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => {
+        fill(JSON.parse(b.dataset.edit));
+        el('formTitle').textContent = 'Edytuj materiał';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }));
+    el('rows').querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', () => remove(b.dataset.del)));
+}
+
+function fill(material) {
+    for (const f of FIELDS) {
+        const stored = f === 'cut_path' ? (material[f] ? '1' : '') : material[f];
+        el(f).value = stored ?? FIELD_DEFAULTS[f] ?? '';
+    }
+}
+
+function collect() {
+    const material = {};
+    for (const f of FIELDS) {
+        const value = el(f).value.trim();
+        material[f] = value === '' ? null : value;
+    }
+    return material;
+}
+
+async function save() {
+    const token = el('token').value.trim();
+    if (!token) return message('Podaj token.', false);
+    const response = await fetch('api/admin/materials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+        body: JSON.stringify({ material: collect() }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return message(data.error || 'Nie udało się zapisać.', false);
+    render(data.materials);
+    message(`Zapisano ${data.material.name}.`, true);
+}
+
+async function remove(id) {
+    const token = el('token').value.trim();
+    if (!token) return message('Podaj token.', false);
+    if (!confirm(`Usunąć materiał ${id}? Szablony już wydane zostaną nierozpoznane.`)) return;
+    const response = await fetch('api/admin/materials/' + encodeURIComponent(id),
+                                 { method: 'DELETE', headers: { 'X-Admin-Token': token } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return message(data.error || 'Nie udało się usunąć.', false);
+    render(data.materials);
+    message(`Usunięto ${id}.`, true);
+}
+
+function message(text, good) { messageAt('msg', text, good); }
+
+function messageAt(id, text, good) {
+    const node = el(id);
+    node.textContent = text; node.hidden = false;
+    node.className = 'msg ' + (good ? 'good' : 'bad');
+}
+
+function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+</script>
+</body>
+</html>

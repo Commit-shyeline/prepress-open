@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Runtime state — never commit anything generated at run time.
+state/
+preview_cache/
+*.log
+
+# ⚠️ Customer and shop data must never enter this repository. It is public, and the whole point of
+# starting it from a fresh `git init` (rather than forking the in-house repo) was that the in-house
+# history carries real customer e-mails, tax numbers, order numbers and internal server paths.
+# Template geometry belongs to whoever's dies they are, so a shop's real die library is DATA the code
+# loads at runtime, not content committed here.
+#
+# Anchored with a leading slash, and that matters: written as `templates/` this pattern matched EVERY
+# directory of that name, including `prepress/templates/` — so the Jinja pages the app renders were
+# silently never committed and a fresh clone could not serve a single page.
+/templates/
+/dies/
+/samples/
+# 3D product models are a shop's own renders, the same kind of data as its dies: the viewer reads
+# them from PREPRESS_MODELS_DIR at runtime, and none of them belongs in a public repository.
+/models/
+*.glb
+*.gltf
+*.blend
+*.eml
+*.msg
+auth.json
+settings.local.json
+
+# Local editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# A shop own rules are its data. Start from materials.example.json.
+materials.json

@@ -1,0 +1,23 @@
+# Deliberately permissive, and deliberately without PyMuPDF.
+#
+# The in-house tool this comes from renders with PyMuPDF, which is AGPL-3.0 from Artifex. Nothing here
+# needs it: reportlab draws the templates (BSD), pikepdf edits and stamps PDFs losslessly (MPL-2.0, on
+# qpdf), and pypdfium2 rasterises when a check needs pixels (Apache-2.0 / BSD-3). Keeping it that way
+# means the licence of this project stays a choice rather than something inherited.
+Flask>=3.0
+reportlab>=4.0
+pikepdf>=9.0
+pypdfium2>=4.30
+Pillow>=10.0
+# measure.py counts inked pixels per row over a whole render; a Python loop over that is minutes.
+numpy>=1.26
+
+# Only for the optional session gate (PREPRESS_SESSION_SECRET): verifying a bearer token the
+# shop's own login issued. MIT, and the import is guarded so a standalone install never needs it.
+PyJWT>=2.8
+
+# serve.py — a production WSGI server, because Flask says on every boot that its own is not one.
+waitress>=3.0
+
+# Tests only
+pytest>=8.0

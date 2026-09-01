@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "materials": [
+    {
+      "id": "banner-frontlit-510",
+      "name": "Banner frontlit 510 g",
+      "bleed_mm": 20.0,
+      "safe_mm": 30.0,
+      "min_dpi": 100.0,
+      "max_width_mm": 1600.0,
+      "colour": "cmyk",
+      "notes": "Welded hem and eyelets every 50 cm",
+      "panel_max_long_mm": 25000.0,
+      "panel_max_short_mm": 15000.0,
+      "spec_position": "panel",
+      "cut_path": false
+    },
+    {
+      "id": "mesh",
+      "name": "Mesh 270 g",
+      "bleed_mm": 20.0,
+      "safe_mm": 40.0,
+      "min_dpi": 72.0,
+      "max_width_mm": 3200.0,
+      "colour": "cmyk",
+      "notes": "Perforated — avoid fine type",
+      "panel_max_long_mm": 25000.0,
+      "panel_max_short_mm": 15000.0,
+      "spec_position": "panel",
+      "cut_path": false
+    },
+    {
+      "id": "vinyl-solvent",
+      "name": "Self-adhesive vinyl",
+      "bleed_mm": 3.0,
+      "safe_mm": 3.0,
+      "min_dpi": 300.0,
+      "max_width_mm": 1370.0,
+      "colour": "cmyk",
+      "notes": "Cut to shape — keep artwork clear of the cut line",
+      "panel_max_long_mm": 25000.0,
+      "panel_max_short_mm": 15000.0,
+      "spec_position": "below",
+      "cut_path": true
+    },
+    {
+      "id": "flag-polyester-117",
+      "name": "Flag polyester 117 g",
+      "bleed_mm": 15.0,
+      "safe_mm": 60.0,
+      "min_dpi": 100.0,
+      "max_width_mm": 1600.0,
+      "colour": "cmyk",
+      "notes": "Sewn hem and sleeve eat the edge — keep well inside the safe area",
+      "panel_max_long_mm": 25000.0,
+      "panel_max_short_mm": 15000.0,
+      "spec_position": "margin",
+      "cut_path": false
+    },
+    {
+      "id": "poster-paper-200",
+      "name": "Poster paper 200 g",
+      "bleed_mm": 3.0,
+      "safe_mm": 5.0,
+      "min_dpi": 200.0,
+      "max_width_mm": null,
+      "colour": "cmyk",
+      "notes": "Sheet material — no roll width limit",
+      "panel_max_long_mm": null,
+      "panel_max_short_mm": null,
+      "spec_position": "panel",
+      "cut_path": false
+    }
+  ],
+  "messages": {},
+  "rules": {}
+}

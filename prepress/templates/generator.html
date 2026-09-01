@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Szablon do projektowania | prepress-open</title>
+{% include "_theme.html" %}
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink);
+       font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; }
+header b { font-size: 16px; } header span { opacity: .7; font-size: 12.5px; }
+main { max-width: 1080px; margin: 0 auto; padding: 20px; display: grid; gap: 18px;
+       grid-template-columns: minmax(0, 360px) minmax(0, 1fr); align-items: start; }
+@media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+     margin: 0 0 12px; }
+label { display: block; font-size: 12.5px; font-weight: 600; margin: 10px 0 4px; }
+input, select { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
+                background: var(--surface); color: var(--ink); font: inherit; }
+.row { display: flex; gap: 8px; } .row > * { flex: 1 1 0; min-width: 0; }
+button { padding: 10px 14px; border-radius: 8px; border: 1px solid var(--accent-mid);
+         background: var(--accent-mid); color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+button.ghost, .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.acts { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.hint { font-size: 12px; color: var(--muted); font-weight: 400; }
+.rules { font-size: 12.5px; color: var(--muted); margin-top: 10px; line-height: 1.7; }
+.rules b { color: var(--ink); }
+.err { color: var(--alert); font-size: 12.5px; font-weight: 600; margin-top: 10px; }
+.warn { color: var(--amber); font-size: 12.5px; font-weight: 600; margin-top: 6px; }
+/* Advice, not a problem: how a job will be MADE (panelled, scaled) is information a customer
+   should have, and colouring it like a warning is what made a fine job look broken. */
+.info { color: var(--muted); font-size: 12.5px; font-weight: 500; margin-top: 6px;
+        border-left: 3px solid var(--accent-mid); padding-left: 9px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-size: 11.5px; text-transform: uppercase; color: var(--muted);
+     border-bottom: 1px solid var(--line); padding: 6px 4px; }
+td { padding: 8px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.num { text-align: right; white-space: nowrap; }
+.x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 16px; padding: 0 4px; }
+.x:hover { color: var(--alert); }
+.empty { color: var(--muted); font-size: 13px; padding: 18px 4px; }
+/* A live preview of the three boxes, so the numbers mean something before the download. */
+.preview { display: flex; justify-content: center; padding: 8px; }
+.preview svg { max-width: 100%; height: auto; max-height: 320px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted);
+          margin-top: 10px; }
+.swatch { display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; }
+/* One row per template: name, size, two quiet actions. The family name lives in the group
+   header above the rows, and everything true of EVERY template is said once, above the list. */
+.tpl-family { font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+              color: var(--muted); margin: 14px 0 2px; }
+.tpl-family:first-child { margin-top: 4px; }
+.tpl-pick { display: flex; gap: 10px; align-items: center; margin: 2px 0 8px; }
+.tpl-pick span { font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.tpl-pick select { flex: 1; }
+.tpl { display: flex; gap: 10px; align-items: center; padding: 8px 0;
+       border-bottom: 1px solid var(--line); }
+.tpl:last-child { border-bottom: 0; }
+.tpl .nm { font-weight: 700; }
+.tpl .sz { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums;
+           white-space: nowrap; }
+.tpl .fill { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: baseline;
+             flex-wrap: wrap; }
+.tpl .note { flex-basis: 100%; margin: 0; }
+.tpl .act { display: flex; gap: 6px; flex-shrink: 0; }
+.tpl .act a { text-decoration: none; white-space: nowrap; padding: 7px 11px; border-radius: 8px;
+              font-weight: 600; font-size: 13px; border: 1px solid var(--line);
+              color: var(--ink); }
+.tpl .act a.main { background: var(--accent-mid); border-color: var(--accent-mid); color: #fff; }
+
+/* ── Hero ──
+   A real flag turning behind the headline. The words are plain HTML and never wait for WebGL: if
+   the iframe fails, is blocked, or the visitor asked for reduced motion, the hero is simply a
+   headline and a button on the page's own background. */
+/* Text and flag each get their own COLUMN, and neither is laid over the other.
+   The previous version floated the copy on top of the 3D behind a pale gradient, which washed the
+   print out to a ghost of itself to keep the words readable: the flag is the product, and a wash
+   over the product to rescue text that should not have been there is a poor trade (the shop,
+   2026-08-31). Side by side, the copy sits on the page's own background and the artwork is shown
+   at full strength. */
+.hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--line);
+        min-height: 470px;
+        display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+        align-items: center;
+        background: linear-gradient(180deg,
+                    color-mix(in srgb, var(--accent-mid) 9%, var(--canvas)), var(--canvas)); }
+/* In its own cell, so a close-up in the tour never reaches the words. The fade is only along the
+   bottom, where the section ends: a 3D scene meeting a hard edge there reads as a guillotine
+   straight across the flag. */
+.hero-flag { width: 100%; height: 100%; min-height: 470px; border: 0;
+             pointer-events: none; align-self: stretch;
+             /* Second column, though it comes FIRST in the markup: the flag is decoration and the
+                heading is the page's real opening, so a screen reader and a search engine should
+                meet the words first. Grid places it, source order does not. */
+             grid-column: 2; grid-row: 1;
+             -webkit-mask-image: linear-gradient(180deg, #000 74%, transparent 98%);
+             mask-image: linear-gradient(180deg, #000 74%, transparent 98%); }
+.hero-inner { grid-column: 1; grid-row: 1;
+              padding: 90px 12px 58px 20px; display: flex; flex-direction: column;
+              align-items: flex-start; gap: 14px; justify-self: end;
+              max-width: 560px; }
+.hero h1 { margin: 0; font-size: clamp(26px, 4vw, 40px); line-height: 1.12; font-weight: 800;
+           letter-spacing: -.02em; max-width: 16ch; text-wrap: balance; }
+.hero p { margin: 0; max-width: 46ch; color: var(--muted); font-size: 15.5px; }
+.hero .cta { display: inline-block; margin-top: 4px; padding: 13px 22px; border-radius: 10px;
+             background: var(--accent-mid); color: #fff; font-weight: 800; font-size: 16px;
+             text-decoration: none; border: 1px solid var(--accent-mid); }
+.hero .cta:hover { filter: brightness(1.06); }
+.hero .cta:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+@media (max-width: 760px) {
+    /* Stacked: the flag flies in the upper half at full strength, the words sit under it on the
+       page's own background. Still no wash over the artwork. */
+    .hero { grid-template-columns: 1fr; grid-template-rows: 46svh auto; min-height: 0;
+            align-items: stretch; }
+    .hero-flag { min-height: 0; grid-column: 1; grid-row: 1;
+                 -webkit-mask-image: linear-gradient(180deg, #000 76%, transparent 99%);
+                 mask-image: linear-gradient(180deg, #000 76%, transparent 99%); }
+    .hero-inner { grid-column: 1; grid-row: 2;
+                  padding: 10px 18px 30px; max-width: none; justify-self: stretch; }
+    .hero h1 { max-width: none; }
+}
+}
+</style>
+</head>
+<body class="hero-page">
+{% with page_title = 'Szablon do projektowania',
+        page_sub = 'Wybierz materiał i podaj wymiary' %}{% include "_brand_header.html" %}{% endwith %}
+
+<section class="hero">
+    <iframe class="hero-flag" id="heroFlag" title="" aria-hidden="true" tabindex="-1"
+            loading="lazy" scrolling="no"></iframe>
+    <div class="hero-inner">
+        <h1>Sprawdź swoje pliki, zanim pójdą do druku</h1>
+        <p>Wgraj projekt. Sprawdzimy rozdzielczość, spady, kolory i obszar bezpieczny,
+           i powiemy, co poprawić. Możesz też pobrać nasz szablon i projektować od razu na nim.</p>
+        <a class="cta" href="{{ base }}/plik">Sprawdź swoje pliki</a>
+    </div>
+</section>
+
+<main>
+    <div class="card" id="tplCard" hidden>
+        <h2>Gotowe szablony</h2>
+        <p class="note" style="margin-top:-4px">
+            Szablony naszych produktów. Każdy arkusz ma zaznaczony spad, linię cięcia i obszar
+            bezpieczny, w rozmiarze, w jakim produkujemy.
+            <span id="tplShared"></span>
+        </p>
+        <label class="tpl-pick">
+            <span>Rodzaj flagi</span>
+            <select id="tplFamily"></select>
+        </label>
+        <div id="tplList"></div>
+    </div>
+
+    <div class="card">
+        <h2>Nowa pozycja</h2>
+        <label for="material">Materiał</label>
+        <select id="material"></select>
+
+        <label>Wymiar gotowy (netto)</label>
+        <div class="row">
+            <input id="width" type="text" inputmode="decimal" placeholder="szerokość" aria-label="szerokość">
+            <input id="height" type="text" inputmode="decimal" placeholder="wysokość" aria-label="wysokość">
+            <select id="unit" aria-label="jednostka">
+                <option value="cm" selected>cm</option>
+                <option value="mm">mm</option>
+                <option value="m">m</option>
+            </select>
+        </div>
+
+        <label for="label">Opis <span class="hint">(opcjonalnie, trafia na stronę)</span></label>
+        <input id="label" type="text" placeholder="np. Baner wejście">
+
+        <div class="acts">
+            <button id="add">+ Dodaj do listy</button>
+            <button id="one" class="ghost">Pobierz tylko tę</button>
+        </div>
+        <p id="err" class="err" hidden></p>
+        <div id="warn"></div>
+        <div id="rules" class="rules"></div>
+    </div>
+
+    <div>
+        <div class="card">
+            <h2>Podgląd</h2>
+            <div class="preview" id="preview"></div>
+            <div class="legend">
+                <span><i class="swatch" style="background:var(--brutto)"></i>brutto (krawędź strony)</span>
+                <span><i class="swatch" style="background:var(--netto)"></i>netto (linia cięcia)</span>
+                <span><i class="swatch" style="background:var(--safe)"></i>obszar bezpieczny</span>
+            </div>
+        </div>
+
+        <div class="card" style="margin-top:18px">
+            <h2>Lista do pobrania (<span id="count">0</span>)</h2>
+            <table>
+                <thead><tr><th>Pozycja</th><th class="num">Netto</th><th class="num">Strona</th><th></th></tr></thead>
+                <tbody id="queue"></tbody>
+            </table>
+            <p id="queueEmpty" class="empty">Nic jeszcze nie dodano. Każda pozycja to jedna strona w PDF.</p>
+            <div class="acts">
+                <button id="download" disabled>Pobierz PDF</button>
+                <button id="clear" class="ghost" disabled>Wyczyść</button>
+            </div>
+        </div>
+    </div>
+</main>
+
+<script>
+const el = (id) => document.getElementById(id);
+let MATERIALS = [];
+const queue = [];
+
+fetch('api/materials').then((r) => r.json()).then((d) => {
+    MATERIALS = d.materials || [];
+    el('material').innerHTML = MATERIALS.length
+        ? MATERIALS.map((m) => `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('')
+        : '<option value="">Brak materiałów. Dodaj je w panelu admina.</option>';
+    showRules();
+    refreshPreview();
+});
+
+el('material').addEventListener('change', () => { showRules(); refreshPreview(); });
+for (const id of ['width', 'height', 'unit']) {
+    el(id).addEventListener('input', refreshPreview);
+    el(id).addEventListener('change', refreshPreview);
+}
+el('add').addEventListener('click', () => resolveCurrent().then((r) => { if (r) addToQueue(r); }));
+el('one').addEventListener('click', () => resolveCurrent().then((r) => { if (r) download([current()]); }));
+el('download').addEventListener('click', () => download(queue.map((q) => q.input)));
+el('clear').addEventListener('click', () => { queue.length = 0; renderQueue(); });
+
+function current() {
+    return { material: el('material').value, width: el('width').value.trim(),
+             height: el('height').value.trim(), unit: el('unit').value,
+             label: el('label').value.trim() };
+}
+
+function material() { return MATERIALS.find((m) => m.id === el('material').value); }
+
+function showRules() {
+    const m = material();
+    el('rules').innerHTML = m ? [
+        `Spad: <b>${m.bleed_mm} mm</b> z każdej strony`,
+        `Obszar bezpieczny: <b>${m.safe_mm} mm</b> od linii cięcia`,
+        m.min_dpi ? `Minimalna rozdzielczość: <b>${m.min_dpi} DPI</b>` : null,
+        m.max_width_mm ? `Szerokość roli: <b>${m.max_width_mm} mm</b>` : null,
+        m.colour === 'cmyk' ? 'Kolory: <b>CMYK</b>' : null,
+        m.notes ? escapeHtml(m.notes) : null,
+    ].filter(Boolean).join('<br>') : '';
+}
+
+let previewToken = 0;
+async function refreshPreview() {
+    const token = ++previewToken;
+    const input = current();
+    if (!input.material || !input.width || !input.height) { el('preview').innerHTML = ''; return; }
+    const resolved = await postJson('api/resolve', input);
+    if (token !== previewToken) return;                 // a later keystroke already won
+    if (resolved.error) { el('preview').innerHTML = ''; showNotices([]); return; }
+    drawPreview(resolved.item);
+    // Text comes rendered from the server: the wording belongs to the shop, so the page holds no
+    // copy of it and cannot drift from what the admin wrote.
+    showNotices(resolved.notices || []);
+}
+
+/** The three boxes, to scale, so the numbers are not abstract. */
+function drawPreview(entry) {
+    const [bw, bh] = entry.brutto_mm, [nw, nh] = entry.netto_mm, [sw, sh] = entry.safe_mm_box;
+    const box = 300, k = box / Math.max(bw, bh);
+    const w = bw * k, h = bh * k;
+    const rect = (rw, rh, colour, dash) =>
+        `<rect x="${(w - rw * k) / 2}" y="${(h - rh * k) / 2}" width="${rw * k}" height="${rh * k}"
+               fill="none" stroke="${colour}" stroke-width="1.2"
+               ${dash ? 'stroke-dasharray="4 3"' : ''}/>`;
+    el('preview').innerHTML =
+        `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img"
+              aria-label="Podgląd ${nw}×${nh} mm">
+            ${rect(bw, bh, 'var(--brutto)')}
+            ${rect(nw, nh, 'var(--netto)', true)}
+            ${rect(sw, sh, 'var(--safe)')}
+         </svg>`;
+}
+
+function showNotices(list) {
+    el('warn').innerHTML = list.map((n) =>
+        `<div class="${n.level === 'info' ? 'info' : 'warn'}">${escapeHtml(n.text)}</div>`).join('');
+}
+
+async function resolveCurrent() {
+    showError('');
+    const input = current();
+    if (!input.material) return showError('Najpierw dodaj materiał w panelu admina.'), null;
+    const resolved = await postJson('api/resolve', input);
+    if (resolved.error) return showError(resolved.error), null;
+    return resolved;
+}
+
+function addToQueue(resolved) {
+    queue.push({ input: current(), item: resolved.item, page: resolved.page_mm });
+    el('width').value = ''; el('height').value = ''; el('label').value = '';
+    el('preview').innerHTML = ''; showNotices([]);
+    renderQueue();
+    el('width').focus();
+}
+
+function renderQueue() {
+    el('count').textContent = queue.length;
+    el('queueEmpty').hidden = queue.length > 0;
+    el('download').disabled = queue.length === 0;
+    el('clear').disabled = queue.length === 0;
+    el('queue').innerHTML = queue.map((q, index) => {
+        const [nw, nh] = q.item.netto_mm, [pw, ph] = q.page;
+        const scale = q.item.scale === 1 ? '' : ` <span class="hint">1:${q.item.scale}</span>`;
+        const panels = (q.item.panels || 1) > 1
+            ? ` <span class="hint">· ${q.item.panels} bryty</span>` : '';
+        const name = q.item.label ? escapeHtml(q.item.label) + ' · ' : '';
+        return `<tr>
+            <td>${name}${escapeHtml(q.item.material_name)}${scale}${panels}</td>
+            <td class="num">${round(nw)}×${round(nh)} mm</td>
+            <td class="num">${round(pw)}×${round(ph)} mm</td>
+            <td><button class="x" data-i="${index}" aria-label="Usuń">×</button></td>
+        </tr>`;
+    }).join('');
+    el('queue').querySelectorAll('.x').forEach((b) =>
+        b.addEventListener('click', () => { queue.splice(+b.dataset.i, 1); renderQueue(); }));
+}
+
+async function download(items) {
+    showError('');
+    const response = await fetch('api/template', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+    });
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        return showError(data.error || 'Nie udało się wygenerować PDF.');
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = items.length === 1 ? 'szablon.pdf' : `szablony-${items.length}.pdf`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+async function postJson(path, body) {
+    try {
+        const response = await fetch(path, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        return await response.json();
+    } catch (_) { return { error: 'Brak połączenia z serwerem.' }; }
+}
+
+// ── Templates the shop imported ─────────────────────────────────────────────
+// Only the name, the finished size and what the product does. The outline itself is never published:
+// a customer picking a template does not need its geometry, and the shape of a die is not ours to
+// hand out.
+async function loadTemplates() {
+    let templates = [];
+    try {
+        templates = (await (await fetch('api/templates')).json()).templates || [];
+    } catch (e) {
+        return;                                   // no templates is a normal state, not an error
+    }
+    if (!templates.length) return;
+    el('tplCard').hidden = false;
+
+    /* Whatever suffix EVERY name shares is said once above the list, not nineteen times in it —
+       computed, not hardcoded, so a mixed library (a future „dwustronna") simply stops sharing it
+       and every name keeps its own words. */
+    const sharedSuffix = (names) => {
+        const words = names.map((n) => (n || '').trim().split(/\s+/));
+        let shared = 0;
+        while (words.length > 1 && words.every((w) => w.length > shared + 1
+                && w[w.length - 1 - shared] === words[0][words[0].length - 1 - shared])) {
+            shared += 1;
+        }
+        return shared;
+    };
+    const shared = sharedSuffix(templates.map((t) => t.name));
+    const words = templates.map((t) => (t.name || '').trim().split(/\s+/));
+    const sharedText = shared ? words[0].slice(-shared).join(' ') : '';
+    el('tplShared').textContent = sharedText
+        ? ` Wszystkie poniżej: ${sharedText} Tył flagi to lustrzane przebicie przodu.` : '';
+
+    /* Grouped by family — the word the sizes hang off. Sizes read in centimetres, because that is
+       how flags are ordered (60×220), with the exact mm one hover away. */
+    const familyOf = (name) => {
+        const m = name.match(/^Flaga\s+(Vento\s+Regular|[SML]|XL)\b/i);
+        return m ? m[1].toUpperCase().replace(/\s+/, ' ') : 'POZOSTAŁE';
+    };
+    const groups = new Map();
+    templates.forEach((t) => {
+        const family = familyOf(t.name || '');
+        if (!groups.has(family)) groups.set(family, []);
+        groups.get(family).push(t);
+    });
+
+    const labelFor = (family) => /^VENTO/.test(family) ? 'Vento Regular'
+        : family === 'POZOSTAŁE' ? 'Inne' : `Vento ${family}`;
+    // Price-list order, not the order the library happened to be imported in.
+    const ORDER = ['VENTO REGULAR', 'S', 'M', 'L', 'XL', 'POZOSTAŁE'];
+    const families = [...groups.keys()].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
+
+    const picker = el('tplFamily');
+    picker.innerHTML = families
+        .map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(labelFor(f))}</option>`).join('');
+    picker.addEventListener('change', () => showFamily(picker.value));
+    showFamily(families[0]);
+
+    function showFamily(family) {
+        const list = groups.get(family) || [];
+        // Trimmed against THIS family, so a name says what distinguishes it from its siblings and
+        // nothing else. One odd template elsewhere in the library no longer lengthens every name.
+        const trim = Math.max(shared, sharedSuffix(list.map((t) => t.name)));
+        el('tplList').innerHTML = list.map((t) => {
+            let short = (t.name || '').trim();
+            if (trim) short = short.split(/\s+/).slice(0, -trim).join(' ');
+            short = short.replace(/^Flaga\s+(Vento\s+Regular|[SML]|XL)\s*/i, '') || short;
+            const mm = t.trim_mm || [];
+            const cm = mm.map((v) => Math.round(v / 10)).join(' × ');
+            return `<div class="tpl">
+                <div class="fill">
+                    <span class="nm">${escapeHtml(short)}</span>
+                    <span class="sz" title="dokładnie ${mm.map(round).join(' × ')} mm ·
+                        spad ${t.bleed_mm} mm · obszar bezpieczny ${t.safe_mm} mm">${cm} cm</span>
+                    ${t.note ? `<div class="note">${escapeHtml(t.note)}</div>` : ''}
+                </div>
+                <div class="act">
+                    <a href="model/${encodeURIComponent(t.token)}"
+                       title="Obróć flagę w 3D Kształt bierzemy z tego samego obrysu, który tnie ploter">3D</a>
+                    <a class="main" href="api/templates/${encodeURIComponent(t.token)}/pdf">Szablon PDF</a>
+                </div>
+            </div>`;
+        }).join('');
+    }
+}
+
+loadTemplates();
+
+/* The hero flag: the first saved template, shown in the scene's decoration mode. Pointed at only
+   after the list loads, so the page never asks for a token that does not exist — and skipped
+   entirely when there are no templates, which is a normal state for a fresh install. */
+async function loadHeroFlag() {
+    try {
+        const templates = (await (await fetch('api/templates')).json()).templates || [];
+        if (!templates.length) return;
+        const pick = templates.find((t) => /Play A/i.test(t.name || '')) || templates[0];
+        document.getElementById('heroFlag').src =
+            `model/${encodeURIComponent(pick.token)}?bare=1`;
+    } catch (e) {
+        /* No flag in the hero is a fine hero. */
+    }
+}
+
+loadHeroFlag();
+
+function showError(message) { el('err').textContent = message; el('err').hidden = !message; }
+function round(v) { return Math.round(v); }
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+</script>
+<footer class="agpl-note">
+    <a href="https://github.com/Commit-shyeline/prepress-open" rel="noopener"
+       target="_blank">prepress-open</a>. Wolne oprogramowanie na licencji AGPL-3.0.
+    Kod źródłowy tej strony jest publiczny.
+</footer>
+<style>
+.agpl-note { padding: 18px 20px 26px; font-size: 12px; color: var(--muted); text-align: center; }
+.agpl-note a { color: inherit; text-decoration: underline; }
+body.bare .agpl-note, body.embed .agpl-note { display: none; }
+</style>
+</body>
+</html>

@@ -1,0 +1,87 @@
+{# The whole colour system and the light/dark switch, in one file included by every page.
+
+   It lives here rather than in each template because the two templates had already drifted: the
+   customer page and the panel each carried their own copy of the token block, and the header rule
+   in BOTH read `background: var(--ink)` — which is the TEXT colour, so a dark theme painted a pale
+   grey bar and then wrote white on it. One copy cannot half-fix that.
+
+   Anything a page needs in only one place still belongs in that page. What is here is what would
+   otherwise be written twice. #}
+<style>
+:root {
+    /* Light is the base palette. */
+    --ink: #23262f; --muted: #6b7080; --line: #dcdfe6; --surface: #fff; --canvas: #f6f7f9;
+    --accent: #2f7d40; --accent-mid: #3ea855; --alert: #a5101e; --amber: #8a5300;
+    /* The green fails contrast as text (1.9:1 on white), so anything WRITTEN in the accent uses
+       --accent-text and --accent-soft is the same hue as a fill. */
+    --accent-text: #1f6b33; --accent-soft: rgba(62,168,85,.16);
+    /* The top bar has its own pair. It is dark in BOTH themes, so it cannot borrow the text colour. */
+    --bar-bg: #23262f; --bar-ink: #ffffff; --bar-link: #9fe0b0;
+    /* The three guide colours are matched to the ink in the generated PDF and stay put in both
+       themes — a legend that changes colour stops being a legend. */
+    --brutto: #8c8c92; --netto: #d81a73; --safe: #2f9e52;
+}
+/* Un-stamped documents (the default "system" setting) resolve here; the :not() lets an explicit
+   light choice beat a dark OS. */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --ink: #e8eaf0; --muted: #9498a6; --line: #343845; --surface: #1c1f26; --canvas: #13151a;
+        --accent: #7fd995; --alert: #ff8f96; --amber: #e0a63a;
+        --accent-text: #7fd995; --accent-soft: rgba(62,168,85,.22);
+        --bar-bg: #191c22; --bar-ink: #e8eaf0;
+    }
+}
+/* And again for an explicit dark choice, so the toggle wins in both directions. */
+:root[data-theme="dark"] {
+    --ink: #e8eaf0; --muted: #9498a6; --line: #343845; --surface: #1c1f26; --canvas: #13151a;
+    --accent: #7fd995; --alert: #ff8f96; --amber: #e0a63a;
+    --accent-text: #7fd995; --accent-soft: rgba(62,168,85,.22);
+    --bar-bg: #191c22; --bar-ink: #e8eaf0;
+}
+
+header { background: var(--bar-bg); color: var(--bar-ink); padding: 14px 20px;
+         border-bottom: 1px solid var(--line); display: flex; gap: 12px; flex-wrap: wrap;
+         align-items: baseline; }
+header a { color: var(--bar-link); }
+
+.theme-toggle { margin-left: auto; padding: 5px 12px; font: inherit; font-size: 12.5px;
+                font-weight: 600; cursor: pointer; border-radius: 999px; background: transparent;
+                border: 1px solid rgba(127,127,127,.45); color: var(--bar-ink); }
+.theme-toggle:hover { border-color: var(--bar-ink); }
+.theme-toggle:focus-visible { outline: 2px solid var(--accent-mid); outline-offset: 2px; }
+</style>
+<script>
+// Runs in <head>, before the body paints, so the page never flashes the wrong theme.
+(function () {
+    const KEY = 'prepress_theme';
+    const ORDER = ['auto', 'light', 'dark'];
+    const LABEL = { auto: 'Motyw: auto', light: 'Motyw: jasny', dark: 'Motyw: ciemny' };
+
+    const chosen = () => ORDER.includes(localStorage.getItem(KEY))
+        ? localStorage.getItem(KEY) : 'auto';
+
+    function apply(mode) {
+        // 'auto' removes the stamp entirely rather than writing one, which is what hands the
+        // decision back to prefers-color-scheme.
+        if (mode === 'auto') delete document.documentElement.dataset.theme;
+        else document.documentElement.dataset.theme = mode;
+        const button = document.getElementById('themeToggle');
+        if (button) {
+            button.textContent = LABEL[mode];
+            button.setAttribute('aria-label', `${LABEL[mode]} — kliknij, żeby zmienić`);
+        }
+    }
+
+    apply(chosen());
+    document.addEventListener('DOMContentLoaded', () => {
+        apply(chosen());
+        const button = document.getElementById('themeToggle');
+        if (!button) return;
+        button.addEventListener('click', () => {
+            const next = ORDER[(ORDER.indexOf(chosen()) + 1) % ORDER.length];
+            localStorage.setItem(KEY, next);
+            apply(next);
+        });
+    });
+})();
+</script>

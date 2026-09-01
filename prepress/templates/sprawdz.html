@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Sprawdź plik do druku | prepress-open</title>
+{% include "_theme.html" %}
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink);
+       font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; }
+header b { font-size: 16px; }
+main { max-width: 1180px; margin: 0 auto; padding: 20px; display: grid; gap: 18px;
+       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+        padding: 16px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+     margin: 0 0 12px; }
+.note { font-size: 12.5px; color: var(--muted); }
+/* The dropzone is the page's first citizen: its border IS the affordance, visible before any drag. */
+.dropzone { display: block; border: 2px dashed var(--line); border-radius: 12px;
+            padding: 26px 16px; text-align: center; cursor: pointer;
+            transition: border-color .12s, background-color .12s; }
+/* A label is inline by default, and an INLINE border follows the line boxes — the moment the
+   hint text wrapped, the dashed outline broke into steps. block restores the rectangle. */
+.page-nav { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+.page-nav .pick.now { border-color: var(--accent-mid); background: var(--accent-soft);
+                      cursor: default; }
+.dropzone.is-over { border-color: var(--accent-mid); background: var(--accent-soft); }
+.dropzone b { display: block; font-size: 16px; margin-bottom: 4px; }
+.dropzone input { display: none; }
+.spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line);
+        border-top-color: var(--accent-mid); border-radius: 50%;
+        animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+/* The verdict list: one row per finding, the level as a dot, the words from the shop's wording. */
+.summary { font-weight: 800; font-size: 16px; margin: 0 0 10px; }
+.chk { display: grid; grid-template-columns: 14px 1fr; gap: 10px; padding: 9px 2px;
+       border-bottom: 1px solid var(--line); }
+.chk:last-child { border-bottom: 0; }
+.chk .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; }
+.chk.green .dot { background: var(--accent-mid); }
+.chk.amber .dot { background: #c77700; }
+.chk.red .dot { background: #d21f3c; }
+.chk.info .dot { background: var(--muted); }
+.chk .t { font-weight: 700; font-size: 14px; }
+.chk .d { font-size: 13px; color: var(--muted); }
+.unrec { border-left: 3px solid #c77700; padding: 10px 14px; background: var(--accent-soft);
+         border-radius: 0 8px 8px 0; font-size: 14px; }
+/* The model frame keeps the flag inspectable next to the verdict. */
+#modelWrap { position: sticky; top: 12px; }
+#modelFrame { width: 100%; height: min(78vh, 760px); border: 1px solid var(--line);
+              border-radius: 12px; background: var(--canvas); }
+.msg { font-size: 13px; font-weight: 600; margin-top: 10px; }
+.msg.bad { color: var(--alert); }
+.pick { padding: 9px 14px; border-radius: 8px; border: 1px solid var(--line);
+        background: var(--surface); color: var(--ink); font: inherit; font-size: 13.5px;
+        font-weight: 600; cursor: pointer; }
+.pick:hover { border-color: var(--accent-mid); }
+.side-h { font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+          color: var(--muted); margin: 14px 0 4px; }
+.side-h:first-child { margin-top: 0; }
+.assumed { font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
+</style>
+</head>
+<body>
+{% with page_title = 'Sprawdź plik do druku',
+        page_sub = 'Rozpoznamy szablon i pokażemy plik na gotowym produkcie',
+        extra_actions = '<a href="' ~ base ~ '/">← szablony</a>' %}
+{% include "_brand_header.html" %}{% endwith %}
+
+<main>
+    <div>
+        <div class="card">
+            <h2>Twój plik</h2>
+            <label class="dropzone" id="drop" for="file">
+                <b>Przeciągnij tu plik PDF</b>
+                <span class="note">albo kliknij i wybierz. Najlepiej projekt na naszym
+                    szablonie. Flaga dwustronna? Wrzuć oba pliki naraz, przód i tył.</span>
+                <input id="file" type="file" accept=".pdf,application/pdf" multiple>
+            </label>
+            <p id="msg" class="msg" hidden></p>
+            <div id="pageNav" class="page-nav" hidden></div>
+            <div id="pickTpl" hidden style="margin-top:12px">
+                <p class="note" style="margin:0 0 8px"><b>Ten plik nie ma naszego stempla</b> —
+                    powstał na starszym szablonie. Rozmiar strony pasuje do poniższych: wybierz,
+                    na którym projektowano, a sprawdzimy plik względem jego linii.</p>
+                <div id="pickBtns" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+            </div>
+        </div>
+        <div class="card" id="reportCard" hidden style="margin-top:18px">
+            <h2>Wynik kontroli</h2>
+            <p class="summary" id="summary"></p>
+            <div id="checks"></div>
+        </div>
+    </div>
+
+    <div id="modelWrap" hidden>
+        <iframe id="modelFrame" title="Podgląd 3D twojego pliku na fladze"></iframe>
+        <p class="note" style="margin-top:6px">Czerwone i bursztynowe ramki na fladze to miejsca
+            z wyniku kontroli To ta sama geometria, którą mierzy raport.</p>
+    </div>
+</main>
+
+<script>
+/* The whole check loop, client side: file → /api/check → verdict list + the SAME 3D scene the
+   template preview uses, wearing the customer's own raster (handed over by postMessage — the bytes
+   never touch the server's disk; the raster comes back in the check response and lives only here).
+
+   No queueing, no retry theatre: one file at a time, and a second drop simply replaces the first. */
+const el = (id) => document.getElementById(id);
+
+function isFileDrag(event) {
+    const types = Array.from(event.dataTransfer?.types || []);
+    return types.includes('Files') || types.includes('application/x-moz-file');
+}
+
+// Same drag-depth mechanics as the admin page, for the same reason: children fire enter/leave too.
+let depth = 0;
+const zone = el('drop');
+zone.addEventListener('dragenter', (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault(); depth += 1; zone.classList.add('is-over');
+});
+zone.addEventListener('dragover', (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+});
+zone.addEventListener('dragleave', (e) => {
+    if (!isFileDrag(e)) return;
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) zone.classList.remove('is-over');
+});
+zone.addEventListener('drop', (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault(); depth = 0; zone.classList.remove('is-over');
+    takeFiles([...(e.dataTransfer.files || [])]);
+});
+el('file').addEventListener('change', () => takeFiles([...el('file').files]));
+
+/* One or two PDFs. With two, którą stroną jest który mówi nazwa (przod/tyl, _a/_b) — measured
+   convention of the real order folders — and kolejność wyboru rozstrzyga remis. */
+let PAIR = null;                                    // { front: File, back: File|null }
+function takeFiles(files) {
+    const pdfs = files.filter((f) => /\.pdf$/i.test(f.name || ''));
+    if (!pdfs.length) {
+        return message('To nie są pliki PDF Sprawdzamy pliki PDF.', true);
+    }
+    if (pdfs.length > 2) {
+        return message('Najwyżej dwa pliki: przód i tył flagi dwustronnej.', true);
+    }
+    const isBack = (f) => /ty[lł]|_b\b|\bb\b/i.test(f.name || '');
+    const isFront = (f) => /prz[oó]d|_a\b/i.test(f.name || '');
+    let front = pdfs[0], back = pdfs[1] || null;
+    if (pdfs.length === 2 && (isBack(pdfs[0]) || isFront(pdfs[1]))) {
+        [front, back] = [pdfs[1], pdfs[0]];
+    }
+    PAIR = { front, back };
+    checkPair(null);
+}
+
+function message(text, bad) {
+    const box = el('msg');
+    box.hidden = !text;
+    box.className = 'msg' + (bad ? ' bad' : '');
+    box.innerHTML = text || '';
+}
+
+async function checkOne(file, template, side, page) {
+    const body = new FormData();
+    body.append('file', file);
+    if (template) body.append('template', template);
+    // 'back' silences the wykrojnik check: the die line travels with the front file of a pair.
+    if (side) body.append('side', side);
+    if (page) body.append('page', page);
+    const resp = await fetch('{{ base }}/api/check', { method: 'POST', body, headers: authHeaders() });
+    if (resp.status === 401) {
+        goToLogin();
+        return { error: 'Zaloguj się, żeby sprawdzić plik.' };
+    }
+    try {
+        return await resp.json();
+    } catch {
+        // A proxy or the framework answered with an HTML error page — say the status in Polish
+        // instead of surfacing "unexpected end of JSON input".
+        return { error: `Serwer odpowiedział błędem (${resp.status}). Spróbuj ponownie.` };
+    }
+}
+
+/* ── The session, when the shop put this behind one ──────────────────────────
+   The token is minted by the shop's own login and kept in sessionStorage, which is per-ORIGIN:
+   this page therefore has to be served from the same host as that login, and a copy on another
+   subdomain would see no session at all. Standalone (no `gated`), none of this runs and the page
+   behaves exactly as it always has. */
+const GATED = {{ 'true' if gated else 'false' }};
+const LOGIN_URL = {{ (login_url or '')|tojson }};
+const TOKEN_KEY = {{ session_key|tojson }};
+const BASE = {{ base|tojson }};
+
+function authHeaders() {
+    const token = GATED ? (sessionStorage.getItem(TOKEN_KEY) || '') : '';
+    return token ? { Authorization: 'Bearer ' + token } : {};
+}
+
+function goToLogin() {
+    if (!LOGIN_URL) return;
+    // Where to come back to, so logging in does not dump the customer on somebody else's page.
+    const back = encodeURIComponent(window.location.pathname + window.location.search);
+    window.location.href = LOGIN_URL.replace('{next}', back);
+}
+
+/* Asked once on load: a customer who is not logged in should learn it from the page, not from a
+   refusal after they have already picked a 90 MB file. */
+if (GATED) {
+    fetch('{{ base }}/api/session', { headers: authHeaders() })
+        .then((resp) => resp.json())
+        .then((data) => {
+            if (data.authenticated) return;
+            message('Zaloguj się, żeby sprawdzić plik. Przenosimy Cię do logowania…', true);
+            setTimeout(goToLogin, 1200);
+        })
+        .catch(() => { /* offline: the check itself will say so */ });
+}
+
+/* The whole pair, front first. An unstamped front comes back with candidates; the pick re-runs
+   BOTH sides against the chosen template, so przód and tył are judged by the same lines. */
+async function checkPair(template, page = 0) {
+    message('<span class="spin"></span>Sprawdzamy plik…', false);
+    el('reportCard').hidden = true;
+    el('modelWrap').hidden = true;
+    el('pickTpl').hidden = true;
+
+    let front, back = null;
+    try {
+        front = await checkOne(PAIR.front, template, null, page);
+        if (front.recognised && PAIR.back) {
+            back = await checkOne(PAIR.back, template || front.template_token, 'back', page);
+        }
+    } catch (e) {
+        return message('Nie udało się sprawdzić pliku: ' + escapeHtml(e.message), true);
+    }
+    // A multi-page file gets pagination: each page is its own full check (both sides of a pair).
+    const nav = el('pageNav');
+    if (front.recognised && (front.page_count || 1) > 1) {
+        nav.hidden = false;
+        nav.innerHTML = Array.from({ length: front.page_count }, (_, i) =>
+            `<button type="button" class="pick${i === (front.page || 0) ? ' now' : ''}"
+                     data-page="${i}">Strona ${i + 1}</button>`).join('');
+        nav.querySelectorAll('[data-page]').forEach((btn) =>
+            btn.addEventListener('click', () => {
+                if (Number(btn.dataset.page) !== (front.page || 0)) {
+                    checkPair(template, Number(btn.dataset.page));
+                }
+            }));
+    } else {
+        nav.hidden = true;
+    }
+    if (front.error) return message(escapeHtml(front.error), true);
+    if (back && back.error) return message('Tył: ' + escapeHtml(back.error), true);
+    message('');
+
+    if (!front.recognised && (front.candidates || []).length) {
+        el('pickTpl').hidden = false;
+        el('pickBtns').innerHTML = front.candidates.map((c) =>
+            `<button type="button" class="pick" data-tpl="${escapeHtml(c.token)}">
+                 ${escapeHtml(c.name)}</button>`).join('');
+        el('pickBtns').querySelectorAll('[data-tpl]').forEach((btn) =>
+            btn.addEventListener('click', () => checkPair(btn.dataset.tpl)));
+        return;
+    }
+    renderReport(front, back);
+    if (front.recognised && front.template_token) showModel(front, back);
+}
+
+function checksHtml(data) {
+    return (data.checks || []).map((c) => `
+        <div class="chk ${escapeHtml(c.level)}">
+            <span class="dot"></span>
+            <span>
+                <span class="t">${escapeHtml(c.title || c.code)}</span>
+                ${c.detail ? `<div class="d">${escapeHtml(c.detail)}</div>` : ''}
+            </span>
+        </div>`).join('');
+}
+
+function renderReport(front, back) {
+    el('reportCard').hidden = false;
+    if (!front.recognised) {
+        el('summary').textContent = '';
+        el('checks').innerHTML = `<div class="unrec">Nie rozpoznaliśmy szablonu:
+            ${escapeHtml(front.reason || '')}<br>
+            <span class="note">Pobierz szablon z <a href="${BASE}/">generatora</a> i umieść projekt na nim —
+            wtedy sprawdzimy plik względem właściwych linii.</span></div>`;
+        return;
+    }
+    if (front.bare_template) {
+        el('summary').textContent = '';
+        el('checks').innerHTML = `<div class="unrec" style="border-left-color: var(--accent-mid)">
+            To jest nasz czysty szablon. Zgadza się co do linii, ale nie ma na nim jeszcze
+            projektu, więc nie ma czego sprawdzać.<br>
+            <span class="note">Przygotuj grafikę na tym pliku (spad do krawędzi, teksty w obszarze
+            bezpiecznym), zapisz PDF i wgraj ponownie.</span></div>`;
+        return;
+    }
+    el('summary').textContent = front.summary || '';
+    const assumed = front.assumed_template
+        ? `<p class="assumed">Szablon wskazałeś ręcznie, bo plik nie ma naszego stempla.
+           Raport jest trafny na tyle, na ile trafny był ten wybór.</p>` : '';
+    el('checks').innerHTML = back
+        ? `${assumed}<div class="side-h">Przód</div>${checksHtml(front)}
+           <div class="side-h">Tył. ${escapeHtml(back.summary || '')}</div>${checksHtml(back)}`
+        : assumed + checksHtml(front);
+}
+
+function showModel(front, back) {
+    el('modelWrap').hidden = false;
+    const frame = el('modelFrame');
+    frame.src = `{{ base }}/model/${encodeURIComponent(front.template_token)}?embed=1`;
+    frame.addEventListener('load', () => {
+        // The scene builds after its own fetch; a short delay beats racing it. Regions come from
+        // the findings — the same rectangles the report was judged on, nothing recomputed.
+        setTimeout(() => {
+            const regions = (front.checks || []).flatMap((c) =>
+                (c.regions || []).map((rect) => ({ rect_mm: rect, level: c.level })));
+            frame.contentWindow.postMessage({
+                artwork: front.preview_png ? `data:image/png;base64,${front.preview_png}` : null,
+                artworkBack: (back && back.preview_png)
+                    ? `data:image/png;base64,${back.preview_png}` : null,
+                regions,
+            }, window.location.origin);
+        }, 900);
+    }, { once: true });
+}
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g,
+        (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+</script>
+<footer class="agpl-note">
+    <a href="https://github.com/Commit-shyeline/prepress-open" rel="noopener"
+       target="_blank">prepress-open</a>. Wolne oprogramowanie na licencji AGPL-3.0.
+    Kod źródłowy tej strony jest publiczny.
+</footer>
+<style>
+.agpl-note { padding: 18px 20px 26px; font-size: 12px; color: var(--muted); text-align: center; }
+.agpl-note a { color: inherit; text-decoration: underline; }
+body.bare .agpl-note, body.embed .agpl-note { display: none; }
+</style>
+</body>
+</html>
