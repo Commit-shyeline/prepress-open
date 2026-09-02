@@ -70,8 +70,13 @@ PUBLIC_UPLOAD_LIMIT_ENV = "PREPRESS_PUBLIC_UPLOAD_LIMIT_MB"
 # `;`-separated roots; the pasted path is resolved FIRST and then tested against a root, so `..`
 # cannot walk out, and nothing outside the roots is even tested for existence. Unset: no path check.
 PATH_ROOTS_ENV = "PREPRESS_PATH_ROOTS"
-# What the page tells a customer about where to put the file ("ftp.example.com, login …").
+# What the page tells a customer about where to put the file. Either a whole sentence in
+# PREPRESS_PATH_HINT, or just the FTP host and login in ASCII — the sentence is then written here,
+# because a Windows .bat hands non-ASCII env values over in the console code page and „hasło"
+# arrived as „has┼éo" (2026-09-02).
 PATH_HINT_ENV = "PREPRESS_PATH_HINT"
+FTP_HOST_ENV = "PREPRESS_FTP_HOST"
+FTP_LOGIN_ENV = "PREPRESS_FTP_LOGIN"
 # Only artwork is read by path. Anything else on the share — an installer somebody uploaded, a
 # spreadsheet — is refused by NAME before a byte of it is read into memory.
 PATH_CHECK_EXTENSIONS = {".pdf", ".tif", ".tiff", ".jpg", ".jpeg", ".png"}
@@ -130,7 +135,7 @@ def _inject_base_path():
             "session_key": os.environ.get(SESSION_KEY_ENV) or DEFAULT_SESSION_KEY,
             "order_email": (os.environ.get(ORDER_EMAIL_ENV) or "").strip(),
             "upload_limit_mb": _upload_limit_mb(),
-            "path_hint": (os.environ.get(PATH_HINT_ENV) or "").strip() if _path_roots() else "",
+            "path_hint": _path_hint(),
             "brand_name": os.environ.get(BRAND_NAME_ENV) or "prepress-open",
             "brand_logo": os.environ.get(BRAND_LOGO_ENV) or "",
             "brand_icon": os.environ.get(BRAND_ICON_ENV) or ""}
@@ -152,6 +157,20 @@ def _opened_by_proxy():
 def _gated():
     """Does THIS request have to show a session token?"""
     return bool(_session_secret()) and not _opened_by_proxy()
+
+
+def _path_hint():
+    if not _path_roots():
+        return ""
+    custom = (os.environ.get(PATH_HINT_ENV) or "").strip()
+    if custom:
+        return custom
+    host = (os.environ.get(FTP_HOST_ENV) or "").strip()
+    login = (os.environ.get(FTP_LOGIN_ENV) or "").strip()
+    if not host:
+        return ""
+    who = f", login {login}" if login else ""
+    return f"Serwer FTP: {host}{who}, hasło jak w instrukcji „Jak przygotować pliki”"
 
 
 def _path_roots():
