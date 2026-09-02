@@ -65,6 +65,22 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
           color: var(--muted); margin: 14px 0 4px; }
 .side-h:first-child { margin-top: 0; }
 .assumed { font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
+.assumed a { color: inherit; text-decoration: underline; }
+/* One tile per file; the dot is the worst level in its verdict, the highlighted one is on screen. */
+.tiles { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 0; }
+.tile { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 7px 11px;
+        border-radius: 8px; border: 1px solid var(--line); background: var(--surface);
+        color: var(--ink); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile.now { border-color: var(--accent-mid); background: var(--accent-soft); }
+.tile .dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.tile .dot.green { background: var(--accent-mid); }
+.tile .dot.amber { background: #c77700; }
+.tile .dot.red { background: #d21f3c; }
+.tile .dot.wait { background: var(--line); animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.link-btn { background: none; border: 0; padding: 0; margin-top: 8px; color: var(--muted);
+            font: inherit; font-size: 12.5px; text-decoration: underline; cursor: pointer; }
 /* The overlay: the page as a picture with the boxes the verdict was judged on drawn over it. */
 #overlay { display: block; max-width: 100%; height: auto; border: 1px solid var(--line);
            border-radius: 8px; background: #fff; }
@@ -84,9 +100,10 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
         <div class="card">
             <h2>Twój plik</h2>
             <label class="dropzone" id="drop" for="file">
-                <b>Przeciągnij tu plik PDF, TIFF, JPG lub PNG</b>
-                <span class="note">albo kliknij i wybierz. Najlepiej projekt na naszym
-                    szablonie. Flaga dwustronna? Wrzuć oba pliki naraz, przód i tył.</span>
+                <b>Przeciągnij tu pliki PDF, TIFF, JPG lub PNG</b>
+                <span class="note">albo kliknij i wybierz — kilka naraz, każdy sprawdzimy osobno.
+                    Najlepiej projekt na naszym szablonie. Flaga dwustronna? Nazwij pliki
+                    przód i tył, a ocenimy je razem.</span>
                 <input id="file" type="file" multiple
                        accept=".pdf,.tif,.tiff,.jpg,.jpeg,.png,application/pdf,image/tiff,image/jpeg,image/png">
             </label>
@@ -104,6 +121,8 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
             </details>
             {% endif %}
             <p id="msg" class="msg" hidden></p>
+            <div id="tiles" class="tiles" hidden></div>
+            <button type="button" id="clearAll" class="link-btn" hidden>Usuń wszystkie pliki</button>
             <div id="pageNav" class="page-nav" hidden></div>
             <div id="pickTpl" hidden style="margin-top:12px">
                 <p class="note" style="margin:0 0 8px"><b>Ten plik nie ma naszego stempla</b> —
@@ -154,11 +173,14 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 
 <script src="{{ asset('last-artwork.js') }}"></script>
 <script>
-/* The whole check loop, client side: file → /api/check → verdict list + the SAME 3D scene the
-   template preview uses, wearing the customer's own raster (handed over by postMessage — the bytes
-   never touch the server's disk; the raster comes back in the check response and lives only here).
+/* The whole check loop, client side: files → /api/check → one verdict per file, and the SAME 3D
+   scene the template preview uses for a flag, wearing the customer's own raster (handed over by
+   postMessage — the raster comes back in the check response and lives only here).
 
-   No queueing, no retry theatre: one file at a time, and a second drop simply replaces the first. */
+   Several files at once (2026-09-02): every file is an ENTRY with its own token, state and verdict;
+   the tiles above the report pick which one the panel shows. Files are checked one after another,
+   because the server holds each upload in memory for a re-check and a burst of six at once would
+   contend for it. A przód/tył pair by NAME is one entry with two sides, as before. */
 const el = (id) => document.getElementById(id);
 
 function isFileDrag(event) {
@@ -187,30 +209,67 @@ zone.addEventListener('drop', (e) => {
     e.preventDefault(); depth = 0; zone.classList.remove('is-over');
     takeFiles([...(e.dataTransfer.files || [])]);
 });
-el('file').addEventListener('change', () => takeFiles([...el('file').files]));
+el('file').addEventListener('change', () => { takeFiles([...el('file').files]); el('file').value = ''; });
 
-/* One or two PDFs. With two, którą stroną jest który mówi nazwa (przod/tyl, _a/_b) — measured
-   convention of the real order folders — and kolejność wyboru rozstrzyga remis. */
-let PAIR = null;                                    // { front: File, back: File|null }
+const BASE = {{ base|tojson }};
+const ORDER_EMAIL = {{ order_email|tojson }};
+const UPLOAD_LIMIT_MB = {{ upload_limit_mb }};
+const MAX_FILES = 20;
+
+/* ── Entries ───────────────────────────────────────────────────────────────────
+   { front: File|{name,path,size}, back: File|null, tokens: {front, back},
+     args: {template, page, free}  — what the last check was asked with,
+     view: {state: 'checking'|'error'|'candidates'|'free'|'report', front, back, message} } */
+let ENTRIES = [];
+let CURRENT = null;
+let nextId = 1;
+
 function takeFiles(files) {
-    const pdfs = files.filter((f) => /\.(pdf|tiff?|jpe?g|png)$/i.test(f.name || ''));
-    if (!pdfs.length) {
-        return message('Sprawdzamy pliki PDF, TIFF, JPG i PNG.', true);
+    const accepted = files.filter((f) => /\.(pdf|tiff?|jpe?g|png)$/i.test(f.name || ''));
+    if (!accepted.length) return message('Sprawdzamy pliki PDF, TIFF, JPG i PNG.', true);
+    if (ENTRIES.length + accepted.length > MAX_FILES) {
+        return message(`Najwyżej ${MAX_FILES} plików naraz.`, true);
     }
-    if (pdfs.length > 2) {
-        return message('Najwyżej dwa pliki: przód i tył flagi dwustronnej.', true);
-    }
-    const tooBig = pdfs.find((f) => f.size > UPLOAD_LIMIT_MB * 1024 * 1024);
+    const tooBig = accepted.find((f) => f.size > UPLOAD_LIMIT_MB * 1024 * 1024);
     if (tooBig) return message(tooBigMessage(tooBig.name, tooBig.size), true);
+    message('');
+    /* Exactly two files whose names say przód/tył (or _a/_b) are ONE double-sided flag, judged by
+       the same template — the measured convention of the real order folders. Anything else is a
+       list of separate jobs. */
     const isBack = (f) => /ty[lł]|_b\b|\bb\b/i.test(f.name || '');
     const isFront = (f) => /prz[oó]d|_a\b/i.test(f.name || '');
-    let front = pdfs[0], back = pdfs[1] || null;
-    if (pdfs.length === 2 && (isBack(pdfs[0]) || isFront(pdfs[1]))) {
-        [front, back] = [pdfs[1], pdfs[0]];
+    const fresh = [];
+    if (accepted.length === 2 && (isBack(accepted[0]) || isFront(accepted[1])
+                                  || isBack(accepted[1]) || isFront(accepted[0]))) {
+        let [front, back] = accepted;
+        if (isBack(front) || isFront(back)) [front, back] = [back, front];
+        fresh.push(newEntry(front, back));
+    } else {
+        accepted.forEach((f) => fresh.push(newEntry(f, null)));
     }
-    PAIR = { front, back, tokens: { front: null, back: null } };
-    checkPair(null);
+    ENTRIES.push(...fresh);
+    select(fresh[0]);
+    runQueue(fresh);
 }
+
+function newEntry(front, back) {
+    return { id: nextId++, front, back, tokens: { front: null, back: null },
+             args: { template: null, page: 0, free: null }, view: null };
+}
+
+async function runQueue(entries) {
+    for (const entry of entries) {
+        if (!ENTRIES.includes(entry)) continue;         // cleared while waiting its turn
+        await check(entry, null, 0, null);
+    }
+}
+
+el('clearAll').addEventListener('click', () => {
+    ENTRIES = [];
+    CURRENT = null;
+    renderTiles();
+    paint(null);
+});
 
 /* A file already on the shop's server: a stand-in for the File object, carrying the path the
    customer pasted. The first check posts the PATH; every later one uses the held token like an
@@ -220,9 +279,13 @@ if (sharedBtn) {
     const go = () => {
         const path = el('sharedPath').value.trim();
         if (!path) return message('Wklej ścieżkę do pliku na serwerze.', true);
+        if (ENTRIES.length >= MAX_FILES) return message(`Najwyżej ${MAX_FILES} plików naraz.`, true);
         const name = path.split(/[\\/]/).pop() || path;
-        PAIR = { front: { name, path, size: 0 }, back: null, tokens: { front: null, back: null } };
-        checkPair(null);
+        const entry = newEntry({ name, path, size: 0 }, null);
+        ENTRIES.push(entry);
+        el('sharedPath').value = '';
+        select(entry);
+        runQueue([entry]);
     };
     sharedBtn.addEventListener('click', go);
     el('sharedPath').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
@@ -241,12 +304,12 @@ function message(text, bad) {
     box.innerHTML = text || '';
 }
 
-async function checkOne(file, template, side, page, free, slot = 'front') {
+async function checkOne(entry, file, template, side, page, free, slot = 'front') {
     const body = new FormData();
     // The server holds the bytes for a while after the first check, so a different template,
     // material or page is judged WITHOUT sending the file again. A token that has expired (410)
     // falls back to the upload, once.
-    const held = PAIR.tokens[slot];
+    const held = entry.tokens[slot];
     if (!held) {
         if (file.path) body.append('path', file.path);
         else body.append('file', file);
@@ -261,21 +324,21 @@ async function checkOne(file, template, side, page, free, slot = 'front') {
     // 'back' silences the wykrojnik check: the die line travels with the front file of a pair.
     if (side) body.append('side', side);
     if (page) body.append('page', page);
-    const url = held ? `{{ base }}/api/recheck/${encodeURIComponent(held)}`
-        : file.path ? '{{ base }}/api/check-path' : '{{ base }}/api/check';
+    const url = held ? `${BASE}/api/recheck/${encodeURIComponent(held)}`
+        : file.path ? `${BASE}/api/check-path` : `${BASE}/api/check`;
     const resp = await fetch(url, { method: 'POST', body, headers: authHeaders() });
     if (resp.status === 401) {
         goToLogin();
         return { error: 'Zaloguj się, żeby sprawdzić plik.' };
     }
     if (resp.status === 410 && held) {
-        PAIR.tokens[slot] = null;
-        return checkOne(file, template, side, page, free, slot);
+        entry.tokens[slot] = null;
+        return checkOne(entry, file, template, side, page, free, slot);
     }
     if (resp.status === 413) return { error: tooBigMessage(file.name, file.size) };
     try {
         const data = await resp.json();
-        if (data.token) PAIR.tokens[slot] = data.token;
+        if (data.token) entry.tokens[slot] = data.token;
         return data;
     } catch {
         // A proxy or the framework answered with an HTML error page — say the status in Polish
@@ -289,16 +352,8 @@ async function checkOne(file, template, side, page, free, slot = 'front') {
    this page therefore has to be served from the same host as that login, and a copy on another
    subdomain would see no session at all. Standalone (no `gated`), none of this runs and the page
    behaves exactly as it always has. */
-const BASE = {{ base|tojson }};
-const ORDER_EMAIL = {{ order_email|tojson }};
-const UPLOAD_LIMIT_MB = {{ upload_limit_mb }};
-// The last verdict shown, for the report and the mail: what the customer sees is what gets sent.
-let LAST = null;
-
-/* Asked once on load: a customer who is not logged in should learn it from the page, not from a
-   refusal after they have already picked a 90 MB file. */
 if (GATED) {
-    fetch('{{ base }}/api/session', { headers: authHeaders() })
+    fetch(`${BASE}/api/session`, { headers: authHeaders() })
         .then((resp) => resp.json())
         .then((data) => {
             if (data.authenticated) return;
@@ -308,31 +363,81 @@ if (GATED) {
         .catch(() => { /* offline: the check itself will say so */ });
 }
 
-/* The whole pair, front first. An unstamped front comes back with candidates; the pick re-runs
-   BOTH sides against the chosen template, so przód and tył are judged by the same lines. */
-async function checkPair(template, page = 0, free = null) {
-    message('<span class="spin"></span>Sprawdzamy plik…', false);
-    el('reportCard').hidden = true;
-    el('modelWrap').hidden = true;
-    el('pickTpl').hidden = true;
-    el('freeSize').hidden = true;
-    el('overlayCard').hidden = true;
-    el('actions').hidden = true;
-    el('actionsNote').hidden = true;
-
+/* One entry, both sides, front first. An unstamped front comes back with candidates; a pick
+   re-runs BOTH sides against the chosen template, so przód and tył are judged by the same lines. */
+async function check(entry, template, page = 0, free = null) {
+    entry.args = { template, page, free };
+    setView(entry, { state: 'checking' });
     let front, back = null;
     try {
-        front = await checkOne(PAIR.front, template, null, page, free);
-        if (front.recognised && PAIR.back) {
-            back = await checkOne(PAIR.back, template || front.template_token, 'back', page, free,
-                                  'back');
+        front = await checkOne(entry, entry.front, template, null, page, free);
+        if (front.recognised && entry.back) {
+            back = await checkOne(entry, entry.back, template || front.template_token, 'back', page,
+                                  free, 'back');
         }
     } catch (e) {
-        return message('Nie udało się sprawdzić pliku: ' + escapeHtml(e.message), true);
+        return setView(entry, { state: 'error', message: 'Nie udało się sprawdzić pliku: ' + e.message });
     }
+    if (front.error) return setView(entry, { state: 'error', message: front.error });
+    if (back && back.error) return setView(entry, { state: 'error', message: 'Tył: ' + back.error });
+    if (!front.recognised && (front.candidates || []).length) {
+        return setView(entry, { state: 'candidates', front });
+    }
+    if (!front.recognised) return setView(entry, { state: 'free', front });
+    setView(entry, { state: 'report', front, back });
+}
+
+function setView(entry, view) {
+    entry.view = view;
+    renderTiles();
+    if (entry === CURRENT) paint(entry);
+}
+
+function select(entry) {
+    CURRENT = entry;
+    renderTiles();
+    paint(entry);
+}
+
+/* ── The tiles: one per entry, the worst level as its dot ─────────────────── */
+function levelOf(entry) {
+    const view = entry.view;
+    if (!view || view.state === 'checking') return 'wait';
+    if (view.state === 'error') return 'red';
+    if (view.state !== 'report') return 'ask';
+    const levels = [...(view.front.checks || []), ...((view.back && view.back.checks) || [])]
+        .map((c) => c.level);
+    return levels.includes('red') ? 'red' : levels.includes('amber') ? 'amber' : 'green';
+}
+
+function renderTiles() {
+    const box = el('tiles');
+    box.hidden = ENTRIES.length < 2;
+    el('clearAll').hidden = !ENTRIES.length;
+    box.innerHTML = ENTRIES.map((entry) => `
+        <button type="button" class="tile${entry === CURRENT ? ' now' : ''}" data-id="${entry.id}"
+                title="${escapeHtml(entry.front.name)}">
+            <span class="dot ${levelOf(entry)}"></span>${escapeHtml(entry.front.name)}
+            ${entry.back ? ' + tył' : ''}</button>`).join('');
+    box.querySelectorAll('[data-id]').forEach((btn) => btn.addEventListener('click', () =>
+        select(ENTRIES.find((e) => e.id === Number(btn.dataset.id)))));
+}
+
+/* ── Painting the panel for the selected entry ─────────────────────────────── */
+function paint(entry) {
+    ['reportCard', 'modelWrap', 'pickTpl', 'freeSize', 'overlayCard', 'actions', 'actionsNote',
+     'pageNav'].forEach((id) => { el(id).hidden = true; });
+    message('');
+    if (!entry || !entry.view) return;
+    const view = entry.view;
+    if (view.state === 'checking') {
+        return message(`<span class="spin"></span>Sprawdzamy ${escapeHtml(entry.front.name)}…`, false);
+    }
+    if (view.state === 'error') return message(escapeHtml(view.message), true);
+    const front = view.front;
     // A multi-page file gets pagination: each page is its own full check (both sides of a pair).
-    const nav = el('pageNav');
     if (front.recognised && (front.page_count || 1) > 1) {
+        const nav = el('pageNav');
         nav.hidden = false;
         nav.innerHTML = Array.from({ length: front.page_count }, (_, i) =>
             `<button type="button" class="pick${i === (front.page || 0) ? ' now' : ''}"
@@ -340,31 +445,22 @@ async function checkPair(template, page = 0, free = null) {
         nav.querySelectorAll('[data-page]').forEach((btn) =>
             btn.addEventListener('click', () => {
                 if (Number(btn.dataset.page) !== (front.page || 0)) {
-                    checkPair(template, Number(btn.dataset.page), free);
+                    check(entry, entry.args.template, Number(btn.dataset.page), entry.args.free);
                 }
             }));
-    } else {
-        nav.hidden = true;
     }
-    if (front.error) return message(escapeHtml(front.error), true);
-    if (back && back.error) return message('Tył: ' + escapeHtml(back.error), true);
-    message('');
-
-    if (!front.recognised && (front.candidates || []).length) {
+    if (view.state === 'candidates') {
         el('pickTpl').hidden = false;
         el('pickBtns').innerHTML = front.candidates.map((c) =>
             `<button type="button" class="pick" data-tpl="${escapeHtml(c.token)}">
                  ${escapeHtml(c.name)}</button>`).join('');
         el('pickBtns').querySelectorAll('[data-tpl]').forEach((btn) =>
-            btn.addEventListener('click', () => checkPair(btn.dataset.tpl)));
+            btn.addEventListener('click', () => check(entry, btn.dataset.tpl)));
         return;
     }
-    if (!front.recognised) {
-        await offerFreeSize(front);
-        return;
-    }
-    renderReport(front, back);
-    if (front.recognised && front.template_token) showModel(front, back);
+    if (view.state === 'free') { offerFreeSize(entry); return; }
+    renderReport(entry, front, view.back);
+    if (front.template_token) showModel(front, view.back);
 }
 
 function checksHtml(data) {
@@ -404,19 +500,25 @@ function sizeHints(front) {
     return named || (pageMm.length === 2 ? pageMm : null);
 }
 
-async function offerFreeSize(front) {
-    if (!MATERIALS) {
-        try {
-            MATERIALS = (await (await fetch(`${BASE}/api/materials`)).json()).materials || [];
-        } catch { MATERIALS = []; }
-        el('freeMat').innerHTML = MATERIALS.map((m) =>
-            `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`).join('');
-        el('freeBtn').addEventListener('click', () => checkPair(null, 0, {
-            material: el('freeMat').value,
-            width: el('freeW').value,
-            height: el('freeH').value,
-        }));
-    }
+async function loadMaterials() {
+    if (MATERIALS) return;
+    try {
+        MATERIALS = (await (await fetch(`${BASE}/api/materials`)).json()).materials || [];
+    } catch { MATERIALS = []; }
+    el('freeMat').innerHTML = MATERIALS.map((m) =>
+        `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`).join('');
+}
+// Bound once; it reads whichever entry is selected when clicked.
+el('freeBtn').addEventListener('click', () => {
+    if (!CURRENT) return;
+    check(CURRENT, null, 0, { material: el('freeMat').value, width: el('freeW').value,
+                              height: el('freeH').value });
+});
+
+async function offerFreeSize(entry) {
+    await loadMaterials();
+    if (entry !== CURRENT) return;                   // the customer moved on while we fetched
+    const front = entry.view.front;
     el('freeSizeNote').innerHTML = front.kind === 'raster'
         ? `<b>Bitmapa</b> — podaj materiał i rozmiar gotowego produktu. Rozdzielczość policzymy
            z pikseli w tym rozmiarze, sprawdzimy też spady, obszar bezpieczny, kolory i spłaszczenie.`
@@ -439,7 +541,7 @@ async function offerFreeSize(front) {
            i umieść projekt na nim. Inny produkt? Wskaż materiał i rozmiar powyżej.</span></div>`;
 }
 
-function renderReport(front, back) {
+function renderReport(entry, front, back) {
     el('reportCard').hidden = false;
     if (front.bare_template) {
         el('summary').textContent = '';
@@ -453,7 +555,8 @@ function renderReport(front, back) {
     el('summary').textContent = front.summary || '';
     const assumed = front.free_size
         ? `<p class="assumed">Sprawdzono względem podanego materiału i rozmiaru, nie naszego szablonu.
-           Raport jest trafny na tyle, na ile trafne były te dane.</p>`
+           Raport jest trafny na tyle, na ile trafne były te dane.
+           <a href="#" id="changeFree">Zmień materiał lub rozmiar</a></p>`
         : front.assumed_template
         ? `<p class="assumed">Szablon wskazałeś ręcznie, bo plik nie ma naszego stempla.
            Raport jest trafny na tyle, na ile trafny był ten wybór.</p>` : '';
@@ -461,9 +564,19 @@ function renderReport(front, back) {
         ? `${assumed}<div class="side-h">Przód</div>${checksHtml(front)}
            <div class="side-h">Tył. ${escapeHtml(back.summary || '')}</div>${checksHtml(back)}`
         : assumed + checksHtml(front);
-    LAST = { front, back };
+    const change = el('changeFree');
+    if (change) change.addEventListener('click', async (e) => {
+        e.preventDefault();
+        await loadMaterials();
+        if (entry.args.free) {
+            el('freeMat').value = entry.args.free.material;
+            el('freeW').value = entry.args.free.width;
+            el('freeH').value = entry.args.free.height;
+        }
+        el('freeSize').hidden = false;
+    });
     drawOverlay(front);
-    offerActions(front, back);
+    offerActions();
 }
 
 /* ── The overlay: the same boxes the verdict was judged on, on the page itself ─
@@ -478,6 +591,7 @@ function drawOverlay(front) {
     }
     const image = new Image();
     image.onload = () => {
+        if (!CURRENT || CURRENT.view?.front !== front) return;   // selection changed meanwhile
         const canvas = el('overlay');
         canvas.width = image.naturalWidth;
         canvas.height = image.naturalHeight;
@@ -527,27 +641,34 @@ function subjectLine(front) {
     return [what, size].filter(Boolean).join(' · ');
 }
 
-function offerActions(front, back) {
+/* One mail for the whole batch: a customer sending six files should write one message, not six.
+   Capped, because a mailto: goes through the OS shell and a long one is silently dropped. */
+const MAILTO_MAX_CHARS = 1600;
+function offerActions() {
     el('actions').hidden = false;
     el('actionsNote').hidden = false;
     const mail = el('mailBtn');
-    if (ORDER_EMAIL) {
-        const names = [PAIR.front.name, PAIR.back && PAIR.back.name].filter(Boolean);
-        const subject = `Plik do druku: ${names[0]}`;
-        const body = 'Dzień dobry,\n\nprzesyłam pliki do druku:\n'
-            + names.map((n) => `- ${n}`).join('\n')
-            + `\n\n${subjectLine(front)}\nRaport kontroli w załączniku.\n`;
-        mail.href = `mailto:${ORDER_EMAIL}?subject=${encodeURIComponent(subject)}`
-            + `&body=${encodeURIComponent(body)}`;
-        mail.hidden = false;
-    } else {
-        mail.hidden = true;
+    if (!ORDER_EMAIL) { mail.hidden = true; return; }
+    const done = ENTRIES.filter((e) => e.view && e.view.state === 'report');
+    const names = done.flatMap((e) => [e.front.name, e.back && e.back.name].filter(Boolean));
+    const subject = names.length === 1 ? `Plik do druku: ${names[0]}` : `Pliki do druku (${names.length})`;
+    const lines = done.map((e) => `- ${e.front.name}${e.back ? ` + ${e.back.name}` : ''}`
+        + ` (${subjectLine(e.view.front)})`);
+    const build = (list) => `mailto:${ORDER_EMAIL}?subject=${encodeURIComponent(subject)}&body=`
+        + encodeURIComponent('Dzień dobry,\n\nprzesyłam pliki do druku:\n' + list.join('\n')
+                             + '\n\nRaporty kontroli w załączniku.\n');
+    let href = build(lines);
+    for (let keep = lines.length - 1; keep > 0 && href.length > MAILTO_MAX_CHARS; keep--) {
+        href = build(lines.slice(0, keep).concat([`- (i ${lines.length - keep} więcej)`]));
     }
+    mail.href = href;
+    mail.hidden = false;
 }
 
 el('reportBtn').addEventListener('click', async () => {
-    if (!LAST) return;
-    const { front, back } = LAST;
+    const entry = CURRENT;
+    if (!entry || !entry.view || entry.view.state !== 'report') return;
+    const { front, back } = entry.view;
     const btn = el('reportBtn');
     btn.disabled = true;
     const label = btn.textContent;
@@ -564,7 +685,7 @@ el('reportBtn').addEventListener('click', async () => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({
-                filename: PAIR.front.name, subject: subjectLine(front),
+                filename: entry.front.name, subject: subjectLine(front),
                 checked_at: new Date().toLocaleString('pl-PL'),
                 summary: front.summary || '', checks,
                 overlay_png: overlay, legend: overlay ? overlayLegend(front) : '',
@@ -575,7 +696,7 @@ el('reportBtn').addEventListener('click', async () => {
         const url = URL.createObjectURL(await resp.blob());
         const saver = document.createElement('a');
         saver.href = url;
-        saver.download = `raport-${PAIR.front.name.replace(/\.[^.]+$/, '')}.pdf`;
+        saver.download = `raport-${entry.front.name.replace(/\.[^.]+$/, '')}.pdf`;
         document.body.appendChild(saver); saver.click(); saver.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
     } catch (e) {
@@ -595,7 +716,7 @@ function showModel(front, back) {
     if (front.preview_png && window.PrepressLastArtwork) {
         window.PrepressLastArtwork.remember(`data:image/png;base64,${front.preview_png}`);
     }
-    frame.src = `{{ base }}/model/${encodeURIComponent(front.template_token)}?embed=1`;
+    frame.src = `${BASE}/model/${encodeURIComponent(front.template_token)}?embed=1`;
     frame.addEventListener('load', () => {
         // The scene builds after its own fetch; a short delay beats racing it. Regions come from
         // the findings — the same rectangles the report was judged on, nothing recomputed.

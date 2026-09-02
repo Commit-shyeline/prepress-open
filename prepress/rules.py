@@ -121,6 +121,11 @@ def check_page_size(facts, expected, material=None):
     actual, brutto = (actual_w, actual_h), (width, art_height)
     values = {"expected_w": _mm(width), "expected_h": _mm(art_height + strip),
               "page_w": _mm(actual_w), "page_h": _mm(actual_h)}
+    # The finished size exactly, on a material that wants bleed: the commonest real mistake, and
+    # a different one from a wrong size — the artwork is right, the bleed was never added.
+    netto = tuple(v / expected["scale"] for v in expected["netto_mm"])
+    if expected["bleed_mm"] > 0 and (close(actual, netto) or close((actual_h, actual_w), netto)):
+        return _finding("page_size", "amber", "no_bleed", bleed=_mm(expected["bleed_mm"]), **values)
     allowance = float((material or {}).get("finishing_mm") or DEFAULT_FINISHING_MM)
     # Checked BEFORE the finishing branch: a small doubled file (200x100 ordered, 400x100 sent) would
     # otherwise sit inside the allowance and read as a hem.

@@ -75,6 +75,10 @@ CHECK_MESSAGES = {
     "check.page_size.scaled.detail":
         "Strona ma {page_w}×{page_h} mm, gotowy produkt {expected_w}×{expected_h} mm. "
         "Rozdzielczość i wielkość tekstu ocenialiśmy w rozmiarze docelowym.",
+    "check.page_size.no_bleed": "Plik ma rozmiar gotowy, bez spadu: {page_w}×{page_h} mm",
+    "check.page_size.no_bleed.detail":
+        "Ten materiał wymaga {bleed} mm spadu z każdej strony, czyli strony {expected_w}×{expected_h} mm. "
+        "Powiększ tło poza rozmiar gotowy — przy cięciu zostanie inaczej biały rąbek.",
     "check.page_size.two_up": "To wygląda na dwie strony w jednym pliku: {page_w}×{page_h} mm",
     "check.page_size.two_up.detail":
         "Połowa pliku odpowiada rozmiarowi {expected_w}×{expected_h} mm, więc wygląda to na dwie "

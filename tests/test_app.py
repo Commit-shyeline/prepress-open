@@ -280,8 +280,11 @@ def test_a_mounted_page_prefixes_its_own_links(client):
     """Behind a proxy the app is not at the root, and every link it writes has to say so or it
     walks out of the mount and hits whatever else lives on that host."""
     body = client.get("/plik", headers={"X-Forwarded-Prefix": "/sprawdz"}).get_data(as_text=True)
-    assert "/sprawdz/api/check" in body
+    # Every API call on the page is built from this one constant, so the prefix has to land here…
+    assert 'const BASE = "/sprawdz";' in body
+    # …and nowhere may a call bypass it with a root-relative literal.
     assert '"/api/check"' not in body and "'/api/check'" not in body
+    assert "fetch('/api" not in body and 'fetch("/api' not in body
 
 
 def test_unmounted_pages_carry_no_prefix(client):

@@ -455,8 +455,10 @@ def test_size_semantics_finishing_oversize_and_two_faces():
     assert size((1040, 4080))["code"] == "check.page_size.two_up"
     # Cut work has an exact bleed: an oversize plate stays a wrong size.
     assert size((1240, 2240), STICKER)["code"] == "check.page_size.wrong"
-    # Undersize is simply wrong.
+    # Undersize is simply wrong — except EXACTLY the finished size, which is "no bleed added".
     assert size((900, 1800))["code"] == "check.page_size.wrong"
+    assert size((1000, 2000))["code"] == "check.page_size.no_bleed"
+    assert size((2000, 1000))["level"] == "amber"
     # The material's own allowance replaces the default.
     tight = dict(BANNER, finishing_mm=50)
     assert size((1240, 2240), tight)["code"] == "check.page_size.oversize"
