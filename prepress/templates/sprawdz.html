@@ -156,6 +156,11 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
         <p class="note" style="margin-top:6px">Czerwone i bursztynowe ramki na fladze to miejsca
             z wyniku kontroli To ta sama geometria, którą mierzy raport.</p>
     </div>
+        <div class="card" id="overlayCard" hidden>
+            <h2>Podgląd z ramkami</h2>
+            <canvas id="overlay"></canvas>
+            <p class="note" id="overlayLegend" style="margin:8px 0 0"></p>
+        </div>
         <div class="card" id="reportCard" hidden>
             <h2>Wynik kontroli</h2>
             <p class="summary" id="summary"></p>
@@ -166,11 +171,6 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
             </div>
             <p class="note" id="actionsNote" hidden>Raport PDF załącz do wiadomości razem z plikiem —
                 pomoże nam szybciej przygotować zamówienie.</p>
-        </div>
-        <div class="card" id="overlayCard" hidden>
-            <h2>Podgląd z ramkami</h2>
-            <canvas id="overlay"></canvas>
-            <p class="note" id="overlayLegend" style="margin:8px 0 0"></p>
         </div>
     </div>
 </main>
