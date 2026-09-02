@@ -45,6 +45,8 @@ td.num { text-align: right; white-space: nowrap; }
 .empty { color: var(--muted); font-size: 13px; padding: 18px 4px; }
 /* A live preview of the three boxes, so the numbers mean something before the download. */
 .preview { display: flex; justify-content: center; padding: 8px; }
+#previewWrap { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+#previewWrap:has(#preview:empty) { display: none; }
 .preview svg { max-width: 100%; height: auto; max-height: 320px; }
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted);
           margin-top: 10px; }
@@ -184,11 +186,9 @@ td.num { text-align: right; white-space: nowrap; }
         <p id="err" class="err" hidden></p>
         <div id="warn"></div>
         <div id="rules" class="rules"></div>
-    </div>
-
-    <div>
-        <div class="card">
-            <h2>Podgląd</h2>
+        <!-- The sketch of the three boxes for the size typed above. Inside this card and only once
+             there is a size to sketch: as its own card it sat empty and read as broken (2026-09-03). -->
+        <div id="previewWrap">
             <div class="preview" id="preview"></div>
             <div class="legend">
                 <span><i class="swatch" style="background:var(--brutto)"></i>brutto (krawędź strony)</span>
@@ -196,8 +196,10 @@ td.num { text-align: right; white-space: nowrap; }
                 <span><i class="swatch" style="background:var(--safe)"></i>obszar bezpieczny</span>
             </div>
         </div>
+    </div>
 
-        <div class="card" style="margin-top:18px">
+    <div>
+        <div class="card">
             <h2>Lista do pobrania (<span id="count">0</span>)</h2>
             <table>
                 <thead><tr><th>Pozycja</th><th class="num">Netto</th><th class="num">Strona</th><th></th></tr></thead>
