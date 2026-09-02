@@ -5,6 +5,7 @@ Three numbers, all in millimetres of the artwork area:
     blank_edges_mm     untouched paper on each side — how far the design stops short of the bleed
     safe_intrusion_mm  how far ink reaches into the keep-out ring outside the safe box
     min_dpi            effective resolution of the artwork, from `structure.placed_images`
+    text_min_height_mm the smallest live glyph on the page, at full size (None when there is no text)
 
 Rendering is pypdfium2 (Apache-2.0 / BSD-3), so the measurement layer adds no copyleft dependency.
 
@@ -195,7 +196,44 @@ def measure(pdf_bytes, expected, page_index=0):
     facts["image_placements"] = [
         {"rect_mm": p.get("rect_mm"), "dpi": p["dpi"], "placed_mm": list(p["placed_mm"])}
         for p in structure.significant_placements(placements) if p.get("rect_mm")]
+    facts["text_min_height_mm"] = _text_min_height_mm(_bytes(pdf_bytes), page_index, scale)
     return facts
+
+
+# A glyph box thinner than this is a space, a dot leader or a degenerate char; not a letter to judge.
+MIN_GLYPH_PT = 0.5
+# Enough characters to cover any real design; a novel pasted into a banner is not the case here.
+MAX_CHARS_MEASURED = 20000
+
+
+def _text_min_height_mm(pdf_bytes, page_index, scale):
+    """The smallest live glyph on the page in millimetres AT FULL SIZE, or None with no live text.
+
+    Read from pdfium's text page, so it only sees text that is still text — lettering converted to
+    curves is artwork, and its legibility is the designer's call, not a rule's.
+    """
+    import pypdfium2 as pdfium
+
+    document = pdfium.PdfDocument(pdf_bytes)
+    try:
+        textpage = document[page_index].get_textpage()
+        try:
+            smallest_pt = None
+            for index in range(min(textpage.count_chars(), MAX_CHARS_MEASURED)):
+                left, bottom, right, top = textpage.get_charbox(index)
+                height_pt = top - bottom
+                if height_pt < MIN_GLYPH_PT or right - left < MIN_GLYPH_PT:
+                    continue
+                smallest_pt = height_pt if smallest_pt is None else min(smallest_pt, height_pt)
+        finally:
+            textpage.close()
+    except Exception:                                # noqa: BLE001 — unmeasurable text = no finding
+        return None
+    finally:
+        document.close()
+    if smallest_pt is None:
+        return None
+    return round(smallest_pt * 25.4 / 72 * (scale or 1), 2)
 
 
 def _ring_depths_mm(expected):

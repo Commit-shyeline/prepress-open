@@ -71,6 +71,10 @@ CHECK_MESSAGES = {
     "check.page_size.rotated.detail":
         "Szablon ma {expected_w}×{expected_h} mm, plik ma {page_w}×{page_h} mm. "
         "Sprawdzimy go, ale upewnij się, że obrót jest zamierzony.",
+    "check.page_size.scaled": "Plik jest w skali 1:{scale}",
+    "check.page_size.scaled.detail":
+        "Strona ma {page_w}×{page_h} mm, gotowy produkt {expected_w}×{expected_h} mm. "
+        "Rozdzielczość i wielkość tekstu ocenialiśmy w rozmiarze docelowym.",
     "check.page_size.wrong": "Rozmiar strony nie zgadza się z szablonem",
     "check.page_size.wrong.detail":
         "Oczekujemy {expected_w}×{expected_h} mm, plik ma {page_w}×{page_h} mm. "
@@ -157,6 +161,17 @@ CHECK_MESSAGES = {
     "check.page_count.cut_work": "Plik ma {pages} strony",
     "check.page_count.cut_work.detail":
         "Przy plikach ciętych to prawidłowe: wykrojnik na osobnej stronie.",
+
+    "check.text_height.ok": "Najmniejszy tekst ma {smallest} mm",
+    "check.text_height.small": "Za mały tekst: {smallest} mm w rozmiarze docelowym",
+    "check.text_height.small.detail":
+        "Napisy poniżej {floor} mm wysokości są nieczytelne z odległości, z której ogląda się "
+        "wydruk wielkoformatowy. Powiększ najmniejsze teksty.",
+
+    "check.split.required": "Grafika {netto_w}×{netto_h} mm będzie dzielona",
+    "check.split.required.detail":
+        "Oba wymiary przekraczają {over} mm, więc wydruk powstanie z kilku części łączonych "
+        "przy wykończeniu. Trzymaj ważne elementy z dala od środka grafiki.",
 
     "check.filename.diacritics": "Nazwa pliku zawiera polskie znaki",
     "check.filename.diacritics.detail":

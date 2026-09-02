@@ -439,8 +439,7 @@ async function loadTemplates() {
                 <div class="act">
                     <a href="model/${encodeURIComponent(t.token)}"
                        title="Obróć flagę w 3D Kształt bierzemy z tego samego obrysu, który tnie ploter">3D</a>
-                    <a class="main" data-authed download="${escapeHtml(short)}.pdf"
-                       href="api/templates/${encodeURIComponent(t.token)}/pdf">Szablon PDF</a>
+                    <a class="main" href="api/templates/${encodeURIComponent(t.token)}/pdf">Szablon PDF</a>
                 </div>
             </div>`;
         }).join('');

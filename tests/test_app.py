@@ -59,6 +59,18 @@ def test_a_gated_check_refuses_an_anonymous_upload(client, monkeypatch):
     assert client.get("/api/session").get_json()["authenticated"] is False
 
 
+def test_an_entry_the_proxy_marks_open_needs_no_login(client, monkeypatch):
+    """The LAN door: the proxy stamps the header, the public door strips it."""
+    monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)
+    monkeypatch.setenv(app_module.OPEN_HEADER_ENV, "X-Prepress-Open")
+    opened = client.get("/api/session", headers={"X-Prepress-Open": "1"}).get_json()
+    assert opened == {"gated": False, "authenticated": True, "login": ""}
+    assert client.get("/api/session").get_json()["authenticated"] is False
+    answer = client.post("/api/check", data={"file": (io.BytesIO(b"%PDF-1.7"), "x.pdf")},
+                         content_type="multipart/form-data", headers={"X-Prepress-Open": "1"})
+    assert answer.status_code != 401
+
+
 def test_a_gated_check_accepts_a_signed_token(client, monkeypatch):
     monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)
     answer = client.post("/api/check", data={"file": (io.BytesIO(b"%PDF-1.7 not ours"), "x.pdf")},
@@ -86,6 +98,136 @@ def test_an_expired_token_is_refused(client, monkeypatch):
     monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)
     answer = client.get("/api/session", headers=_bearer(exp=1))
     assert answer.get_json()["authenticated"] is False
+
+
+def test_templates_are_public_even_behind_the_gate(client, monkeypatch):
+    """The login guards the CHECK. A template is what we want every customer to have, so the
+    generator and the sheets never ask for it (customers were bounced to a login, 2026-09-02)."""
+    monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)
+    resolved = client.post("/api/resolve", json={"material": "banner-frontlit-510",
+                                                 "width": "100", "height": "50", "unit": "cm"})
+    assert resolved.status_code == 200
+    sheet = client.post("/api/template", json={"items": [
+        {"material": "banner-frontlit-510", "width": "100", "height": "50", "unit": "cm"}]})
+    assert sheet.status_code == 200 and sheet.mimetype == "application/pdf"
+
+
+def test_a_file_with_no_template_is_judged_by_material_and_size(client):
+    """The fourth rung: a banner is checked against the material's own bleed and safe area."""
+    sheet = client.post("/api/template", json={"items": [
+        {"material": "banner-frontlit-510", "width": "100", "height": "50", "unit": "cm"}]}).data
+    answer = client.post("/api/check", data={"file": (io.BytesIO(sheet), "baner.pdf"),
+                                             "material": "banner-frontlit-510",
+                                             "width": "1000", "height": "500"},
+                         content_type="multipart/form-data")
+    assert answer.status_code == 200
+    data = answer.get_json()
+    assert data["recognised"] is True
+    assert data["free_size"] is True and data["assumed_template"] is True
+    assert data["template_token"] is None
+    assert data["expected"]["netto_mm"] == [1000, 500]
+    assert data["expected"]["material_id"] == "banner-frontlit-510"
+
+
+def test_a_free_size_check_refuses_an_unknown_material(client):
+    sheet = client.post("/api/template", json={"items": [
+        {"material": "banner-frontlit-510", "width": "100", "height": "50", "unit": "cm"}]}).data
+    answer = client.post("/api/check", data={"file": (io.BytesIO(sheet), "x.pdf"),
+                                             "material": "no-such", "width": "10", "height": "10"},
+                         content_type="multipart/form-data")
+    assert answer.status_code == 400
+    assert answer.get_json()["code"] == "unknown_material"
+
+
+def test_the_report_pdf_is_built_from_the_verdict_the_page_holds(client):
+    import base64
+    import io as _io
+
+    from PIL import Image
+
+    picture = _io.BytesIO()
+    Image.new("RGB", (40, 60), (200, 30, 30)).save(picture, format="PNG")
+    answer = client.post("/api/report", json={
+        "filename": "baner łódź.pdf", "subject": "Banner · 1000×500 mm",
+        "summary": "UWAGI (1): Za mały tekst",
+        "checks": [{"level": "amber", "title": "Za mały tekst: 6 mm", "detail": "Powiększ."},
+                   {"level": "green", "title": "Grafika sięga spadu"}],
+        "overlay_png": base64.b64encode(picture.getvalue()).decode(), "legend": "Szara ramka: spad."})
+    assert answer.status_code == 200
+    assert answer.mimetype == "application/pdf"
+    assert answer.data.startswith(b"%PDF")
+    assert "raport-baner_lodz.pdf" in answer.headers["Content-Disposition"]
+
+
+def test_the_report_refuses_a_body_with_no_checks(client):
+    assert client.post("/api/report", json={"filename": "x.pdf"}).status_code == 400
+
+
+def test_a_held_upload_is_rechecked_without_the_file(client):
+    sheet = client.post("/api/template", json={"items": [
+        {"material": "banner-frontlit-510", "width": "100", "height": "50", "unit": "cm"}]}).data
+    first = client.post("/api/check", data={"file": (io.BytesIO(sheet), "baner.pdf")},
+                        content_type="multipart/form-data").get_json()
+    assert first["recognised"] is True and first["token"]
+    again = client.post(f"/api/recheck/{first['token']}",
+                        data={"material": "banner-frontlit-510", "width": "1000", "height": "500"},
+                        content_type="multipart/form-data")
+    assert again.status_code == 200
+    data = again.get_json()
+    assert data["free_size"] is True and data["token"] == first["token"]
+    assert client.post("/api/recheck/no-such-token", data={},
+                       content_type="multipart/form-data").status_code == 410
+
+
+def test_the_hold_evicts_the_oldest_when_full(monkeypatch):
+    monkeypatch.setattr(app_module, "UPLOAD_HOLD_MAX_BYTES", 10)
+    app_module._held_uploads.clear()
+    first = app_module._remember_upload(b"123456", "a.pdf")
+    second = app_module._remember_upload(b"123456", "b.pdf")
+    assert app_module._recall_upload(first) is None
+    assert app_module._recall_upload(second)["filename"] == "b.pdf"
+
+
+def test_the_page_states_the_upload_limit_of_its_door(client, monkeypatch):
+    """Behind the CDN a customer hears the public cap; through the open LAN door, the app's own."""
+    monkeypatch.setenv(app_module.PUBLIC_UPLOAD_LIMIT_ENV, "100")
+    monkeypatch.setenv(app_module.OPEN_HEADER_ENV, "X-Prepress-Open")
+    assert "const UPLOAD_LIMIT_MB = 100;" in client.get("/plik").get_data(as_text=True)
+    lan = client.get("/plik", headers={"X-Prepress-Open": "1"}).get_data(as_text=True)
+    assert "const UPLOAD_LIMIT_MB = 1024;" in lan
+
+
+def test_a_file_on_the_shops_server_is_checked_by_path(client, monkeypatch, tmp_path):
+    root = tmp_path / "ftp"
+    (root / "Klient").mkdir(parents=True)
+    sheet = client.post("/api/template", json={"items": [
+        {"material": "banner-frontlit-510", "width": "100", "height": "50", "unit": "cm"}]}).data
+    (root / "Klient" / "baner.pdf").write_bytes(sheet)
+    (tmp_path / "outside.pdf").write_bytes(sheet)
+    monkeypatch.setenv(app_module.PATH_ROOTS_ENV, str(root))
+    monkeypatch.setenv(app_module.PATH_HINT_ENV, "Serwer FTP: ftp.example.com")
+
+    answer = client.post("/api/check-path", data={"path": "Klient/baner.pdf"},
+                         content_type="multipart/form-data")
+    assert answer.status_code == 200
+    data = answer.get_json()
+    assert data["recognised"] is True and data["token"]
+    # The full URL a client shows, and a full path under the root, both resolve to the same file.
+    assert client.post("/api/check-path", data={"path": "ftp://ftp.example.com/Klient/baner.pdf"},
+                       content_type="multipart/form-data").status_code == 200
+    assert client.post("/api/check-path", data={"path": str(root / "Klient" / "baner.pdf")},
+                       content_type="multipart/form-data").status_code == 200
+    # Walking out of the root is refused without revealing whether the target exists.
+    for bad in ("../outside.pdf", str(tmp_path / "outside.pdf"), "Klient/../../outside.pdf", ""):
+        assert client.post("/api/check-path", data={"path": bad},
+                           content_type="multipart/form-data").status_code == 404, bad
+    assert "Serwer FTP: ftp.example.com" in client.get("/plik").get_data(as_text=True)
+
+
+def test_the_path_check_is_off_without_roots(client):
+    assert client.post("/api/check-path", data={"path": "x.pdf"},
+                       content_type="multipart/form-data").status_code == 404
+    assert 'id="pathBox"' not in client.get("/plik").get_data(as_text=True)
 
 
 def test_the_pages_stay_reachable_behind_the_gate(client, monkeypatch):

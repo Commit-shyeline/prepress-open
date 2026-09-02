@@ -1,4 +1,4 @@
-"""The rule runner: fourteen rules, none of whose words or severities live in this file.
+"""The rule runner: sixteen rules, none of whose words or severities live in this file.
 
 A rule is a function of `(facts, expected, material)` returning a finding or None.
 
@@ -44,6 +44,16 @@ def _size_tolerance_mm(dimension_mm):
 
 # How many names to list before a report turns into a wall of text.
 MAX_NAMES_LISTED = 4
+
+# Shop defaults for the two rules whose threshold a material may override (`min_text_mm`,
+# `split_over_mm`). The numbers are the in-house engine's: 10 mm is the smallest lettering that
+# survives a large-format RIP and reads from where a banner is seen; over 5 m on BOTH sides no
+# roll exists, so the graphic has to be split before printing.
+DEFAULT_MIN_TEXT_MM = 10.0
+DEFAULT_SPLIT_OVER_MM = 5000.0
+# A file drawn at 1:N. Templates come at 1:1 up to 1:10 (`item.choose_scale`), so those are the
+# scales a returned file can honestly be in.
+SCALES_RECOGNISED = range(2, 11)
 
 
 def _finding(rule_id, level, outcome, regions=None, **values):
@@ -91,6 +101,16 @@ def check_page_size(facts, expected, material=None):
             return _finding("page_size", "amber", "rotated",
                             expected_w=_mm(candidate[0]), expected_h=_mm(candidate[1]),
                             page_w=_mm(actual_w), page_h=_mm(actual_h))
+    # A page that is the artwork at 1:N is not a wrong size, it is a scaled file — common for
+    # large format, where a 1:1 PDF of a 10 m banner cannot exist. Said as information; the
+    # resolution and text rules already judge at full size because `expected` carries the scale.
+    if expected["scale"] == 1:
+        for divisor in SCALES_RECOGNISED:
+            if (close((actual_w, actual_h), (width / divisor, art_height / divisor))
+                    or close((actual_h, actual_w), (width / divisor, art_height / divisor))):
+                return _finding("page_size", "info", "scaled", scale=divisor,
+                                expected_w=_mm(width), expected_h=_mm(art_height),
+                                page_w=_mm(actual_w), page_h=_mm(actual_h))
     return _finding("page_size", "red", "wrong",
                     expected_w=_mm(width), expected_h=_mm(art_height + strip),
                     page_w=_mm(actual_w), page_h=_mm(actual_h))
@@ -298,6 +318,32 @@ def check_page_count(facts, expected=None, material=None):
     return _finding("page_count", "amber", "many", pages=pages)
 
 
+def check_text_height(facts, expected, material=None):
+    """Lettering below the floor is unreadable from where a large-format print is seen.
+
+    Only LIVE text is measured — see `measure._text_min_height_mm`. Text converted to curves is
+    artwork, and the fonts rule already asks for exactly that conversion, so the two never fight:
+    this one speaks while the text is still text, the other one asks to make it not so.
+    """
+    smallest = facts.get("text_min_height_mm")
+    if smallest is None:
+        return None
+    floor = float((material or {}).get("min_text_mm") or DEFAULT_MIN_TEXT_MM)
+    if smallest >= floor:
+        return _finding("text_height", "green", "ok", smallest=f"{smallest:.1f}")
+    return _finding("text_height", "amber", "small", smallest=f"{smallest:.1f}", floor=_mm(floor))
+
+
+def check_split_required(facts, expected, material=None):
+    """Over the split threshold on BOTH sides, the job cannot come off one roll in one piece."""
+    over = float((material or {}).get("split_over_mm") or DEFAULT_SPLIT_OVER_MM)
+    width, height = expected["netto_mm"]
+    if width <= over or height <= over:
+        return None
+    return _finding("split", "amber", "required", netto_w=_mm(width), netto_h=_mm(height),
+                    over=_mm(over))
+
+
 def check_filename(facts, expected=None, material=None):
     """The two naming habits that travel badly through a file server and a RIP.
 
@@ -314,7 +360,8 @@ def check_filename(facts, expected=None, material=None):
 RULES = (check_page_size, check_declared_trim, check_template_guides_removed,
          check_artwork_reaches_bleed, check_safe_area, check_resolution,
          check_office_origin, check_colour_mode, check_spot_inks, check_cut_path,
-         check_fonts_converted, check_overprint, check_page_count, check_filename)
+         check_fonts_converted, check_overprint, check_page_count, check_text_height,
+         check_split_required, check_filename)
 
 # Every rule a shop can silence or re-grade, in the order the rules run, mapped to the message code
 # that best DESCRIBES it — the sentence a customer would get when the rule fires.
@@ -337,6 +384,8 @@ RULE_LABELS = {
     "fonts": "check.fonts.present",
     "overprint": "check.overprint.on",
     "page_count": "check.page_count.many",
+    "text_height": "check.text_height.small",
+    "split": "check.split.required",
     "filename": "check.filename.diacritics",
 }
 RULE_IDS = tuple(RULE_LABELS)

@@ -17,10 +17,13 @@ import io
 import logging
 import os
 import secrets
+import threading
+import time
 
 from flask import (Flask, Response, jsonify, redirect, render_template, request,
                    send_file)
 from urllib.parse import quote
+from werkzeug.utils import secure_filename
 
 from . import (from_template, generate, identify, item, lines, materials, measure, messages,
                offset, outline, rules, shape, structure)
@@ -31,7 +34,7 @@ app = Flask(__name__)
 # A template PDF request carries only JSON; the upload path is the only one that takes bytes.
 # 512 MB: flattened flag PDFs routinely pass 64 MB, and the first customer to hit the old cap
 # got an HTML 413 the frontend could not parse. The matching errorhandler keeps the answer JSON.
-app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
 
 
 @app.errorhandler(413)
@@ -55,6 +58,24 @@ LOGIN_URL_ENV = "PREPRESS_LOGIN_URL"
 # Where the issuing app keeps the token in the browser. Its name, not ours — a shop bolting this
 # behind an existing login already has a key, and the page has to read the same one.
 SESSION_KEY_ENV = "PREPRESS_SESSION_STORAGE_KEY"
+# Where a customer sends the checked files. Shop data, like the brand: no address, no button.
+ORDER_EMAIL_ENV = "PREPRESS_ORDER_EMAIL"
+# The size a PUBLIC upload can be, in MB, when something in front of this app (a CDN, a tunnel) caps
+# requests below MAX_CONTENT_LENGTH. Told to the page so a customer hears the limit BEFORE the upload,
+# not as a bare 413 after it. Unset: the app's own cap. Requests through an open door (see
+# PREPRESS_OPEN_HEADER) are not behind that front, so they get the app's cap too.
+PUBLIC_UPLOAD_LIMIT_ENV = "PREPRESS_PUBLIC_UPLOAD_LIMIT_MB"
+# Files the customer has ALREADY put on the shop's own file server (an FTP the shop publishes,
+# a share) are checked by PATH instead of being uploaded again — the way round a CDN's upload cap.
+# `;`-separated roots; the pasted path is resolved FIRST and then tested against a root, so `..`
+# cannot walk out, and nothing outside the roots is even tested for existence. Unset: no path check.
+PATH_ROOTS_ENV = "PREPRESS_PATH_ROOTS"
+# What the page tells a customer about where to put the file ("ftp.example.com, login …").
+PATH_HINT_ENV = "PREPRESS_PATH_HINT"
+# A request header whose PRESENCE means "this came through a door that needs no login" — a LAN
+# entry with no login page of its own, say. Name the header here; the proxy must SET it on that
+# entry and STRIP it on every public one, because a browser can send any header it likes.
+OPEN_HEADER_ENV = "PREPRESS_OPEN_HEADER"
 DEFAULT_SESSION_KEY = "session_token"
 # The bar at the top of every page. A shop's mark belongs to the shop, so the logo is a URL the
 # deployment supplies rather than a file committed here; with none set the bar wears the name.
@@ -102,8 +123,11 @@ def asset(name):
 def _inject_base_path():
     """`base` in every template, so a page's own links survive being mounted under a prefix."""
     return {"base": base_path(), "asset": asset,
-            "login_url": _login_url(), "gated": bool(_session_secret()),
+            "login_url": _login_url(), "gated": _gated(),
             "session_key": os.environ.get(SESSION_KEY_ENV) or DEFAULT_SESSION_KEY,
+            "order_email": (os.environ.get(ORDER_EMAIL_ENV) or "").strip(),
+            "upload_limit_mb": _upload_limit_mb(),
+            "path_hint": (os.environ.get(PATH_HINT_ENV) or "").strip() if _path_roots() else "",
             "brand_name": os.environ.get(BRAND_NAME_ENV) or "prepress-open",
             "brand_logo": os.environ.get(BRAND_LOGO_ENV) or "",
             "brand_icon": os.environ.get(BRAND_ICON_ENV) or ""}
@@ -115,6 +139,65 @@ def _session_secret():
 
 def _login_url():
     return (os.environ.get(LOGIN_URL_ENV) or "").strip()
+
+
+def _opened_by_proxy():
+    header = (os.environ.get(OPEN_HEADER_ENV) or "").strip()
+    return bool(header) and bool(request.headers.get(header))
+
+
+def _gated():
+    """Does THIS request have to show a session token?"""
+    return bool(_session_secret()) and not _opened_by_proxy()
+
+
+def _path_roots():
+    return [root.strip() for root in (os.environ.get(PATH_ROOTS_ENV) or "").split(";")
+            if root.strip()]
+
+
+class PathRefused(ValueError):
+    """The pasted path is not a file we may read; the message is for the customer."""
+
+
+def resolve_shared_path(raw_path):
+    """An existing FILE under one of the roots, or raise PathRefused.
+
+    Accepts what a customer is likely to paste: `MERA/baner.pdf`, `MERA\\baner.pdf`, the full
+    `ftp://host/MERA/baner.pdf` their client shows, or a full UNC/drive path that already lies under
+    a root. The allowlist is applied to the RESOLVED path (symlinks, `..` and drive letters gone).
+    """
+    text = (raw_path or "").strip().strip('"').strip()
+    if not text:
+        raise PathRefused("Podaj ścieżkę do pliku.")
+    if "://" in text:                                # ftp://host/dir/file → dir/file
+        text = text.split("://", 1)[1].split("/", 1)[1] if "/" in text.split("://", 1)[1] else ""
+    text = text.replace("/", "\\")
+    roots = [os.path.realpath(root) for root in _path_roots()]
+    candidates = [text] + [os.path.join(root, text.lstrip("\\")) for root in roots]
+    for candidate in candidates:
+        try:
+            real = os.path.realpath(candidate)
+        except (OSError, ValueError):
+            continue
+        inside = any(os.path.normcase(real).startswith(os.path.normcase(root) + os.sep)
+                     for root in roots)
+        if inside and os.path.isfile(real):
+            return real
+    raise PathRefused("Nie znajdujemy takiego pliku na naszym serwerze. Sprawdź ścieżkę — "
+                      "podaj ją tak, jak widzisz ją w programie FTP, np. MojaFirma/baner.pdf.")
+
+
+def _upload_limit_mb():
+    """The largest upload THIS request's door accepts, in whole megabytes."""
+    own = app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024)
+    public = (os.environ.get(PUBLIC_UPLOAD_LIMIT_ENV) or "").strip()
+    if not public or _opened_by_proxy():
+        return own
+    try:
+        return min(own, int(public))
+    except ValueError:
+        return own
 
 
 def session_identity():
@@ -153,7 +236,7 @@ def require_session(view):
     """
     @functools.wraps(view)
     def guarded(*args, **kwargs):
-        if _session_secret() and not session_identity():
+        if _gated() and not session_identity():
             # A browser NAVIGATION (a pasted or e-mailed link) carries no Authorization header and
             # never can, so handing it raw JSON is a dead end — send it to the login instead.
             # "text/html" spelled out, not `accept_html` — that is also true for the `*/*` this
@@ -204,8 +287,8 @@ def api_session():
     who = session_identity()
     if who:
         announce_visit(who, request.headers.get("Referer") or "/")
-    return jsonify({"gated": bool(_session_secret()),
-                    "authenticated": bool(who) or not _session_secret(),
+    return jsonify({"gated": _gated(),
+                    "authenticated": bool(who) or not _gated(),
                     "login": _login_url()})
 
 
@@ -267,7 +350,6 @@ def _refusal(error):
 
 
 @app.route("/api/resolve", methods=["POST"])
-@require_session
 def api_resolve():
     """What the boxes WILL be, so the page can show them before anything is downloaded."""
     try:
@@ -283,7 +365,6 @@ def api_resolve():
 
 
 @app.route("/api/template", methods=["POST"])
-@require_session
 def api_template():
     """The queue → one multipage PDF."""
     payload = request.get_json(silent=True) or {}
@@ -528,9 +609,12 @@ def api_demo_artwork():
 
 
 @app.route("/api/templates/<token>/pdf")
-@require_session
 def api_template_pdf(token):
-    """The customer's sheet for one imported template. Public, like the rest of that surface."""
+    """The customer's sheet for one imported template.
+
+    Public, like the generator: a template is the thing we WANT every customer to have, and the login
+    guards the check, not the download (customers were bounced to /status for a sheet, 2026-09-02).
+    """
     template = materials.get_template(token)
     if not template:
         return jsonify({"error": "Nie znamy takiego szablonu — odśwież stronę."}), 404
@@ -540,9 +624,56 @@ def api_template_pdf(token):
         # A template the shop saved but that cannot be drawn is the SHOP's problem to fix, and the
         # customer should be told plainly rather than handed a broken sheet.
         return jsonify({"error": str(error)}), 409
+    # "Play A.pdf" told a customer nothing (2026-09-02): the sheet is named in full, with the
+    # finished size in centimetres, the unit flags are ordered in.
     name = (template.get("name") or token).replace("/", "-")
+    trim = template.get("trim_mm") or []
+    if len(trim) == 2:
+        name += f" {round(float(trim[0]) / 10)}x{round(float(trim[1]) / 10)} cm"
     return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf",
                      as_attachment=True, download_name=f"{name}.pdf")
+
+
+# ── Uploads held for a re-check ─────────────────────────────────────────────
+# A customer who picks a different template or material should not send a 600 MB file again. The
+# bytes are held in MEMORY for a while, keyed by a token the check response carries — memory, not
+# disk, because the check page promises the file never touches the disk here, and the check already
+# holds the whole file in memory anyway. One global cap keeps a busy hour from eating the machine;
+# the oldest upload goes first.
+UPLOAD_HOLD_SECONDS = 30 * 60
+UPLOAD_HOLD_MAX_BYTES = 1536 * 1024 * 1024    # ponytail: one global cap; per-caller caps if abused
+_held_uploads = {}                              # token -> {"data", "filename", "expires"}
+_held_lock = threading.Lock()
+
+
+def _remember_upload(data, filename):
+    """Hold these bytes for a re-check; returns the token the page sends back."""
+    now = time.time()
+    with _held_lock:
+        for stale in [t for t, held in _held_uploads.items() if held["expires"] < now]:
+            del _held_uploads[stale]
+        while _held_uploads and (sum(len(h["data"]) for h in _held_uploads.values())
+                                 + len(data) > UPLOAD_HOLD_MAX_BYTES):
+            oldest = min(_held_uploads, key=lambda t: _held_uploads[t]["expires"])
+            del _held_uploads[oldest]
+        token = secrets.token_urlsafe(16)
+        _held_uploads[token] = {"data": data, "filename": filename,
+                                "expires": now + UPLOAD_HOLD_SECONDS}
+    return token
+
+
+def _recall_upload(token):
+    """The held upload for this token, its clock restarted — or None when it is gone."""
+    now = time.time()
+    with _held_lock:
+        held = _held_uploads.get(token)
+        if not held:
+            return None
+        if held["expires"] < now:
+            del _held_uploads[token]
+            return None
+        held["expires"] = now + UPLOAD_HOLD_SECONDS
+        return held
 
 
 @app.route("/api/check", methods=["POST"])
@@ -561,11 +692,45 @@ def api_check():
     if upload is None:
         return jsonify({"error": "No file uploaded."}), 400
     data = upload.read()
+    filename = upload.filename or ""
+    return _judge(data, filename, request.form, _remember_upload(data, filename))
+
+
+@app.route("/api/check-path", methods=["POST"])
+@require_session
+def api_check_path():
+    """Judge a file the customer already put on the shop's file server, by its path."""
+    if not _path_roots():
+        return jsonify({"error": "Sprawdzanie po ścieżce jest wyłączone."}), 404
+    try:
+        real = resolve_shared_path(request.form.get("path"))
+    except PathRefused as refusal:
+        return jsonify({"error": str(refusal)}), 404
+    if os.path.getsize(real) > app.config["MAX_CONTENT_LENGTH"]:
+        return jsonify({"error": "Ten plik jest za duży nawet dla sprawdzania po ścieżce."}), 413
+    with open(real, "rb") as handle:
+        data = handle.read()
+    filename = os.path.basename(real)
+    return _judge(data, filename, request.form, _remember_upload(data, filename))
+
+
+@app.route("/api/recheck/<token>", methods=["POST"])
+@require_session
+def api_recheck(token):
+    """The same judgement over a held upload, with a different template, material, side or page."""
+    held = _recall_upload(token)
+    if not held:
+        return jsonify({"error": "Ten plik nie jest już w pamięci — wgraj go ponownie."}), 410
+    return _judge(held["data"], held["filename"], request.form, token)
+
+
+def _judge(data, filename, form, token=None):
+    """The check itself, over bytes already in hand. `form` carries the customer's choices."""
     # Which page of the customer's file is being judged (0-based). The whole pipeline always took
     # a page_index; the endpoint simply never passed one, so a 4-page file was silently judged by
     # page 1 alone.
     try:
-        page_index = max(int(request.form.get("page") or 0), 0)
+        page_index = max(int(form.get("page") or 0), 0)
     except ValueError:
         page_index = 0
     try:
@@ -588,13 +753,31 @@ def api_check():
     # stored template supplies the same geometry its stamp would have carried. Never resolved
     # silently: this morning's real files match THREE templates by page size alone, and the wrong
     # pick is the 12 mm-off cut this project's history already paid for once.
-    confirmed = (request.form.get("template") or "").strip()
+    confirmed = (form.get("template") or "").strip()
+    material_token = (form.get("material") or "").strip()
+    free_size = False
     if confirmed:
         template = materials.get_template(confirmed)
         if not template:
             return jsonify({"error": "Nie znamy takiego szablonu — odśwież stronę."}), 404
         stamp = from_template.stamp_payload(template)
         assumed = True
+    elif material_token:
+        # The fourth rung: no template at all — a banner, a board, a sticker. The customer names the
+        # material and the finished size, and the file is judged against the SAME geometry the
+        # generator would have stamped into a sheet for that pair (item.resolve → generate.stamp_payload),
+        # so the two roads cannot drift. At 1:1 and without the spec strip: what is being judged is
+        # the artwork itself, not one of our pages. Rectangles only — a size alone has no outline.
+        try:
+            resolved = _resolve_from_request({"material": material_token, "scale": 1,
+                                              "width": form.get("width"),
+                                              "height": form.get("height")})
+        except item.ItemError as error:
+            return _refusal(error)
+        resolved["spec_strip_mm"] = 0.0
+        stamp = generate.stamp_payload(resolved)
+        assumed = True
+        free_size = True
     else:
         found = identify.read_stamp(data, page_index)
         if not found:
@@ -612,8 +795,10 @@ def api_check():
                     for t in materials.load_templates()
                     if abs(float(t["page_mm"][0]) - page_mm[0]) <= tolerance
                     and abs(float(t["page_mm"][1]) - page_mm[1]) <= tolerance]
+                # page_mm rides along so the page can pre-fill the free-size picker.
                 return jsonify({"recognised": False, "reason": found["reason"],
-                                "candidates": candidates}), 200
+                                "candidates": candidates, "page_mm": page_mm,
+                                "token": token}), 200
         else:
             stamp = found["stamp"]
             assumed = False
@@ -649,7 +834,7 @@ def api_check():
     # What the objects declare: fonts, colour spaces, colorants, overprint, page count, producer.
     # `readable` and `reason` are dropped rather than merged — the render already reported why it
     # could not measure, and two facts under one name is how a verdict quietly loses its reason.
-    declared = structure.facts(data, upload.filename or "")
+    declared = structure.facts(data, filename)
     facts.update({key: value for key, value in declared.items()
                   if key not in ("readable", "reason")})
     material = materials.get(expected["material_id"] or "")
@@ -662,7 +847,7 @@ def api_check():
     # never carries its own wykrojnik, so asking it for one repeats a warning the przód already
     # made (shop rule, 2026-08-27). The client says which side this file is; sides only exist for
     # pairs, so a single-file check never sends the field.
-    if request.form.get("side") == "back":
+    if form.get("side") == "back":
         findings = [finding for finding in findings if finding["id"] != "cut_path"]
     # The uploaded page as a texture, straight back in the response. Base64 on purpose: the
     # customer's bytes still never touch the disk, so there is nothing to retain or leak — the
@@ -676,6 +861,8 @@ def api_check():
     except Exception:                               # noqa: BLE001 — the verdict outranks the picture
         preview_png = None
     return jsonify({"recognised": True, "expected": expected, "page_mm": page_mm,
+                    # Send this back to /api/recheck/<token> instead of the file again.
+                    "token": token,
                     # The clean template itself — nothing to judge, and the page says so instead
                     # of scolding our own spec panel.
                     "bare_template": bare_template,
@@ -684,6 +871,7 @@ def api_check():
                     # Said out loud when the template was assumed on the customer's word rather
                     # than read from a stamp — the report is only as right as their pick.
                     "assumed_template": assumed,
+                    "free_size": free_size,
                     "template_token": (stamp or {}).get("template"),
                     "preview_png": preview_png,
                     "measured": {k: facts.get(k) for k in
@@ -695,6 +883,31 @@ def api_check():
                     "summary": (messages.render("summary.bare_template", {}, wording)
                                 if bare_template
                                 else rules.summarise(findings, wording))})
+
+
+# The report is built from what the page already holds, so a huge body is abuse, not a big job.
+MAX_REPORT_BODY_BYTES = 12 * 1024 * 1024
+
+
+@app.route("/api/report", methods=["POST"])
+@require_session
+def api_report():
+    """The verdict the customer is reading, as a PDF to attach to their order.
+
+    Built from the check the page already received — the file itself is not sent again, and the
+    picture is the overlay the page drew (so the report shows exactly what the customer saw).
+    """
+    if (request.content_length or 0) > MAX_REPORT_BODY_BYTES:
+        return jsonify({"error": "Raport jest za duży."}), 413
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload.get("checks"), list):
+        return jsonify({"error": "Brak wyniku kontroli do zapisania."}), 400
+    from . import report
+    pdf_bytes = report.build_pdf(payload, brand=os.environ.get(BRAND_NAME_ENV) or "prepress-open")
+    stem = re.sub(r"\.[^.]+$", "",
+                  secure_filename(report.fold_ascii(payload.get("filename") or "plik")))
+    return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf",
+                     as_attachment=True, download_name=f"raport-{stem or 'plik'}.pdf")
 
 
 # ── Admin surface ───────────────────────────────────────────────────────────

@@ -59,7 +59,7 @@ body.cutting .note-float { top: 12px; bottom: auto; max-width: 34%; }
 </head>
 <body class="{{ 'bare' if bare else '' }}{{ ' embed' if embed else '' }}">
 {% with page_title = name, page_sub = 'podgląd 3D szablonu',
-        extra_actions = '<a data-authed href="' ~ base ~ '/api/templates/' ~ token ~ '/pdf">pobierz PDF</a>'
+        extra_actions = '<a href="' ~ base ~ '/api/templates/' ~ token ~ '/pdf">pobierz PDF</a>'
                         ~ '<a href="' ~ base ~ '/">← szablony</a>' %}
 {% include "_brand_header.html" %}{% endwith %}
 

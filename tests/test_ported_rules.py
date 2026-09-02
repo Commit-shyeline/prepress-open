@@ -367,9 +367,53 @@ def test_every_rule_the_panel_offers_is_a_rule_that_runs():
              "has_diacritics": True, "colour_spaces": ["ICCBased(RGB)"],
              "spot_names": ["PANTONE 711 C"], "producer": "Microsoft Word",
              "blank_edges_mm": (9, 0, 0, 0), "safe_intrusion_mm": 4.0, "min_dpi": 20,
-             "guides_present": True, "declared_boxes_mm": {"trimbox": (980, 1980)}}
+             "guides_present": True, "declared_boxes_mm": {"trimbox": (980, 1980)},
+             "text_min_height_mm": 4.0}
     produced = {f["id"] for f in rules.run(facts, _expected(), STICKER)}
+    # The split rule only has something to say about a job over the threshold on both sides.
+    huge = identify.stamped_geometry(generate.stamp_payload(item.resolve(BANNER, 6000, 7000)))
+    produced |= {f["id"] for f in rules.run(facts, huge, STICKER)}
     assert set(rules.RULE_IDS) - produced == set(), set(rules.RULE_IDS) - produced
+
+
+# ── The three rules added for the public check (2026-09-02) ─────────────────
+
+def test_small_live_text_is_flagged_and_converted_text_is_not():
+    facts = {"page_mm": (1040, 2040), "text_min_height_mm": 6.2}
+    finding = _one(rules.run(facts, _expected(), BANNER), "text_height")
+    assert finding["level"] == "amber" and finding["code"] == "check.text_height.small"
+    assert finding["values"] == {"smallest": "6.2", "floor": "10"}
+    assert _one(rules.run({"page_mm": (1040, 2040)}, _expected(), BANNER), "text_height") is None
+    tall = _one(rules.run({"page_mm": (1040, 2040), "text_min_height_mm": 12}, _expected(), BANNER),
+                "text_height")
+    assert tall["level"] == "green"
+
+
+def test_the_text_floor_is_the_materials_when_it_sets_one():
+    facts = {"page_mm": (1040, 2040), "text_min_height_mm": 6.2}
+    lenient = dict(BANNER, min_text_mm=5)
+    assert _one(rules.run(facts, _expected(), lenient), "text_height")["level"] == "green"
+
+
+def test_a_job_over_the_split_threshold_on_both_sides_is_said_so():
+    huge = identify.stamped_geometry(generate.stamp_payload(item.resolve(BANNER, 6000, 7000)))
+    finding = _one(rules.run({"page_mm": (6040, 7040)}, huge, BANNER), "split")
+    assert finding["level"] == "amber"
+    assert finding["values"] == {"netto_w": "6000", "netto_h": "7000", "over": "5000"}
+    # One long side alone comes off the roll in one piece — nothing to say.
+    long_one = identify.stamped_geometry(generate.stamp_payload(item.resolve(BANNER, 1000, 7000)))
+    assert _one(rules.run({"page_mm": (1040, 7040)}, long_one, BANNER), "split") is None
+
+
+def test_a_page_at_one_to_ten_is_a_scaled_file_not_a_wrong_size():
+    expected = _expected()                           # 1000 x 2000 netto, 20 mm bleed → 1040 x 2040
+    finding = _one(rules.run({"page_mm": (104, 204)}, expected, BANNER), "page_size")
+    assert finding["level"] == "info" and finding["code"] == "check.page_size.scaled"
+    assert finding["values"]["scale"] == 10
+    rotated_scaled = _one(rules.run({"page_mm": (204, 104)}, expected, BANNER), "page_size")
+    assert rotated_scaled["code"] == "check.page_size.scaled"
+    wrong = _one(rules.run({"page_mm": (700, 900)}, expected, BANNER), "page_size")
+    assert wrong["level"] == "red"
 
 
 # ── The shop owns the wording ───────────────────────────────────────────────

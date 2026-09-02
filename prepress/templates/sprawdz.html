@@ -65,6 +65,12 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
           color: var(--muted); margin: 14px 0 4px; }
 .side-h:first-child { margin-top: 0; }
 .assumed { font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
+/* The overlay: the page as a picture with the boxes the verdict was judged on drawn over it. */
+#overlay { display: block; max-width: 100%; height: auto; border: 1px solid var(--line);
+           border-radius: 8px; background: #fff; }
+.acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.acts .pick { text-decoration: none; display: inline-block; }
+.acts .main { background: var(--accent-mid); color: #fff; border-color: var(--accent-mid); }
 </style>
 </head>
 <body>
@@ -83,6 +89,19 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
                     szablonie. Flaga dwustronna? Wrzuć oba pliki naraz, przód i tył.</span>
                 <input id="file" type="file" accept=".pdf,application/pdf" multiple>
             </label>
+            {% if path_hint %}
+            <details id="pathBox" style="margin-top:12px">
+                <summary class="note" style="cursor:pointer"><b>Plik większy niż {{ upload_limit_mb }} MB?</b>
+                    Wgraj go na nasz serwer FTP i wklej tu ścieżkę.</summary>
+                <p class="note" style="margin:8px 0">{{ path_hint }}. Po wgraniu wpisz ścieżkę tak,
+                    jak widzisz ją w programie FTP, np. <code>MojaFirma/baner.pdf</code>.</p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                    <input id="sharedPath" class="pick" type="text" spellcheck="false"
+                           style="flex:1 1 220px;min-width:0" placeholder="MojaFirma/baner.pdf">
+                    <button type="button" class="pick" id="sharedBtn">Sprawdź ten plik</button>
+                </div>
+            </details>
+            {% endif %}
             <p id="msg" class="msg" hidden></p>
             <div id="pageNav" class="page-nav" hidden></div>
             <div id="pickTpl" hidden style="margin-top:12px">
@@ -91,11 +110,35 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
                     na którym projektowano, a sprawdzimy plik względem jego linii.</p>
                 <div id="pickBtns" style="display:flex;gap:8px;flex-wrap:wrap"></div>
             </div>
+            <div id="freeSize" hidden style="margin-top:12px">
+                <p class="note" style="margin:0 0 8px"><b>To nie jest plik na naszym szablonie</b> —
+                    baner, płyta, naklejka? Podaj materiał i rozmiar gotowego produktu, a sprawdzimy
+                    spady, obszar bezpieczny, rozdzielczość i kolory według zasad dla tego materiału.</p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                    <select id="freeMat" class="pick"></select>
+                    <input id="freeW" class="pick" type="number" min="1" step="1" inputmode="numeric"
+                           style="width:7em" placeholder="szer. mm"> ×
+                    <input id="freeH" class="pick" type="number" min="1" step="1" inputmode="numeric"
+                           style="width:7em" placeholder="wys. mm"> mm
+                    <button type="button" class="pick" id="freeBtn">Sprawdź dla tego materiału</button>
+                </div>
+            </div>
         </div>
         <div class="card" id="reportCard" hidden style="margin-top:18px">
             <h2>Wynik kontroli</h2>
             <p class="summary" id="summary"></p>
             <div id="checks"></div>
+            <div id="actions" class="acts" hidden>
+                <button type="button" class="pick" id="reportBtn">Pobierz raport PDF</button>
+                <a class="pick main" id="mailBtn" hidden>Wyślij pliki do nas</a>
+            </div>
+            <p class="note" id="actionsNote" hidden>Raport PDF załącz do wiadomości razem z plikiem —
+                pomoże nam szybciej przygotować zamówienie.</p>
+        </div>
+        <div class="card" id="overlayCard" hidden style="margin-top:18px">
+            <h2>Podgląd z ramkami</h2>
+            <canvas id="overlay"></canvas>
+            <p class="note" id="overlayLegend" style="margin:8px 0 0"></p>
         </div>
     </div>
 
@@ -154,14 +197,38 @@ function takeFiles(files) {
     if (pdfs.length > 2) {
         return message('Najwyżej dwa pliki: przód i tył flagi dwustronnej.', true);
     }
+    const tooBig = pdfs.find((f) => f.size > UPLOAD_LIMIT_MB * 1024 * 1024);
+    if (tooBig) return message(tooBigMessage(tooBig.name, tooBig.size), true);
     const isBack = (f) => /ty[lł]|_b\b|\bb\b/i.test(f.name || '');
     const isFront = (f) => /prz[oó]d|_a\b/i.test(f.name || '');
     let front = pdfs[0], back = pdfs[1] || null;
     if (pdfs.length === 2 && (isBack(pdfs[0]) || isFront(pdfs[1]))) {
         [front, back] = [pdfs[1], pdfs[0]];
     }
-    PAIR = { front, back };
+    PAIR = { front, back, tokens: { front: null, back: null } };
     checkPair(null);
+}
+
+/* A file already on the shop's server: a stand-in for the File object, carrying the path the
+   customer pasted. The first check posts the PATH; every later one uses the held token like an
+   upload does. */
+const sharedBtn = el('sharedBtn');
+if (sharedBtn) {
+    const go = () => {
+        const path = el('sharedPath').value.trim();
+        if (!path) return message('Wklej ścieżkę do pliku na serwerze.', true);
+        const name = path.split(/[\\/]/).pop() || path;
+        PAIR = { front: { name, path, size: 0 }, back: null, tokens: { front: null, back: null } };
+        checkPair(null);
+    };
+    sharedBtn.addEventListener('click', go);
+    el('sharedPath').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+}
+
+function tooBigMessage(name, bytes) {
+    const mb = bytes ? ` ma ${Math.round(bytes / 1048576)} MB, a` : ' jest za duży —';
+    return `Plik ${escapeHtml(name)}${mb} maksimum to ${UPLOAD_LIMIT_MB} MB. `
+        + 'Zmniejsz plik (np. skompresuj obrazy do 150 DPI w rozmiarze docelowym) i wgraj ponownie.';
 }
 
 function message(text, bad) {
@@ -171,20 +238,42 @@ function message(text, bad) {
     box.innerHTML = text || '';
 }
 
-async function checkOne(file, template, side, page) {
+async function checkOne(file, template, side, page, free, slot = 'front') {
     const body = new FormData();
-    body.append('file', file);
+    // The server holds the bytes for a while after the first check, so a different template,
+    // material or page is judged WITHOUT sending the file again. A token that has expired (410)
+    // falls back to the upload, once.
+    const held = PAIR.tokens[slot];
+    if (!held) {
+        if (file.path) body.append('path', file.path);
+        else body.append('file', file);
+    }
     if (template) body.append('template', template);
+    // No template: the material and the finished size the customer declared (the fourth rung).
+    if (free) {
+        body.append('material', free.material);
+        body.append('width', free.width);
+        body.append('height', free.height);
+    }
     // 'back' silences the wykrojnik check: the die line travels with the front file of a pair.
     if (side) body.append('side', side);
     if (page) body.append('page', page);
-    const resp = await fetch('{{ base }}/api/check', { method: 'POST', body, headers: authHeaders() });
+    const url = held ? `{{ base }}/api/recheck/${encodeURIComponent(held)}`
+        : file.path ? '{{ base }}/api/check-path' : '{{ base }}/api/check';
+    const resp = await fetch(url, { method: 'POST', body, headers: authHeaders() });
     if (resp.status === 401) {
         goToLogin();
         return { error: 'Zaloguj się, żeby sprawdzić plik.' };
     }
+    if (resp.status === 410 && held) {
+        PAIR.tokens[slot] = null;
+        return checkOne(file, template, side, page, free, slot);
+    }
+    if (resp.status === 413) return { error: tooBigMessage(file.name, file.size) };
     try {
-        return await resp.json();
+        const data = await resp.json();
+        if (data.token) PAIR.tokens[slot] = data.token;
+        return data;
     } catch {
         // A proxy or the framework answered with an HTML error page — say the status in Polish
         // instead of surfacing "unexpected end of JSON input".
@@ -198,6 +287,10 @@ async function checkOne(file, template, side, page) {
    subdomain would see no session at all. Standalone (no `gated`), none of this runs and the page
    behaves exactly as it always has. */
 const BASE = {{ base|tojson }};
+const ORDER_EMAIL = {{ order_email|tojson }};
+const UPLOAD_LIMIT_MB = {{ upload_limit_mb }};
+// The last verdict shown, for the report and the mail: what the customer sees is what gets sent.
+let LAST = null;
 
 /* Asked once on load: a customer who is not logged in should learn it from the page, not from a
    refusal after they have already picked a 90 MB file. */
@@ -214,17 +307,22 @@ if (GATED) {
 
 /* The whole pair, front first. An unstamped front comes back with candidates; the pick re-runs
    BOTH sides against the chosen template, so przód and tył are judged by the same lines. */
-async function checkPair(template, page = 0) {
+async function checkPair(template, page = 0, free = null) {
     message('<span class="spin"></span>Sprawdzamy plik…', false);
     el('reportCard').hidden = true;
     el('modelWrap').hidden = true;
     el('pickTpl').hidden = true;
+    el('freeSize').hidden = true;
+    el('overlayCard').hidden = true;
+    el('actions').hidden = true;
+    el('actionsNote').hidden = true;
 
     let front, back = null;
     try {
-        front = await checkOne(PAIR.front, template, null, page);
+        front = await checkOne(PAIR.front, template, null, page, free);
         if (front.recognised && PAIR.back) {
-            back = await checkOne(PAIR.back, template || front.template_token, 'back', page);
+            back = await checkOne(PAIR.back, template || front.template_token, 'back', page, free,
+                                  'back');
         }
     } catch (e) {
         return message('Nie udało się sprawdzić pliku: ' + escapeHtml(e.message), true);
@@ -239,7 +337,7 @@ async function checkPair(template, page = 0) {
         nav.querySelectorAll('[data-page]').forEach((btn) =>
             btn.addEventListener('click', () => {
                 if (Number(btn.dataset.page) !== (front.page || 0)) {
-                    checkPair(template, Number(btn.dataset.page));
+                    checkPair(template, Number(btn.dataset.page), free);
                 }
             }));
     } else {
@@ -258,6 +356,10 @@ async function checkPair(template, page = 0) {
             btn.addEventListener('click', () => checkPair(btn.dataset.tpl)));
         return;
     }
+    if (!front.recognised) {
+        await offerFreeSize(front.page_mm || []);
+        return;
+    }
     renderReport(front, back);
     if (front.recognised && front.template_token) showModel(front, back);
 }
@@ -273,16 +375,37 @@ function checksHtml(data) {
         </div>`).join('');
 }
 
+/* The fourth rung. Materials come from the same public list the generator reads; the size is
+   pre-filled with the page the file actually has, because for most banners the page IS the finished
+   size (or the finished size plus the bleed, which the customer sees and corrects). */
+let MATERIALS = null;
+async function offerFreeSize(pageMm) {
+    if (!MATERIALS) {
+        try {
+            MATERIALS = (await (await fetch(`${BASE}/api/materials`)).json()).materials || [];
+        } catch { MATERIALS = []; }
+        el('freeMat').innerHTML = MATERIALS.map((m) =>
+            `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`).join('');
+        el('freeBtn').addEventListener('click', () => checkPair(null, 0, {
+            material: el('freeMat').value,
+            width: el('freeW').value,
+            height: el('freeH').value,
+        }));
+    }
+    if (pageMm.length === 2) {
+        el('freeW').value = Math.round(pageMm[0]);
+        el('freeH').value = Math.round(pageMm[1]);
+    }
+    el('freeSize').hidden = false;
+    el('reportCard').hidden = false;
+    el('summary').textContent = '';
+    el('checks').innerHTML = `<div class="unrec">Nie rozpoznaliśmy szablonu.<br>
+        <span class="note">Projekt na fladze? Pobierz szablon z <a href="${BASE}/">generatora</a>
+        i umieść projekt na nim. Inny produkt? Wskaż materiał i rozmiar powyżej.</span></div>`;
+}
+
 function renderReport(front, back) {
     el('reportCard').hidden = false;
-    if (!front.recognised) {
-        el('summary').textContent = '';
-        el('checks').innerHTML = `<div class="unrec">Nie rozpoznaliśmy szablonu:
-            ${escapeHtml(front.reason || '')}<br>
-            <span class="note">Pobierz szablon z <a href="${BASE}/">generatora</a> i umieść projekt na nim —
-            wtedy sprawdzimy plik względem właściwych linii.</span></div>`;
-        return;
-    }
     if (front.bare_template) {
         el('summary').textContent = '';
         el('checks').innerHTML = `<div class="unrec" style="border-left-color: var(--accent-mid)">
@@ -293,14 +416,140 @@ function renderReport(front, back) {
         return;
     }
     el('summary').textContent = front.summary || '';
-    const assumed = front.assumed_template
+    const assumed = front.free_size
+        ? `<p class="assumed">Sprawdzono względem podanego materiału i rozmiaru, nie naszego szablonu.
+           Raport jest trafny na tyle, na ile trafne były te dane.</p>`
+        : front.assumed_template
         ? `<p class="assumed">Szablon wskazałeś ręcznie, bo plik nie ma naszego stempla.
            Raport jest trafny na tyle, na ile trafny był ten wybór.</p>` : '';
     el('checks').innerHTML = back
         ? `${assumed}<div class="side-h">Przód</div>${checksHtml(front)}
            <div class="side-h">Tył. ${escapeHtml(back.summary || '')}</div>${checksHtml(back)}`
         : assumed + checksHtml(front);
+    LAST = { front, back };
+    drawOverlay(front);
+    offerActions(front, back);
 }
+
+/* ── The overlay: the same boxes the verdict was judged on, on the page itself ─
+   Frames: the PNG is the whole page; `expected` is the stamped geometry at full size, so every
+   millimetre is divided by the stamp's scale to land on the page; the findings' regions are already
+   in page millimetres (measured off a render of this very page). */
+const LEVEL_RGBA = { red: 'rgba(210,31,60,', amber: 'rgba(199,119,0,' };
+function drawOverlay(front) {
+    const card = el('overlayCard');
+    if (!front.preview_png || !front.expected || !(front.page_mm || []).length) {
+        card.hidden = true; return;
+    }
+    const image = new Image();
+    image.onload = () => {
+        const canvas = el('overlay');
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(image, 0, 0);
+        const px = canvas.width / front.page_mm[0];          // pixels per PAGE millimetre
+        const exp = front.expected, s = exp.scale || 1;
+        const artW = exp.brutto_mm[0] / s, artH = exp.brutto_mm[1] / s, bleed = exp.bleed_mm / s;
+        const sides = exp.safe_sides_mm || {};
+        const safe = (side) => (bleed + (sides[side] ?? exp.safe_mm) / s);
+        const box = (x, y, w, h, colour, width) => {
+            ctx.strokeStyle = colour; ctx.lineWidth = width; ctx.setLineDash([]);
+            ctx.strokeRect(x * px, y * px, w * px, h * px);
+        };
+        const hair = Math.max(1.5, canvas.width / 600);
+        box(0, 0, artW, artH, 'rgba(90,90,96,.9)', hair);                          // brutto
+        box(bleed, bleed, artW - 2 * bleed, artH - 2 * bleed, '#d91a72', hair);       // netto
+        box(safe('left'), safe('top'), artW - safe('left') - safe('right'),
+            artH - safe('top') - safe('bottom'), '#2e9e52', hair);                    // safe
+        for (const check of front.checks || []) {
+            const tone = LEVEL_RGBA[check.level];
+            if (!tone) continue;
+            for (const [x, y, w, h] of check.regions || []) {
+                ctx.fillStyle = tone + '.18)';
+                ctx.fillRect(x * px, y * px, w * px, h * px);
+                box(x, y, w, h, tone + '.95)', hair * 1.6);
+            }
+        }
+        el('overlayLegend').textContent = overlayLegend(front);
+        card.hidden = false;
+    };
+    image.src = `data:image/png;base64,${front.preview_png}`;
+}
+
+function overlayLegend(front) {
+    const marked = (front.checks || []).some((c) => (c.regions || []).length && LEVEL_RGBA[c.level]);
+    return 'Szara ramka: spad (brutto). Różowa: linia cięcia. Zielona: obszar bezpieczny — napisy '
+        + 'i logo trzymaj wewnątrz niej.' + (marked
+            ? ' Czerwone i bursztynowe pola: miejsca z wyniku kontroli.' : '');
+}
+
+/* ── Report PDF + the mail ─────────────────────────────────────────────────── */
+function subjectLine(front) {
+    const exp = front.expected || {};
+    const what = (front.material && front.material.name) || exp.label || '';
+    const size = exp.netto_mm ? `${Math.round(exp.netto_mm[0])}×${Math.round(exp.netto_mm[1])} mm` : '';
+    return [what, size].filter(Boolean).join(' · ');
+}
+
+function offerActions(front, back) {
+    el('actions').hidden = false;
+    el('actionsNote').hidden = false;
+    const mail = el('mailBtn');
+    if (ORDER_EMAIL) {
+        const names = [PAIR.front.name, PAIR.back && PAIR.back.name].filter(Boolean);
+        const subject = `Plik do druku: ${names[0]}`;
+        const body = 'Dzień dobry,\n\nprzesyłam pliki do druku:\n'
+            + names.map((n) => `- ${n}`).join('\n')
+            + `\n\n${subjectLine(front)}\nRaport kontroli w załączniku.\n`;
+        mail.href = `mailto:${ORDER_EMAIL}?subject=${encodeURIComponent(subject)}`
+            + `&body=${encodeURIComponent(body)}`;
+        mail.hidden = false;
+    } else {
+        mail.hidden = true;
+    }
+}
+
+el('reportBtn').addEventListener('click', async () => {
+    if (!LAST) return;
+    const { front, back } = LAST;
+    const btn = el('reportBtn');
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.innerHTML = '<span class="spin"></span>Przygotowujemy raport…';
+    try {
+        const rows = (data) => (data.checks || []).map((c) =>
+            ({ level: c.level, title: c.title || c.code, detail: c.detail || '' }));
+        const checks = back
+            ? [...rows(front), { level: 'info', title: `Tył — ${back.summary || ''}` }, ...rows(back)]
+            : rows(front);
+        const overlay = el('overlayCard').hidden ? null
+            : el('overlay').toDataURL('image/png').split(',')[1];
+        const resp = await fetch(`${BASE}/api/report`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({
+                filename: PAIR.front.name, subject: subjectLine(front),
+                checked_at: new Date().toLocaleString('pl-PL'),
+                summary: front.summary || '', checks,
+                overlay_png: overlay, legend: overlay ? overlayLegend(front) : '',
+            }),
+        });
+        if (resp.status === 401) return goToLogin();
+        if (!resp.ok) return message('Nie udało się przygotować raportu.', true);
+        const url = URL.createObjectURL(await resp.blob());
+        const saver = document.createElement('a');
+        saver.href = url;
+        saver.download = `raport-${PAIR.front.name.replace(/\.[^.]+$/, '')}.pdf`;
+        document.body.appendChild(saver); saver.click(); saver.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e) {
+        message('Nie udało się przygotować raportu: ' + escapeHtml(e.message), true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = label;
+    }
+});
 
 function showModel(front, back) {
     el('modelWrap').hidden = false;

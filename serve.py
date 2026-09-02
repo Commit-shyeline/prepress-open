@@ -36,9 +36,9 @@ def main():
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger(__name__).info("prepress-open on %s:%s, %s threads",
                                      args.host, args.port, args.threads)
-    # A 512 MB upload over a slow uplink takes minutes; the default channel timeout would cut it.
+    # A 1 GB upload over a slow uplink takes minutes; the default channel timeout would cut it.
     serve(app, host=args.host, port=args.port, threads=args.threads,
-          channel_timeout=900, max_request_body_size=512 * 1024 * 1024)
+          channel_timeout=900, max_request_body_size=1024 * 1024 * 1024)
 
 
 if __name__ == "__main__":
