@@ -6,9 +6,11 @@ maths as a PDF page, `measure.py`), its resolution at the size the customer decl
 inches, the file's own DPI tag being only a hint), its colour mode, whether it was flattened, and
 its frame count. Everything else returns no finding rather than a pass.
 
-Pillow (MIT-compatible HPND) does the decoding. Its decompression-bomb guard is raised on purpose:
-a 3 × 1.5 m banner at 150 DPI is 157 million pixels, twice the default ceiling, and this tool
-exists for exactly such files — the upload cap already bounds what arrives.
+Pillow (MIT-compatible HPND) does the decoding. Its decompression-bomb guard is RAISED, not
+removed: a 3 × 1.5 m banner at 150 DPI is 157 million pixels, twice the default ceiling, and this
+tool exists for exactly such files. 400 million pixels (a 5 × 3 m banner at 150 DPI, ~1.2 GB of
+RGB) is the ceiling; a file claiming more is refused as unreadable BEFORE any pixel is decoded, so
+a 200-byte PNG header that promises 100 000 × 100 000 pixels cannot take the server down.
 """
 import io
 
@@ -16,7 +18,11 @@ from PIL import Image
 
 from . import structure
 
-Image.MAX_IMAGE_PIXELS = 2_000_000_000
+Image.MAX_IMAGE_PIXELS = 400_000_000
+# Pillow warns between MAX_IMAGE_PIXELS and twice that, and raises above; we want the raise for
+# anything over the ceiling, so the warning is promoted to the error the callers already handle.
+import warnings                                       # noqa: E402
+warnings.simplefilter("error", Image.DecompressionBombWarning)
 
 # A DPI tag under or over these is a default some export wrote, not a statement about the print.
 PLAUSIBLE_DPI = (30, 2400)
@@ -27,12 +33,18 @@ MODE_TO_COLOUR_SPACE = {"CMYK": "DeviceCMYK", "RGB": "DeviceRGB", "RGBA": "Devic
 
 
 def is_raster(data):
-    """True when Pillow recognises the bytes as an image (and they are not a PDF)."""
+    """True when Pillow recognises the bytes as an image (and they are not a PDF).
+
+    The header alone decides — the pixel ceiling is enforced by every function that decodes, and a
+    bomb therefore comes back as an unreadable raster rather than as "not a raster, try PDF".
+    """
     if data[:5] == b"%PDF-":
         return False
     try:
         with Image.open(io.BytesIO(data)) as image:
             image.verify()
+        return True
+    except Image.DecompressionBombError:
         return True
     except Exception:                                # noqa: BLE001 — not an image is the answer
         return False

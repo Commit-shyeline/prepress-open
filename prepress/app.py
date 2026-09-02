@@ -72,6 +72,9 @@ PUBLIC_UPLOAD_LIMIT_ENV = "PREPRESS_PUBLIC_UPLOAD_LIMIT_MB"
 PATH_ROOTS_ENV = "PREPRESS_PATH_ROOTS"
 # What the page tells a customer about where to put the file ("ftp.example.com, login …").
 PATH_HINT_ENV = "PREPRESS_PATH_HINT"
+# Only artwork is read by path. Anything else on the share — an installer somebody uploaded, a
+# spreadsheet — is refused by NAME before a byte of it is read into memory.
+PATH_CHECK_EXTENSIONS = {".pdf", ".tif", ".tiff", ".jpg", ".jpeg", ".png"}
 # A request header whose PRESENCE means "this came through a door that needs no login" — a LAN
 # entry with no login page of its own, say. Name the header here; the proxy must SET it on that
 # entry and STRIP it on every public one, because a browser can send any header it likes.
@@ -646,9 +649,16 @@ _held_uploads = {}                              # token -> {"data", "filename", 
 _held_lock = threading.Lock()
 
 
+def _caller():
+    """Who is asking: the session subject, or the door they came through. A held upload may only be
+    re-checked by the same caller — a leaked token must not hand one customer another's file."""
+    return session_identity() or ("open-door" if _opened_by_proxy() else "anonymous")
+
+
 def _remember_upload(data, filename):
     """Hold these bytes for a re-check; returns the token the page sends back."""
     now = time.time()
+    owner = _caller()
     with _held_lock:
         for stale in [t for t, held in _held_uploads.items() if held["expires"] < now]:
             del _held_uploads[stale]
@@ -657,7 +667,7 @@ def _remember_upload(data, filename):
             oldest = min(_held_uploads, key=lambda t: _held_uploads[t]["expires"])
             del _held_uploads[oldest]
         token = secrets.token_urlsafe(16)
-        _held_uploads[token] = {"data": data, "filename": filename,
+        _held_uploads[token] = {"data": data, "filename": filename, "owner": owner,
                                 "expires": now + UPLOAD_HOLD_SECONDS}
     return token
 
@@ -672,6 +682,8 @@ def _recall_upload(token):
         if held["expires"] < now:
             del _held_uploads[token]
             return None
+        if held["owner"] != _caller():
+            return None                              # somebody else's upload: as if it never existed
         held["expires"] = now + UPLOAD_HOLD_SECONDS
         return held
 
@@ -706,6 +718,8 @@ def api_check_path():
         real = resolve_shared_path(request.form.get("path"))
     except PathRefused as refusal:
         return jsonify({"error": str(refusal)}), 404
+    if os.path.splitext(real)[1].lower() not in PATH_CHECK_EXTENSIONS:
+        return jsonify({"error": "Sprawdzamy pliki PDF, TIFF, JPG i PNG."}), 415
     if os.path.getsize(real) > app.config["MAX_CONTENT_LENGTH"]:
         return jsonify({"error": "Ten plik jest za duży nawet dla sprawdzania po ścieżce."}), 413
     with open(real, "rb") as handle:
@@ -918,6 +932,7 @@ def _judge(data, filename, form, token=None):
 
 # The report is built from what the page already holds, so a huge body is abuse, not a big job.
 MAX_REPORT_BODY_BYTES = 12 * 1024 * 1024
+MAX_REPORT_ROWS = 200
 
 
 @app.route("/api/report", methods=["POST"])
@@ -933,6 +948,20 @@ def api_report():
     payload = request.get_json(silent=True) or {}
     if not isinstance(payload.get("checks"), list):
         return jsonify({"error": "Brak wyniku kontroli do zapisania."}), 400
+    # The report is laid out from whatever the client sent: only strings of a sane length, only
+    # dict rows, a bounded number of them — a payload is not a document.
+    text = lambda value, cap: str(value if isinstance(value, (str, int, float)) else "")[:cap]  # noqa: E731
+    payload = {
+        "filename": text(payload.get("filename"), 200),
+        "subject": text(payload.get("subject"), 300),
+        "checked_at": text(payload.get("checked_at"), 60),
+        "summary": text(payload.get("summary"), 2000),
+        "legend": text(payload.get("legend"), 600),
+        "overlay_png": payload.get("overlay_png") if isinstance(payload.get("overlay_png"), str) else None,
+        "checks": [{"level": text(row.get("level"), 8), "title": text(row.get("title"), 500),
+                    "detail": text(row.get("detail"), 2000)}
+                   for row in payload["checks"][:MAX_REPORT_ROWS] if isinstance(row, dict)],
+    }
     from . import report
     pdf_bytes = report.build_pdf(payload, brand=os.environ.get(BRAND_NAME_ENV) or "prepress-open")
     stem = re.sub(r"\.[^.]+$", "",

@@ -179,6 +179,58 @@ def test_a_held_upload_is_rechecked_without_the_file(client):
                        content_type="multipart/form-data").status_code == 410
 
 
+def test_a_held_upload_belongs_to_the_caller_who_sent_it(client, monkeypatch):
+    """A leaked token must not hand one customer another customer's file."""
+    monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)
+    sheet = client.post("/api/template", json={"items": [
+        {"material": "banner-frontlit-510", "width": "100", "height": "50", "unit": "cm"}]}).data
+    mine = client.post("/api/check", data={"file": (io.BytesIO(sheet), "baner.pdf")},
+                       content_type="multipart/form-data", headers=_bearer("1111111111")).get_json()
+    theirs = client.post(f"/api/recheck/{mine['token']}", data={},
+                         content_type="multipart/form-data", headers=_bearer("2222222222"))
+    assert theirs.status_code == 410
+    again = client.post(f"/api/recheck/{mine['token']}", data={},
+                        content_type="multipart/form-data", headers=_bearer("1111111111"))
+    assert again.status_code == 200
+
+
+def test_the_path_check_reads_only_artwork_types(client, monkeypatch, tmp_path):
+    root = tmp_path / "ftp"
+    root.mkdir()
+    (root / "setup.exe").write_bytes(b"MZ" + b"\0" * 100)
+    monkeypatch.setenv(app_module.PATH_ROOTS_ENV, str(root))
+    assert client.post("/api/check-path", data={"path": "setup.exe"},
+                       content_type="multipart/form-data").status_code == 415
+
+
+def test_the_report_takes_only_what_a_report_is_made_of(client):
+    junk = client.post("/api/report", json={"filename": ["not", "a", "string"], "summary": {"x": 1},
+                                            "checks": ["nonsense", 42, {"level": "amber", "title": "ok"}],
+                                            "overlay_png": ["nope"]})
+    assert junk.status_code == 200 and junk.data.startswith(b"%PDF")
+    assert client.post("/api/report", json={"checks": "not-a-list"}).status_code == 400
+
+
+def test_a_pixel_bomb_is_refused_before_it_is_decoded(client):
+    """A tiny PNG whose header promises a billion pixels must not be decoded into memory."""
+    import struct, zlib
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    header = chunk(b"IHDR", struct.pack(">IIBBBBB", 40000, 40000, 8, 2, 0, 0, 0))
+    bomb = b"\x89PNG\r\n\x1a\n" + header + chunk(b"IDAT", zlib.compress(b"\0" * 10)) + chunk(b"IEND", b"")
+    import tracemalloc
+    tracemalloc.start()
+    first = client.post("/api/check", data={"file": (io.BytesIO(bomb), "bomb 1000x1000.png")},
+                        content_type="multipart/form-data").get_json()
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    # Refused at the header: no verdict, no token to re-check, and nowhere near 4.8 GB allocated.
+    assert first == {"recognised": False, "reason": "The file could not be read."}
+    assert peak < 200 * 1024 * 1024
+    from prepress import raster
+    assert raster.is_raster(bomb) is True
+
+
 def test_the_hold_evicts_the_oldest_when_full(monkeypatch):
     monkeypatch.setattr(app_module, "UPLOAD_HOLD_MAX_BYTES", 10)
     app_module._held_uploads.clear()

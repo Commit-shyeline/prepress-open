@@ -61,6 +61,10 @@ BBOX_SAMPLES_PER_CURVE = 64
 
 # A placed template can nest one level down in a form XObject; deeper is a malformed file looping.
 MAX_FORM_DEPTH = 4
+# Operators walked per page, all forms included. A real production file has thousands; a file
+# built to keep the server busy has millions. Past the ceiling the walk stops and what was
+# collected so far is what the page gets — a partial answer beats a stalled thread.
+MAX_OPERATORS_WALKED = 2_000_000
 
 PT_TO_MM = 25.4 / 72
 
@@ -125,7 +129,7 @@ def _subpaths(pdf_bytes, page_index):
             page = pdf.pages[page_index]
             collected = []
             _walk(page.obj, page.obj.get("/Resources"), pikepdf.Matrix(), 0, set(), collected,
-                  [0])
+                  [0, 0])
             return collected
     except Exception:                               # noqa: BLE001 — an unreadable file has no paths
         return []
@@ -157,6 +161,10 @@ def _walk(container, resources, ctm, depth, walking, collected, group, colour=(N
     clip_pending = False
 
     for operands, operator in instructions:
+        # group[1] counts operators across the whole walk (forms included); see MAX_OPERATORS_WALKED.
+        group[1] += 1
+        if group[1] > MAX_OPERATORS_WALKED:
+            return
         name = str(operator)
         try:
             if name == "q":
