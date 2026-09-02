@@ -20,6 +20,12 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 FONT_ENV = "PREPRESS_REPORT_FONT"
+BOLD_CANDIDATES = (
+    r"C:\Windows\Fontsrialbd.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+)
 FONT_CANDIDATES = (
     os.environ.get(FONT_ENV) or "",
     r"C:\Windows\Fonts\arial.ttf",
@@ -31,7 +37,23 @@ MARGIN = 42
 LEVEL_RGB = {"red": (0.82, 0.12, 0.24), "amber": (0.78, 0.47, 0.0),
              "green": (0.18, 0.62, 0.32), "info": (0.42, 0.44, 0.50)}
 
-_font = {"name": None, "unicode": False}
+_font = {"name": None, "unicode": False, "bold": None}
+
+
+def bold_font_name():
+    """A bold TrueType face to match `_font_name()`, or Helvetica-Bold when none is installed."""
+    if _font["bold"]:
+        return _font["bold"]
+    for path in BOLD_CANDIDATES:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont("ReportSansBold", path))
+                _font["bold"] = "ReportSansBold"
+                return _font["bold"]
+            except Exception:                        # noqa: BLE001 — try the next
+                continue
+    _font["bold"] = "Helvetica-Bold"
+    return _font["bold"]
 
 
 def _font_name():

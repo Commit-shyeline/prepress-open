@@ -37,6 +37,10 @@ CREDIT = "podgląd przykładowy — prepress-open"
 from . import report as _report                       # noqa: E402
 def _font():
     return _report._font_name()
+
+
+def _bold():
+    return _report.bold_font_name()
 WORDMARK_FONT, CREDIT_FONT = "Helvetica-Bold", "Helvetica"
 # Breathing room inside the inscribed box, as a fraction of its width.
 INSET = 0.06
@@ -75,10 +79,10 @@ def layout_mm(template):
     # fit the run available, capped so a huge template does not get a huge word.
     run = (height if tall else width) * 0.8
     wordmark_size = min(width * 0.28 if tall else height * 0.35,
-                        run / (stringWidth(WORDMARK, _font(), 1.0) or 1.0))
-    credit_size = wordmark_size * 0.4
-    word_len = stringWidth(WORDMARK, _font(), wordmark_size)
-    credit_len = stringWidth(CREDIT, _font(), credit_size)
+                        run / (stringWidth(WORDMARK, _bold(), 1.0) or 1.0))
+    credit_size = wordmark_size * 0.55            # readable from where a flag is seen
+    word_len = stringWidth(WORDMARK, _bold(), wordmark_size)
+    credit_len = stringWidth(CREDIT, _bold(), credit_size)
     ascent, descent = 0.72, 0.21                      # Helvetica, as fractions of the size
     if tall:
         # rotate(90): local +y (ascenders) → page −x; the advance climbs the page.
@@ -86,7 +90,7 @@ def layout_mm(template):
         start_y = by0 + height * 0.05
         wordmark = (baseline_x - wordmark_size * ascent, start_y,
                     baseline_x + wordmark_size * descent, start_y + word_len)
-        credit_x = baseline_x + wordmark_size * 0.6
+        credit_x = baseline_x + wordmark_size * 0.75
         credit = (credit_x - credit_size * ascent, start_y,
                   credit_x + credit_size * descent, start_y + credit_len)
         sun_r = min(width * 0.30, height * 0.12)
@@ -96,7 +100,7 @@ def layout_mm(template):
         start_x = bx0 + width * 0.05
         wordmark = (start_x, baseline_y - wordmark_size * descent,
                     start_x + word_len, baseline_y + wordmark_size * ascent)
-        credit_y = baseline_y - wordmark_size * 0.6
+        credit_y = baseline_y - wordmark_size * 0.75
         credit = (start_x, credit_y - credit_size * descent,
                   start_x + credit_len, credit_y + credit_size * ascent)
         sun_r = min(height * 0.30, width * 0.12)
@@ -164,20 +168,20 @@ def build_pdf(template):
         pdf.translate(baseline_x, wy0)
         pdf.rotate(90)
         pdf.setFillColor(PAPER)
-        pdf.setFont(_font(), p["wordmark_size"])
+        pdf.setFont(_bold(), p["wordmark_size"])
         pdf.drawString(0, 0, _report._text(WORDMARK))
-        pdf.setFillColor(MIST)
-        pdf.setFont(_font(), p["credit_size"])
-        pdf.drawString(0, -(p["wordmark_size"] * 0.6), _report._text(CREDIT))
+        pdf.setFillColor(PAPER)
+        pdf.setFont(_bold(), p["credit_size"])
+        pdf.drawString(0, -(p["wordmark_size"] * 0.75), _report._text(CREDIT))
     else:
         wx0, wy0, _wx1, _wy1 = layout["wordmark"]
         baseline_y = wy0 + p["wordmark_size"] * 0.21
         pdf.setFillColor(PAPER)
-        pdf.setFont(_font(), p["wordmark_size"])
+        pdf.setFont(_bold(), p["wordmark_size"])
         pdf.drawString(wx0, baseline_y, _report._text(WORDMARK))
-        pdf.setFillColor(MIST)
-        pdf.setFont(_font(), p["credit_size"])
-        pdf.drawString(wx0, baseline_y - p["wordmark_size"] * 0.6, _report._text(CREDIT))
+        pdf.setFillColor(PAPER)
+        pdf.setFont(_bold(), p["credit_size"])
+        pdf.drawString(wx0, baseline_y - p["wordmark_size"] * 0.75, _report._text(CREDIT))
     pdf.restoreState()
     pdf.showPage()
     pdf.save()
