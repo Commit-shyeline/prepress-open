@@ -1,54 +1,106 @@
-{# The bar every page wears, so a customer moving between the shop's own pages and this one does
-   not feel handed off to a different site. Deliberately the SAME shape as the status page it sits
-   beside: logo left, title, controls right, and a coloured rule under the whole thing.
+{# The bar every page wears — the SAME bar the shop's status page wears, so a customer moving
+   between the two never feels handed off: logo tab left, title + who-is-logged-in, controls right,
+   a coloured rule under it all. Controls, in the status page's order: guide (?), theme, then either
+   „Zaloguj się" (gated, no session) or „Wyloguj" (a session), and a burger that takes the folded
+   ones on a narrow phone. A standalone install (no session gate) shows neither login nor logout.
 
    The logo is configuration, never content: PREPRESS_BRAND_LOGO is a URL the deployment supplies
-   (a shop's mark belongs to the shop), and with none set the bar shows the brand name as a
-   wordmark, which is what a fresh clone gets.
+   (a shop's mark belongs to the shop); with none set the bar shows the brand name as a wordmark.
 
-   `hero` makes it float over the page's first section instead of sitting above it, so a full-bleed
-   hero starts at the very top of the screen. On a phone the old solid bar ate a third of the
-   viewport before the flag even began (shop rule, 2026-08-31). #}
+   `hero` (body.hero-page) floats the bar over the page's first section instead of above it, so a
+   full-bleed hero starts at the very top of the screen. #}
 {% if brand_icon %}<link rel="icon" href="{{ brand_icon }}">{% endif %}
 <style>
 header.brand {
-    position: relative; z-index: 20;
+    position: relative; z-index: 30;
     background: var(--bar-bg); color: var(--bar-ink);
     background-image: radial-gradient(120% 180% at -8% 140%,
                       color-mix(in srgb, var(--accent-mid) 22%, transparent), transparent 62%);
     border-bottom: 3px solid var(--accent-mid);
-    padding: 0; display: block;
 }
 header.brand .brand-in {
-    max-width: 1080px; margin: 0 auto; padding: 10px 20px;
-    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    position: relative; max-width: 1180px; margin: 0 auto; padding: 10px 16px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
 }
-header.brand .brand-mark { display: flex; align-items: center; flex: none; }
-header.brand .brand-mark img { height: 34px; width: auto; display: block; }
-header.brand .brand-word { font-weight: 800; font-size: 16px; letter-spacing: -.01em; }
-header.brand .brand-txt { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
-header.brand .brand-title { font-weight: 800; font-size: 15.5px; }
-header.brand .brand-sub { font-size: 12.5px; opacity: .72; }
-header.brand .brand-acts { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-header.brand a { color: var(--bar-link); font-size: 12.5px; }
-header.brand .theme-toggle { margin-left: 0; }
-
-/* Over the hero rather than above it: transparent, with a scrim so white text stays readable
-   whatever the artwork behind it happens to be. */
+/* The green logo tab, as on the status page: a light mark on a dark ground reads smaller, so the
+   tab runs a touch larger than the buttons beside it. */
+header.brand .brand-mark { order: 0; flex: none; display: flex; align-items: center;
+                           background: var(--accent-mid); border-radius: 8px; padding: 3px 8px; }
+header.brand .brand-mark img { height: 34px; width: auto; max-width: none; display: block; }
+header.brand .brand-word { font-weight: 800; font-size: 15px; color: #fff; }
+header.brand .brand-txt { order: 9; flex: 1 1 100%; min-width: 0; display: flex;
+                          flex-direction: column; line-height: 1.25; }
+header.brand .brand-title { display: block; font-weight: 800; font-size: 13px; letter-spacing: .02em;
+                            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+header.brand .brand-sub { display: block; font-size: 11px; font-weight: 600; opacity: .72;
+                          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Controls: 44px targets, icon-only under 760px, labelled above. The first control carries
+   margin-left:auto so the whole group hugs the right edge. */
+header.brand .ghost {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0;
+    background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.20); color: #fff;
+    font: inherit; font-size: 11px; font-weight: 700; height: 44px; padding: 0 11px;
+    border-radius: 10px; cursor: pointer; text-decoration: none; }
+header.brand .ghost:hover { background: rgba(255,255,255,.20); }
+header.brand .ghost .lbl { display: none; }
+header.brand .ghost:has(.ico) { width: 44px; padding: 0; }
+header.brand .ghost.square { width: 44px; padding: 0; font-size: 15px; font-weight: 900; }
+header.brand .theme-toggle { margin-left: 0; height: 44px; border-radius: 10px; font-size: 11px;
+                             font-weight: 700; background: rgba(255,255,255,.10);
+                             border: 1px solid rgba(255,255,255,.20); color: #fff; }
+@media (min-width: 760px) {
+    header.brand .ghost .lbl { display: inline; }
+    header.brand .ghost .ico { display: none; }
+    header.brand .ghost:has(.ico) { width: auto; padding: 0 9px; }
+}
+header.brand .acts-start { order: 1; margin-left: auto; }
+header.brand .brand-extra { order: 1; display: flex; gap: 6px; }
+header.brand .brand-extra a { display: inline-flex; align-items: center; height: 44px; padding: 0 11px;
+    border-radius: 10px; background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.20);
+    color: #fff; font-size: 11px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+header.brand .brand-extra a:hover { background: rgba(255,255,255,.20); }
+header.brand #tourBtn { order: 2; } header.brand #themeToggle { order: 3; }
+header.brand #loginBtn, header.brand #logoutBtn { order: 4; }
+header.brand .brand-menu { order: 5; position: relative; display: none; }
+@media (min-width: 560px) {
+    header.brand .brand-txt { order: 1; flex: 1 1 0; }
+    header.brand .brand-mark img { height: 40px; }
+    header.brand .brand-title { font-size: 15px; } header.brand .brand-sub { font-size: 12px; }
+}
+/* Progressive collapse, the status page's thresholds: login/logout fold first, then the theme,
+   then the guide. Each header button and its menu twin share a fold class. */
+header.brand .menu-row { display: none; }
+@media (max-width: 429px) {
+    header.brand .fold-1 { display: none !important; }
+    header.brand .brand-menu .fold-1:not([hidden]) { display: flex !important; }
+    header.brand .brand-menu { display: flex; }
+}
+@media (max-width: 363px) {
+    header.brand .fold-2 { display: none !important; }
+    header.brand .brand-menu .fold-2:not([hidden]) { display: flex !important; }
+}
+@media (max-width: 313px) {
+    header.brand .fold-3 { display: none !important; }
+    header.brand .brand-menu .fold-3:not([hidden]) { display: flex !important; }
+}
+header.brand .hmenu {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; min-width: 210px;
+    max-width: calc(100vw - 24px); background: var(--surface); border: 1px solid var(--line);
+    border-radius: 12px; box-shadow: 0 12px 32px rgba(31,32,39,.28); padding: 6px; }
+header.brand .hmenu button { width: 100%; min-height: 44px; align-items: center; gap: 10px;
+    padding: 0 12px; border: 0; border-radius: 8px; background: none; cursor: pointer;
+    font: inherit; font-size: 13px; font-weight: 700; color: var(--ink); text-align: left; }
+header.brand .hmenu button:hover { background: var(--accent-soft); }
+header.brand .hmenu button svg { flex-shrink: 0; color: var(--muted); }
+/* Over the hero rather than above it: transparent, with a scrim so white text stays readable. */
 body.hero-page header.brand {
     position: absolute; inset: 0 0 auto 0; background: transparent; border-bottom: 0;
     background-image: linear-gradient(180deg, rgba(12, 14, 18, .72), rgba(12, 14, 18, 0));
-    color: #fff;
-}
-body.hero-page header.brand a,
-body.hero-page header.brand .theme-toggle { color: #fff; }
-body.hero-page header.brand .theme-toggle { border-color: rgba(255, 255, 255, .5); }
-
+    color: #fff; }
 @media (max-width: 700px) {
-    header.brand .brand-in { padding: 8px 14px; gap: 8px; }
+    header.brand .brand-in { padding: 8px 14px; }
     header.brand .brand-mark img { height: 26px; }
-    header.brand .brand-sub { display: none; }   /* the title carries it; the subtitle wrapped to
-                                                    three lines and pushed the page down */
+    header.brand .brand-sub { display: none; }
 }
 </style>
 <header class="brand">
@@ -56,16 +108,138 @@ body.hero-page header.brand .theme-toggle { border-color: rgba(255, 255, 255, .5
         {% if brand_logo %}
             <span class="brand-mark"><img src="{{ brand_logo }}" alt="{{ brand_name }}"></span>
         {% else %}
-            <span class="brand-mark brand-word">{{ brand_name }}</span>
+            <span class="brand-mark"><span class="brand-word">{{ brand_name }}</span></span>
         {% endif %}
         <span class="brand-txt">
             <span class="brand-title">{{ page_title }}</span>
-            {% if page_sub %}<span class="brand-sub">{{ page_sub }}</span>{% endif %}
+            <span class="brand-sub" id="brandWho">{{ page_sub }}</span>
         </span>
-        <span class="brand-acts">
-            {% block brand_actions %}{% endblock %}
-            {{ extra_actions|safe if extra_actions }}
-            <button type="button" id="themeToggle" class="theme-toggle">Motyw: auto</button>
+        {% block brand_actions %}{% endblock %}
+        <span class="acts-start"></span>
+        {% if extra_actions %}<span class="brand-extra ghost-links">{{ extra_actions|safe }}</span>{% endif %}
+        <button type="button" id="tourBtn" class="ghost square fold-3" aria-label="Uruchom przewodnik"
+                title="Przewodnik po stronie">?</button>
+        <button type="button" id="themeToggle" class="theme-toggle fold-2">Motyw: auto</button>
+        <button type="button" id="loginBtn" class="ghost fold-1" hidden aria-label="Zaloguj się" title="Zaloguj się">
+            <svg class="ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+            <span class="lbl">Zaloguj się</span>
+        </button>
+        <button type="button" id="logoutBtn" class="ghost fold-1" hidden aria-label="Wyloguj" title="Wyloguj">
+            <svg class="ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+            <span class="lbl">Wyloguj</span>
+        </button>
+        <span class="brand-menu">
+            <button type="button" id="brandBurger" class="ghost square" aria-label="Menu" aria-expanded="false" aria-controls="brandMenu">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+            </button>
+            <div class="hmenu" id="brandMenu" hidden>
+                <button type="button" class="menu-row fold-3" data-act="tour">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 015.8 1c0 2-3 3-3 3M12 17h.01"/></svg>
+                    Przewodnik po stronie</button>
+                <button type="button" class="menu-row fold-2" data-act="theme">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+                    Tryb ciemny / jasny</button>
+                <button type="button" class="menu-row fold-1" id="loginMenu" hidden data-act="login">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+                    Zaloguj się</button>
+                <button type="button" class="menu-row fold-1" id="logoutMenu" hidden data-act="logout">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+                    Wyloguj</button>
+            </div>
         </span>
     </div>
 </header>
+<script>
+/* The bar's own behaviour — self-contained, because not every page includes the session script.
+   Session state is read the way the status page reads it: the token the shop's login left in
+   sessionStorage under the shared key. A token here means "logged in"; its payload's `nip` or
+   `sub` is who. Nothing is verified client-side — the server does that on every request. */
+(function () {
+    const GATED = {{ 'true' if gated else 'false' }};
+    const LOGIN_URL = {{ (login_url or '')|tojson }};
+    const TOKEN_KEY = {{ session_key|tojson }};
+    const $ = (id) => document.getElementById(id);
+
+    function token() {
+        try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+    }
+    function who(jwt) {
+        try {
+            const payload = JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+            return payload.name || payload.nip || payload.sub || '';
+        } catch (e) { return ''; }
+    }
+    function paint() {
+        const logged = GATED && !!token();
+        $('loginBtn').hidden = !(GATED && !logged && LOGIN_URL);
+        $('loginMenu').hidden = $('loginBtn').hidden;
+        $('logoutBtn').hidden = !logged;
+        $('logoutMenu').hidden = !logged;
+        if (logged) {
+            const name = who(token());
+            $('brandWho').textContent = name ? `Zalogowany: ${name}` : 'Zalogowany';
+        }
+    }
+    function login() {
+        if (!LOGIN_URL) return;
+        const back = encodeURIComponent(window.location.pathname + window.location.search);
+        window.location.href = LOGIN_URL.replace('{next}', back);
+    }
+    function logout() {
+        try { sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem('status_nip'); } catch (e) { /* fine */ }
+        window.location.reload();
+    }
+    /* The guide: driver.js, fetched on first use so no page pays for it until someone asks. Steps
+       come from the page (`window.PREPRESS_TOUR`); a step whose element is missing is dropped. */
+    const DRIVER = 'https://cdn.jsdelivr.net/npm/driver.js@1.3.1/dist/';
+    function loadDriver() {
+        if (window.driver && window.driver.js) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+            if (!document.querySelector('link[data-driver]')) {
+                const css = document.createElement('link');
+                css.rel = 'stylesheet'; css.href = DRIVER + 'driver.css'; css.dataset.driver = '1';
+                document.head.appendChild(css);
+            }
+            const script = document.createElement('script');
+            script.src = DRIVER + 'driver.js.iife.js';
+            script.onload = resolve; script.onerror = reject;
+            document.head.appendChild(script);
+        });
+    }
+    async function tour() {
+        const steps = (window.PREPRESS_TOUR || []).filter((s) => !s.element || document.querySelector(s.element));
+        if (!steps.length) return;
+        try { await loadDriver(); } catch (e) { return; }
+        window.driver.js.driver({
+            showProgress: true, animate: true, allowClose: true,
+            nextBtnText: 'Dalej', prevBtnText: 'Wstecz', doneBtnText: 'Gotowe',
+            progressText: '{{ '{{current}}' }} z {{ '{{total}}' }}',
+            steps,
+        }).drive();
+    }
+    window.PrepressTour = { start: tour };
+
+    document.addEventListener('DOMContentLoaded', () => {
+        paint();
+        $('loginBtn').addEventListener('click', login);
+        $('logoutBtn').addEventListener('click', logout);
+        $('tourBtn').addEventListener('click', tour);
+        const burger = $('brandBurger'), menu = $('brandMenu');
+        burger.addEventListener('click', () => {
+            menu.hidden = !menu.hidden;
+            burger.setAttribute('aria-expanded', String(!menu.hidden));
+        });
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.brand-menu')) { menu.hidden = true; burger.setAttribute('aria-expanded', 'false'); }
+        });
+        menu.addEventListener('click', (e) => {
+            const act = e.target.closest('[data-act]')?.dataset.act;
+            menu.hidden = true;
+            if (act === 'tour') tour();
+            if (act === 'theme') $('themeToggle').click();
+            if (act === 'login') login();
+            if (act === 'logout') logout();
+        });
+    });
+})();
+</script>

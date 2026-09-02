@@ -319,6 +319,19 @@ def test_a_raster_goes_straight_to_material_and_size(client):
     assert judged["preview_png"]
 
 
+def test_the_bar_carries_the_status_pages_controls(client, monkeypatch):
+    """Guide, theme, login/logout and the burger — the same bar the shop's status page wears."""
+    monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)
+    monkeypatch.setenv(app_module.LOGIN_URL_ENV, "/status/?next={next}")
+    for path in ("/plik", "/"):
+        body = client.get(path).get_data(as_text=True)
+        for marker in ('id="tourBtn"', 'id="themeToggle"', 'id="loginBtn"', 'id="logoutBtn"',
+                       'id="brandBurger"', 'id="brandMenu"', 'window.PREPRESS_TOUR'):
+            assert marker in body, (path, marker)
+        assert 'const GATED = true;' in body
+        assert '"/status/?next={next}"' in body
+
+
 def test_the_pages_stay_reachable_behind_the_gate(client, monkeypatch):
     """A visitor who followed a link meets the page and is told to log in — not a bare 401."""
     monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)

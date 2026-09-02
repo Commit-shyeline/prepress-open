@@ -231,6 +231,16 @@ const BASE = {{ base|tojson }};
 const ORDER_EMAIL = {{ order_email|tojson }};
 const UPLOAD_LIMIT_MB = {{ upload_limit_mb }};
 const MAX_FILES = 20;
+/* The guide (the ? in the bar). Steps whose element is not on screen yet are skipped. */
+window.PREPRESS_TOUR = [
+    { element: '#drop', popover: { title: 'Wrzuć pliki', description: 'PDF, TIFF, JPG albo PNG — kilka naraz. Każdy plik sprawdzamy osobno; przód i tył flagi nazwij w nazwie pliku, a ocenimy je razem.' } },
+    { element: '#pathBox', popover: { title: 'Duży plik?', description: 'Powyżej limitu wgraj plik na nasz serwer FTP i wklej tu ścieżkę — sprawdzimy go bez przesyłania przez stronę.' } },
+    { element: '#tiles', popover: { title: 'Twoje pliki', description: 'Jedna kafelka na plik. Kropka pokazuje najgorszą uwagę; kliknij, żeby zobaczyć ten plik.' } },
+    { element: '#freeSize', popover: { title: 'Materiał i rozmiar', description: 'Dla pliku spoza naszego szablonu podaj materiał i rozmiar gotowy. Jeśli plik ma kolory dodatkowe, wskaż też, który z nich jest linią cięcia.' } },
+    { element: '#overlayCard', popover: { title: 'Podgląd z ramkami', description: 'Szara ramka to spad, różowa linia cięcia, zielona obszar bezpieczny. Rozjaśniony pas wokół to strefa bez napisów i logo; czerwone i bursztynowe pola to miejsca z uwag.' } },
+    { element: '#reportCard', popover: { title: 'Wynik kontroli', description: 'Każda uwaga mówi, co jest nie tak i co zrobić. Zielone punkty to rzeczy w porządku.' } },
+    { element: '#actionsCard', popover: { title: 'Raport i wysyłka', description: 'Pobierz raport PDF i załącz go do wiadomości — przycisk „Wyślij pliki do nas” otwiera gotowy e-mail.' } },
+];
 
 /* ── Entries ───────────────────────────────────────────────────────────────────
    { front: File|{name,path,size}, back: File|null, tokens: {front, back},

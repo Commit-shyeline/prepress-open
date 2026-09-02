@@ -212,6 +212,14 @@ td.num { text-align: right; white-space: nowrap; }
 
 <script src="{{ asset('last-artwork.js') }}"></script>
 <script>
+/* The guide (the ? in the bar). */
+window.PREPRESS_TOUR = [
+    { element: '#tplCard', popover: { title: 'Gotowe szablony', description: 'Wybierz rodzaj flagi, pobierz szablon PDF i projektuj na nim: spad, linia cięcia i obszar bezpieczny są już zaznaczone. Przycisk 3D pokazuje kształt.' } },
+    { element: '#material', popover: { title: 'Własny rozmiar', description: 'Baner, płyta, naklejka? Wybierz materiał, podaj wymiary i pobierz szablon w tym rozmiarze.' } },
+    { element: '#queue', popover: { title: 'Lista', description: 'Dodaj kilka rozmiarów — pobierzesz jeden PDF, strona na rozmiar.' } },
+];
+</script>
+<script>
 const el = (id) => document.getElementById(id);
 let MATERIALS = [];
 const queue = [];
