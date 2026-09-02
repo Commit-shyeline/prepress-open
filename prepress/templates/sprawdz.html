@@ -122,6 +122,8 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
                            style="width:7em" placeholder="wys. mm"> mm
                     <button type="button" class="pick" id="freeBtn">Sprawdź dla tego materiału</button>
                 </div>
+                <div id="sizeHints" class="note" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;
+                     align-items:center" hidden></div>
             </div>
         </div>
         <div class="card" id="reportCard" hidden style="margin-top:18px">
@@ -357,7 +359,7 @@ async function checkPair(template, page = 0, free = null) {
         return;
     }
     if (!front.recognised) {
-        await offerFreeSize(front.page_mm || []);
+        await offerFreeSize(front);
         return;
     }
     renderReport(front, back);
@@ -375,11 +377,33 @@ function checksHtml(data) {
         </div>`).join('');
 }
 
-/* The fourth rung. Materials come from the same public list the generator reads; the size is
-   pre-filled with the page the file actually has, because for most banners the page IS the finished
-   size (or the finished size plus the bleed, which the customer sees and corrects). */
+/* The fourth rung. Materials come from the same public list the generator reads. The size is
+   pre-filled from the file's NAME when it states one (`baner_800x2000.pdf` — the designer saying
+   what they made), otherwise from the page; when the two disagree both are offered as one-click
+   choices, because only the customer knows which one is the order. */
 let MATERIALS = null;
-async function offerFreeSize(pageMm) {
+function sizeHints(front) {
+    const hints = el('sizeHints');
+    const options = [];
+    const pageMm = front.page_mm || [];
+    const named = front.named_size_mm || null;
+    const fmt = (s) => `${Math.round(s[0])}×${Math.round(s[1])} mm`;
+    const differ = named && pageMm.length === 2
+        && (Math.abs(named[0] - pageMm[0]) > 1 || Math.abs(named[1] - pageMm[1]) > 1);
+    if (named) options.push({ label: `Z nazwy pliku: ${fmt(named)}`, size: named });
+    if (pageMm.length === 2 && (!named || differ)) options.push({ label: `Ze strony: ${fmt(pageMm)}`, size: pageMm });
+    hints.hidden = options.length < 2;
+    hints.innerHTML = options.length < 2 ? '' : 'Który rozmiar zamawiasz? '
+        + options.map((o, i) => `<button type="button" class="pick" data-size="${i}">${escapeHtml(o.label)}</button>`).join('');
+    hints.querySelectorAll('[data-size]').forEach((btn) => btn.addEventListener('click', () => {
+        const size = options[Number(btn.dataset.size)].size;
+        el('freeW').value = Math.round(size[0]);
+        el('freeH').value = Math.round(size[1]);
+    }));
+    return named || (pageMm.length === 2 ? pageMm : null);
+}
+
+async function offerFreeSize(front) {
     if (!MATERIALS) {
         try {
             MATERIALS = (await (await fetch(`${BASE}/api/materials`)).json()).materials || [];
@@ -392,9 +416,10 @@ async function offerFreeSize(pageMm) {
             height: el('freeH').value,
         }));
     }
-    if (pageMm.length === 2) {
-        el('freeW').value = Math.round(pageMm[0]);
-        el('freeH').value = Math.round(pageMm[1]);
+    const prefill = sizeHints(front);
+    if (prefill) {
+        el('freeW').value = Math.round(prefill[0]);
+        el('freeH').value = Math.round(prefill[1]);
     }
     el('freeSize').hidden = false;
     el('reportCard').hidden = false;

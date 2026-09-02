@@ -173,6 +173,12 @@ CHECK_MESSAGES = {
         "Oba wymiary przekraczają {over} mm, więc wydruk powstanie z kilku części łączonych "
         "przy wykończeniu. Trzymaj ważne elementy z dala od środka grafiki.",
 
+    "check.named_size.ok": "Rozmiar z nazwy pliku zgodny: {named_w}×{named_h} mm",
+    "check.named_size.differs": "Nazwa pliku mówi {named_w}×{named_h} mm, sprawdzamy {netto_w}×{netto_h} mm",
+    "check.named_size.differs.detail":
+        "Jedno z tych dwóch jest pomyłką. Jeśli zamawiasz {netto_w}×{netto_h} mm, wszystko gra — "
+        "jeśli nie, popraw rozmiar i sprawdź ponownie.",
+
     "check.filename.diacritics": "Nazwa pliku zawiera polskie znaki",
     "check.filename.diacritics.detail":
         "Używaj tylko liter bez ogonków, cyfr, myślników i podkreśleń, "

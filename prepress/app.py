@@ -26,7 +26,7 @@ from urllib.parse import quote
 from werkzeug.utils import secure_filename
 
 from . import (from_template, generate, identify, item, lines, materials, measure, messages,
-               offset, outline, rules, shape, structure)
+               named_size, offset, outline, rules, shape, structure)
 
 logger = logging.getLogger(__name__)
 
@@ -790,14 +790,25 @@ def _judge(data, filename, form, token=None):
                 assumed = False
             else:
                 tolerance = 3.0
-                candidates = [
-                    {"token": t.get("token"), "name": t.get("name")}
-                    for t in materials.load_templates()
-                    if abs(float(t["page_mm"][0]) - page_mm[0]) <= tolerance
-                    and abs(float(t["page_mm"][1]) - page_mm[1]) <= tolerance]
-                # page_mm rides along so the page can pre-fill the free-size picker.
+                # The NAME is the second witness: a file saved off our template at a drifted page
+                # size still says `80x240` in its name, and that names the template family.
+                named, stated = named_size.parse_mm(filename)
+                named = named_size.reconcile(named, stated, page_mm)
+                candidates, seen = [], set()
+                for t in materials.load_templates():
+                    by_page = (abs(float(t["page_mm"][0]) - page_mm[0]) <= tolerance
+                               and abs(float(t["page_mm"][1]) - page_mm[1]) <= tolerance)
+                    trim = t.get("trim_mm") or []
+                    by_name = bool(named and len(trim) == 2
+                                   and named_size.same_size(named, (float(trim[0]), float(trim[1]))))
+                    if (by_page or by_name) and t.get("token") not in seen:
+                        seen.add(t.get("token"))
+                        candidates.append({"token": t.get("token"), "name": t.get("name")})
+                # page_mm and the name's size ride along so the page can pre-fill the picker and
+                # offer a choice when the two disagree.
                 return jsonify({"recognised": False, "reason": found["reason"],
                                 "candidates": candidates, "page_mm": page_mm,
+                                "named_size_mm": list(named) if named else None,
                                 "token": token}), 200
         else:
             stamp = found["stamp"]

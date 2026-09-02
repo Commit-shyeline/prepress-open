@@ -230,6 +230,22 @@ def test_the_path_check_is_off_without_roots(client):
     assert 'id="pathBox"' not in client.get("/plik").get_data(as_text=True)
 
 
+def test_an_unstamped_file_reports_the_size_its_name_claims(client):
+    """A plain reportlab page carries no stamp, so the fourth-rung offer comes back — with the
+    size the NAME claims, reconciled to the page (bare `100x50` here is centimetres)."""
+    from reportlab.pdfgen import canvas as _canvas
+    buffer = io.BytesIO()
+    pdf = _canvas.Canvas(buffer, pagesize=(1000 * 72 / 25.4, 500 * 72 / 25.4))
+    pdf.rect(10, 10, 100, 100, fill=1)
+    pdf.showPage()
+    pdf.save()
+    answer = client.post("/api/check", data={"file": (io.BytesIO(buffer.getvalue()), "baner 100x50.pdf")},
+                         content_type="multipart/form-data").get_json()
+    assert answer["recognised"] is False
+    assert answer["named_size_mm"] == [1000.0, 500.0]
+    assert [round(v) for v in answer["page_mm"]] == [1000, 500]
+
+
 def test_the_pages_stay_reachable_behind_the_gate(client, monkeypatch):
     """A visitor who followed a link meets the page and is told to log in — not a bare 401."""
     monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)

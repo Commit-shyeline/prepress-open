@@ -117,9 +117,14 @@ def filename_facts(filename):
     a history of arriving mangled. An extra dot makes the extension ambiguous to the tools downstream.
     """
     stem = os.path.splitext(filename or "")[0]
+    from . import named_size
+    named, stated = named_size.parse_mm(filename)
     return {"extension": os.path.splitext(filename or "")[1].lstrip(".").lower(),
             "has_diacritics": _has_diacritics(stem),
-            "extra_dots": "." in stem}
+            "extra_dots": "." in stem,
+            # What the NAME claims the size is, in mm as read; the check reconciles the unit.
+            "named_size_mm": list(named) if named else None,
+            "named_unit_stated": stated}
 
 
 def _has_diacritics(text):

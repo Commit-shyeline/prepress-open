@@ -344,6 +344,26 @@ def check_split_required(facts, expected, material=None):
                     over=_mm(over))
 
 
+def check_named_size(facts, expected, material=None):
+    """The size in the file's NAME against the finished size the file is judged at.
+
+    A name is the designer stating what they think they made. When it disagrees with the template or
+    the size the customer typed, one of the two is wrong, and only a human knows which — so this is
+    information with both numbers, never a verdict.
+    """
+    from . import named_size
+    named = facts.get("named_size_mm")
+    if not named:
+        return None
+    netto = expected["netto_mm"]
+    named = named_size.reconcile(tuple(named), facts.get("named_unit_stated", True), netto)
+    values = {"named_w": _mm(named[0]), "named_h": _mm(named[1]),
+              "netto_w": _mm(netto[0]), "netto_h": _mm(netto[1])}
+    if named_size.same_size(named, netto):
+        return _finding("named_size", "green", "ok", **values)
+    return _finding("named_size", "info", "differs", **values)
+
+
 def check_filename(facts, expected=None, material=None):
     """The two naming habits that travel badly through a file server and a RIP.
 
@@ -361,7 +381,7 @@ RULES = (check_page_size, check_declared_trim, check_template_guides_removed,
          check_artwork_reaches_bleed, check_safe_area, check_resolution,
          check_office_origin, check_colour_mode, check_spot_inks, check_cut_path,
          check_fonts_converted, check_overprint, check_page_count, check_text_height,
-         check_split_required, check_filename)
+         check_split_required, check_named_size, check_filename)
 
 # Every rule a shop can silence or re-grade, in the order the rules run, mapped to the message code
 # that best DESCRIBES it — the sentence a customer would get when the rule fires.
@@ -386,6 +406,7 @@ RULE_LABELS = {
     "page_count": "check.page_count.many",
     "text_height": "check.text_height.small",
     "split": "check.split.required",
+    "named_size": "check.named_size.differs",
     "filename": "check.filename.diacritics",
 }
 RULE_IDS = tuple(RULE_LABELS)

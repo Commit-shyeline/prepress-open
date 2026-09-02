@@ -90,7 +90,8 @@ def test_an_unreadable_file_is_an_answer_not_a_crash():
 
 def test_the_filename_rules_read_the_name_only():
     assert structure.filename_facts("baner-800x2000mm.pdf") == {
-        "extension": "pdf", "has_diacritics": False, "extra_dots": False}
+        "extension": "pdf", "has_diacritics": False, "extra_dots": False,
+        "named_size_mm": [800.0, 2000.0], "named_unit_stated": True}
     assert structure.filename_facts("ulotka.wersja2.pdf")["extra_dots"] is True
     assert structure.filename_facts("łąka.pdf")["has_diacritics"] is True
 
@@ -368,7 +369,7 @@ def test_every_rule_the_panel_offers_is_a_rule_that_runs():
              "spot_names": ["PANTONE 711 C"], "producer": "Microsoft Word",
              "blank_edges_mm": (9, 0, 0, 0), "safe_intrusion_mm": 4.0, "min_dpi": 20,
              "guides_present": True, "declared_boxes_mm": {"trimbox": (980, 1980)},
-             "text_min_height_mm": 4.0}
+             "text_min_height_mm": 4.0, "named_size_mm": [800, 2000], "named_unit_stated": True}
     produced = {f["id"] for f in rules.run(facts, _expected(), STICKER)}
     # The split rule only has something to say about a job over the threshold on both sides.
     huge = identify.stamped_geometry(generate.stamp_payload(item.resolve(BANNER, 6000, 7000)))
@@ -403,6 +404,35 @@ def test_a_job_over_the_split_threshold_on_both_sides_is_said_so():
     # One long side alone comes off the roll in one piece — nothing to say.
     long_one = identify.stamped_geometry(generate.stamp_payload(item.resolve(BANNER, 1000, 7000)))
     assert _one(rules.run({"page_mm": (1040, 7040)}, long_one, BANNER), "split") is None
+
+
+def test_the_name_size_is_read_and_reconciled():
+    from prepress import named_size
+    assert named_size.parse_mm("baner_800x2000mm.pdf") == ((800.0, 2000.0), True)
+    assert named_size.parse_mm("plexi 76cm x 37cm.pdf") == ((760.0, 370.0), True)
+    assert named_size.parse_mm("flaga 1,5m x 3m.pdf") == ((1500.0, 3000.0), True)
+    assert named_size.parse_mm("300x150a.tif") == ((300.0, 150.0), False)
+    assert named_size.parse_mm("roll up 85x210 makieta print.tif") == ((85.0, 210.0), False)
+    assert named_size.parse_mm("logo.pdf") == (None, False)
+    # Bare numbers that only fit the page as centimetres are read as centimetres…
+    assert named_size.reconcile((300.0, 150.0), False, (3009.0, 1504.0)) == (3000.0, 1500.0)
+    # …a stated unit is never second-guessed, and no match leaves the name as read.
+    assert named_size.reconcile((300.0, 150.0), True, (3009.0, 1504.0)) == (300.0, 150.0)
+    assert named_size.reconcile((300.0, 150.0), False, (700.0, 900.0)) == (300.0, 150.0)
+
+
+def test_the_named_size_rule_informs_never_judges():
+    ok = _one(rules.run({"page_mm": (1040, 2040), "named_size_mm": [1000, 2000],
+                         "named_unit_stated": True}, _expected(), BANNER), "named_size")
+    assert ok["level"] == "green"
+    rotated = _one(rules.run({"page_mm": (1040, 2040), "named_size_mm": [2000, 1000],
+                              "named_unit_stated": True}, _expected(), BANNER), "named_size")
+    assert rotated["level"] == "green"
+    differs = _one(rules.run({"page_mm": (1040, 2040), "named_size_mm": [800, 2000],
+                              "named_unit_stated": True}, _expected(), BANNER), "named_size")
+    assert differs["level"] == "info" and differs["code"] == "check.named_size.differs"
+    assert differs["values"] == {"named_w": "800", "named_h": "2000", "netto_w": "1000", "netto_h": "2000"}
+    assert _one(rules.run({"page_mm": (1040, 2040)}, _expected(), BANNER), "named_size") is None
 
 
 def test_a_page_at_one_to_ten_is_a_scaled_file_not_a_wrong_size():
