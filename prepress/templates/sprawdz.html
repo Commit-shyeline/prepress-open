@@ -84,6 +84,11 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 .tile .dot.red { background: #d21f3c; }
 .tile .dot.wait { background: var(--line); animation: pulse 1s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .35; } }
+.settings { display: grid; gap: 10px; }
+.settings label { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.settings select, .settings input { font-weight: 600; color: var(--ink); }
+.settings .size-row { display: flex; gap: 6px; align-items: center; color: var(--ink); }
+.settings .size-row input { width: 7em; }
 .link-btn { background: none; border: 0; padding: 0; margin-top: 8px; color: var(--muted);
             font: inherit; font-size: 12.5px; text-decoration: underline; cursor: pointer; }
 /* The overlay: the page as a picture with the boxes the verdict was judged on drawn over it. */
@@ -135,21 +140,6 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
                     na którym projektowano, a sprawdzimy plik względem jego linii.</p>
                 <div id="pickBtns" style="display:flex;gap:8px;flex-wrap:wrap"></div>
             </div>
-            <div id="freeSize" hidden style="margin-top:12px">
-                <p class="note" style="margin:0 0 8px" id="freeSizeNote"><b>To nie jest plik na naszym szablonie</b> —
-                    baner, płyta, naklejka? Podaj materiał i rozmiar gotowego produktu, a sprawdzimy
-                    spady, obszar bezpieczny, rozdzielczość i kolory według zasad dla tego materiału.</p>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                    <select id="freeMat" class="pick"></select>
-                    <input id="freeW" class="pick" type="number" min="1" step="1" inputmode="numeric"
-                           style="width:7em" placeholder="szer. mm"> ×
-                    <input id="freeH" class="pick" type="number" min="1" step="1" inputmode="numeric"
-                           style="width:7em" placeholder="wys. mm"> mm
-                    <button type="button" class="pick" id="freeBtn">Sprawdź dla tego materiału</button>
-                </div>
-                <div id="sizeHints" class="note" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;
-                     align-items:center" hidden></div>
-            </div>
         </div>
     </div>
 
@@ -163,6 +153,21 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
             <h2>Podgląd z ramkami</h2>
             <canvas id="overlay"></canvas>
             <p class="note" id="overlayLegend" style="margin:8px 0 0"></p>
+        </div>
+        <div class="card" id="freeSize" hidden>
+            <h2>Ustawienia pliku</h2>
+            <p class="note" style="margin:0 0 10px" id="freeSizeNote"></p>
+            <div class="settings">
+                <label>Materiał <select id="freeMat" class="pick"></select></label>
+                <label>Rozmiar gotowy <span class="size-row">
+                    <input id="freeW" class="pick" type="number" min="1" step="1" inputmode="numeric"
+                           placeholder="szer."> × <input id="freeH" class="pick" type="number" min="1"
+                           step="1" inputmode="numeric" placeholder="wys."> mm</span></label>
+                <label id="cutRow" hidden>Linia cięcia <select id="cutSel" class="pick"></select></label>
+            </div>
+            <div id="sizeHints" class="note" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;
+                 align-items:center" hidden></div>
+            <div class="acts"><button type="button" class="pick main" id="freeBtn">Sprawdź</button></div>
         </div>
         <div class="card" id="actionsCard" hidden>
             <div id="actions" class="acts" style="margin-top:0">
@@ -315,7 +320,7 @@ function message(text, bad) {
     box.innerHTML = text || '';
 }
 
-async function checkOne(entry, file, template, side, page, free, slot = 'front') {
+async function checkOne(entry, file, template, side, page, free, slot = 'front', cut = null) {
     const body = new FormData();
     // The server holds the bytes for a while after the first check, so a different template,
     // material or page is judged WITHOUT sending the file again. A token that has expired (410)
@@ -332,6 +337,8 @@ async function checkOne(entry, file, template, side, page, free, slot = 'front')
         body.append('width', free.width);
         body.append('height', free.height);
     }
+    // Which separation is the knife, when the customer picked one from the file's own list.
+    if (cut) body.append('cut', cut);
     // 'back' silences the wykrojnik check: the die line travels with the front file of a pair.
     if (side) body.append('side', side);
     if (page) body.append('page', page);
@@ -344,7 +351,7 @@ async function checkOne(entry, file, template, side, page, free, slot = 'front')
     }
     if (resp.status === 410 && held) {
         entry.tokens[slot] = null;
-        return checkOne(entry, file, template, side, page, free, slot);
+        return checkOne(entry, file, template, side, page, free, slot, cut);
     }
     if (resp.status === 413) return { error: tooBigMessage(file.name, file.size) };
     try {
@@ -376,15 +383,15 @@ if (GATED) {
 
 /* One entry, both sides, front first. An unstamped front comes back with candidates; a pick
    re-runs BOTH sides against the chosen template, so przód and tył are judged by the same lines. */
-async function check(entry, template, page = 0, free = null) {
-    entry.args = { template, page, free };
+async function check(entry, template, page = 0, free = null, cut = null) {
+    entry.args = { template, page, free, cut };
     setView(entry, { state: 'checking' });
     let front, back = null;
     try {
-        front = await checkOne(entry, entry.front, template, null, page, free);
+        front = await checkOne(entry, entry.front, template, null, page, free, 'front', cut);
         if (front.recognised && entry.back) {
             back = await checkOne(entry, entry.back, template || front.template_token, 'back', page,
-                                  free, 'back');
+                                  free, 'back', cut);
         }
     } catch (e) {
         return setView(entry, { state: 'error', message: 'Nie udało się sprawdzić pliku: ' + e.message });
@@ -456,7 +463,8 @@ function paint(entry) {
         nav.querySelectorAll('[data-page]').forEach((btn) =>
             btn.addEventListener('click', () => {
                 if (Number(btn.dataset.page) !== (front.page || 0)) {
-                    check(entry, entry.args.template, Number(btn.dataset.page), entry.args.free);
+                    check(entry, entry.args.template, Number(btn.dataset.page), entry.args.free,
+                          entry.args.cut);
                 }
             }));
     }
@@ -469,7 +477,19 @@ function paint(entry) {
             btn.addEventListener('click', () => check(entry, btn.dataset.tpl)));
         return;
     }
-    if (view.state === 'free') { offerFreeSize(entry); return; }
+    if (view.state === 'free') {
+        paintSettings(entry);
+        el('reportCard').hidden = false;
+        el('summary').textContent = '';
+        el('checks').innerHTML = front.kind === 'raster'
+            ? `<div class="unrec">Bitmapa nie ma naszego szablonu.<br>
+               <span class="note">Wskaż materiał i rozmiar obok, a sprawdzimy ją w tym rozmiarze.</span></div>`
+            : `<div class="unrec">Nie rozpoznaliśmy szablonu.<br>
+               <span class="note">Projekt na fladze? Pobierz szablon z <a href="${BASE}/">generatora</a>
+               i umieść projekt na nim. Inny produkt? Wskaż materiał i rozmiar obok.</span></div>`;
+        return;
+    }
+    if (!front.template_token) paintSettings(entry);
     renderReport(entry, front, view.back);
     if (front.template_token) showModel(front, view.back);
 }
@@ -519,37 +539,56 @@ async function loadMaterials() {
     el('freeMat').innerHTML = MATERIALS.map((m) =>
         `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`).join('');
 }
-// Bound once; it reads whichever entry is selected when clicked.
-el('freeBtn').addEventListener('click', () => {
+// Bound once; they read whichever entry is selected when used.
+function runSettings() {
     if (!CURRENT) return;
     check(CURRENT, null, 0, { material: el('freeMat').value, width: el('freeW').value,
-                              height: el('freeH').value });
-});
+                              height: el('freeH').value }, el('cutSel').value || null);
+}
+el('freeBtn').addEventListener('click', runSettings);
+el('cutSel').addEventListener('change', runSettings);
 
-async function offerFreeSize(entry) {
+/* The settings card: material, finished size and — when the file names any separation — which of
+   them is the knife. Shown for every file that is not on one of our templates, before AND after
+   it is judged, pre-filled with what the last check was asked with. */
+async function paintSettings(entry) {
     await loadMaterials();
     if (entry !== CURRENT) return;                   // the customer moved on while we fetched
     const front = entry.view.front;
+    const judged = entry.view.state === 'report';
     el('freeSizeNote').innerHTML = front.kind === 'raster'
-        ? `<b>Bitmapa</b> — podaj materiał i rozmiar gotowego produktu. Rozdzielczość policzymy
-           z pikseli w tym rozmiarze, sprawdzimy też spady, obszar bezpieczny, kolory i spłaszczenie.`
+        ? `<b>Bitmapa.</b> Rozdzielczość liczymy z pikseli w podanym rozmiarze; sprawdzamy też spady,
+           obszar bezpieczny, kolory i spłaszczenie.`
+        : judged
+        ? `Sprawdzono według zasad dla tego materiału i rozmiaru. Zmień i sprawdź ponownie, jeśli
+           zamawiasz inaczej.`
         : `<b>To nie jest plik na naszym szablonie</b> — baner, płyta, naklejka? Podaj materiał
            i rozmiar gotowego produktu, a sprawdzimy spady, obszar bezpieczny, rozdzielczość
            i kolory według zasad dla tego materiału.`;
-    const prefill = sizeHints(front);
-    if (prefill) {
-        el('freeW').value = Math.round(prefill[0]);
-        el('freeH').value = Math.round(prefill[1]);
+    const asked = entry.args.free;
+    if (asked) {
+        el('freeMat').value = asked.material;
+        el('freeW').value = asked.width;
+        el('freeH').value = asked.height;
+        sizeHints(front);
+    } else {
+        const prefill = sizeHints(front);
+        if (prefill) {
+            el('freeW').value = Math.round(prefill[0]);
+            el('freeH').value = Math.round(prefill[1]);
+        }
+    }
+    // The knife: only when the file names separations at all. "auto" is the name heuristic.
+    const spots = front.separations || [];
+    el('cutRow').hidden = !spots.length;
+    if (spots.length) {
+        const chosen = entry.args.cut || '';
+        el('cutSel').innerHTML = [`<option value="">automatycznie${front.cut_spot && !chosen
+            ? ` (${escapeHtml(front.cut_spot)})` : ''}</option>`]
+            .concat(spots.map((name) => `<option value="${escapeHtml(name)}"${name === chosen ? ' selected' : ''}>
+                ${escapeHtml(name)}</option>`)).join('');
     }
     el('freeSize').hidden = false;
-    el('reportCard').hidden = false;
-    el('summary').textContent = '';
-    el('checks').innerHTML = front.kind === 'raster'
-        ? `<div class="unrec">Bitmapa nie ma naszego szablonu.<br>
-           <span class="note">Wskaż materiał i rozmiar powyżej, a sprawdzimy ją w tym rozmiarze.</span></div>`
-        : `<div class="unrec">Nie rozpoznaliśmy szablonu.<br>
-           <span class="note">Projekt na fladze? Pobierz szablon z <a href="${BASE}/">generatora</a>
-           i umieść projekt na nim. Inny produkt? Wskaż materiał i rozmiar powyżej.</span></div>`;
 }
 
 function renderReport(entry, front, back) {
@@ -566,8 +605,7 @@ function renderReport(entry, front, back) {
     el('summary').textContent = front.summary || '';
     const assumed = front.free_size
         ? `<p class="assumed">Sprawdzono względem podanego materiału i rozmiaru, nie naszego szablonu.
-           Raport jest trafny na tyle, na ile trafne były te dane.
-           <a href="#" id="changeFree">Zmień materiał lub rozmiar</a></p>`
+           Raport jest trafny na tyle, na ile trafne były te dane.</p>`
         : front.assumed_template
         ? `<p class="assumed">Szablon wskazałeś ręcznie, bo plik nie ma naszego stempla.
            Raport jest trafny na tyle, na ile trafny był ten wybór.</p>` : '';
@@ -575,17 +613,6 @@ function renderReport(entry, front, back) {
         ? `${assumed}<div class="side-h">Przód</div>${checksHtml(front)}
            <div class="side-h">Tył. ${escapeHtml(back.summary || '')}</div>${checksHtml(back)}`
         : assumed + checksHtml(front);
-    const change = el('changeFree');
-    if (change) change.addEventListener('click', async (e) => {
-        e.preventDefault();
-        await loadMaterials();
-        if (entry.args.free) {
-            el('freeMat').value = entry.args.free.material;
-            el('freeW').value = entry.args.free.width;
-            el('freeH').value = entry.args.free.height;
-        }
-        el('freeSize').hidden = false;
-    });
     drawOverlay(front);
     offerActions();
 }

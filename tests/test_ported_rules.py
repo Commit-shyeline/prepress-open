@@ -503,7 +503,7 @@ def test_a_raster_is_judged_by_its_pixels_at_the_declared_size():
     assert _one(findings, "colour_mode")["code"] == "check.colour_mode.rgb"
 
 
-def _sticker(artwork_inset_pt, die_painter="stroke"):
+def _sticker(artwork_inset_pt, die_painter="stroke", spot="Cut"):
     """A 200 x 200 pt page: a filled artwork square, and a die rectangle 20 pt inside the page
     drawn in a `Cut` separation. `artwork_inset_pt` says how far the artwork stops from the page
     edge: 0 bleeds past the die, 20 ends exactly ON the knife."""
@@ -511,7 +511,7 @@ def _sticker(artwork_inset_pt, die_painter="stroke"):
         pdf.setFillColorRGB(0.1, 0.2, 0.8)
         pdf.rect(artwork_inset_pt, artwork_inset_pt, 200 - 2 * artwork_inset_pt,
                  200 - 2 * artwork_inset_pt, stroke=0, fill=1)
-        cut = CMYKColorSep(0, 1, 0, 0, spotName="Cut")
+        cut = CMYKColorSep(0, 1, 0, 0, spotName=spot)
         pdf.setStrokeColor(cut)
         pdf.setFillColor(cut)
         pdf.setLineWidth(0.5)
@@ -547,6 +547,15 @@ def test_the_die_is_measured_and_the_bleed_outside_it_sampled():
     assert _one(bare, "cut_margins")["code"] == "check.cut_margins.bare"
     filled = rules.run({**page, **measure.measure(_sticker(0, "fill"), expected)}, expected, material)
     assert _one(filled, "cut_geometry")["code"] == "check.cut_geometry.filled"
+    # A knife drawn in a colour no heuristic knows: nothing found — until the customer names it.
+    odd = _sticker(0, spot="Pantone 806 C")
+    assert die.geometry(odd) is None
+    named = die.geometry(odd, cut_spot="Pantone 806 C")
+    assert named and named["colorant"] == "Pantone 806 C"
+    facts_named = {**page, **measure.measure(odd, expected, cut_spot="Pantone 806 C"),
+                   "spot_names": ["Pantone 806 C"], "cut_spot": "Pantone 806 C"}
+    assert _one(rules.run(facts_named, expected, material), "cut_path")["level"] == "green"
+    assert _one(rules.run(facts_named, expected, material), "cut_margins")["level"] == "green"
     # No die drawn: neither rule says anything.
     plain = rules.run({**page, **measure.measure(_pdf(lambda p: p.rect(5, 5, 50, 50, fill=1)), expected)},
                       expected, material)

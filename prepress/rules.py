@@ -331,7 +331,10 @@ def check_cut_path(facts, expected=None, material=None):
     spots = facts.get("spot_names")
     if spots is None:
         return None
-    found = structure.cut_spots(spots)
+    # A human's pick wins over the name heuristic: the die drawn in "Pantone 806 C" IS the die once
+    # the customer says so.
+    chosen = facts.get("cut_spot")
+    found = [chosen] if chosen and chosen in spots else ([] if chosen else structure.cut_spots(spots))
     if found:
         return _finding("cut_path", "green", "ok", cut=", ".join(found[:MAX_NAMES_LISTED]))
     return _finding("cut_path", "amber", "missing")

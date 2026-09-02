@@ -21,14 +21,22 @@ SAMPLES_PER_CURVE = 12
 MIN_SAMPLE_STEP_PX = 2
 
 
-def geometry(pdf_bytes, page_index=0):
+def geometry(pdf_bytes, page_index=0, cut_spot=None):
     """The die on this page, or None when no path is painted in a cut colorant.
+
+    `cut_spot` names the colorant a human said is the knife — a file that calls its die line
+    "Pantone 806 C" cannot be recognised by name, and the customer knows which one it is. Unset,
+    the names `structure.cut_spots` recognises are used.
 
     {colorant, origin_mm (x, y from the page's top-left), size_mm, length_mm, contours, closed,
      filled, polylines: [[(x, y), …] in page-mm, y DOWN]}
     """
+    def is_knife(colorant):
+        if not colorant:
+            return False
+        return colorant == cut_spot if cut_spot else bool(structure.cut_spots([colorant]))
     subpaths = [s for s in outline._subpaths(pdf_bytes, page_index)
-                if structure.cut_spots([c for c in (s.get("stroke_colorant"), s.get("fill_colorant")) if c])]
+                if is_knife(s.get("stroke_colorant")) or is_knife(s.get("fill_colorant"))]
     if not subpaths:
         return None
     try:
@@ -51,7 +59,7 @@ def geometry(pdf_bytes, page_index=0):
     x0, y0 = min(b[0] for b in boxes), min(b[1] for b in boxes)
     x1, y1 = max(b[2] for b in boxes), max(b[3] for b in boxes)
     colorants = sorted({c for s in subpaths for c in (s.get("stroke_colorant"), s.get("fill_colorant"))
-                        if c and structure.cut_spots([c])})
+                        if is_knife(c)})
     return {"colorant": ", ".join(colorants),
             "origin_mm": (round(x0, 2), round(page_h - y1, 2)),
             "size_mm": (round(x1 - x0, 2), round(y1 - y0, 2)),

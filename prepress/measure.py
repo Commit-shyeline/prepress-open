@@ -138,11 +138,11 @@ def _looks_like_a_guide(flags, inset_px, clearance_px):
     return not before.any() and not after.any()
 
 
-def measure(pdf_bytes, expected, page_index=0):
+def measure(pdf_bytes, expected, page_index=0, cut_spot=None):
     """Everything the ink rules need, or Nones with a reason when it cannot be measured.
 
     `expected` is the stamped geometry, so the measurement knows where the boxes were without
-    inferring anything from the file itself.
+    inferring anything from the file itself. `cut_spot` is the colorant a human named as the knife.
     """
     scale = expected.get("scale", 1) or 1
     artwork_height_mm = expected["brutto_mm"][1] / scale
@@ -167,7 +167,7 @@ def measure(pdf_bytes, expected, page_index=0):
     facts["text_min_height_mm"] = _text_min_height_mm(data, page_index, scale)
     # The die, when the file draws one in a cut colorant: its geometry, and the share of its
     # perimeter with bare paper a bleed's width outside — sampled on the same render.
-    facts["die"] = die.geometry(data, page_index)
+    facts["die"] = die.geometry(data, page_index, cut_spot)
     if facts["die"]:
         facts["die"]["bare_perimeter"] = die.bare_perimeter(
             array, px_per_mm, facts["die"]["polylines"],

@@ -842,7 +842,10 @@ def _judge(data, filename, form, token=None):
             stamp = found["stamp"]
             assumed = False
     expected = identify.stamped_geometry(stamp)
-    facts = dict(measure.measure(data, expected, page_index))
+    # Which separation is the knife, when the customer said (the page offers the file's own list).
+    cut_spot = (form.get("cut") or "").strip() or None
+    facts = dict(measure.measure(data, expected, page_index, cut_spot=cut_spot))
+    facts["cut_spot"] = cut_spot
     # A raster without a plausible DPI tag has no size of its own: the declared size IS its page.
     if page_mm is None:
         page_mm = [expected["brutto_mm"][0] / expected["scale"],
@@ -918,6 +921,10 @@ def _judge(data, filename, form, token=None):
                     "assumed_template": assumed,
                     "free_size": free_size,
                     "template_token": (stamp or {}).get("template"),
+                    # Every named separation the file draws, and which one was read as the knife,
+                    # so the page can offer the pick. Sent whatever the material is.
+                    "separations": facts.get("spot_names") or [],
+                    "cut_spot": cut_spot or ((facts.get("die") or {}).get("colorant") or None),
                     "preview_png": preview_png,
                     "measured": {k: facts.get(k) for k in
                                  ("blank_edges_mm", "safe_intrusion_mm", "min_dpi",
