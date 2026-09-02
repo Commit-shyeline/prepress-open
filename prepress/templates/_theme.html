@@ -67,7 +67,9 @@ header a { color: var(--bar-link); }
         else document.documentElement.dataset.theme = mode;
         const button = document.getElementById('themeToggle');
         if (button) {
-            button.textContent = LABEL[mode];
+            const label = button.querySelector('.lbl');
+            if (label) label.textContent = LABEL[mode];
+            else button.textContent = LABEL[mode];
             button.setAttribute('aria-label', `${LABEL[mode]} — kliknij, żeby zmienić`);
         }
     }

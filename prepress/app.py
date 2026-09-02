@@ -1376,10 +1376,25 @@ def api_templates():
         "lines": sorted({o.get("type") for o in t.get("outlines") or []}),
         "bleed_mm": t.get("bleed_mm"),
         "safe_mm": t.get("safe_mm"),
+        # The safe area's own size — the advertising surface a customer actually gets.
+        "safe_size_mm": _safe_size_mm(t),
         "sewn_sides_mm": t.get("sewn_sides_mm"),
         "material": t.get("material"),
         "note": t.get("note"),
     } for t in materials.load_templates()]})
+
+
+def _safe_size_mm(template):
+    """(w, h) of the safe outline's bounding box, or None when the template cannot be drawn."""
+    try:
+        drawing, _notes = from_template.derive(template)
+        points = [p for entry in drawing.get("safe") or [] for p in offset.flatten(entry)]
+    except Exception:                                # noqa: BLE001 — a list entry, not a verdict
+        return None
+    if len(points) < 3:
+        return None
+    xs, ys = [p[0] for p in points], [p[1] for p in points]
+    return [round(max(xs) - min(xs), 1), round(max(ys) - min(ys), 1)]
 
 
 @app.route("/api/admin/rules", methods=["GET"])

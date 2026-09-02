@@ -48,9 +48,6 @@ header.brand [hidden] { display: none !important; }
 header.brand .ghost .lbl { display: none; }
 header.brand .ghost:has(.ico) { width: 44px; padding: 0; }
 header.brand .ghost.square { width: 44px; padding: 0; font-size: 15px; font-weight: 900; }
-header.brand .theme-toggle { margin-left: 0; height: 44px; border-radius: 10px; font-size: 11px;
-                             font-weight: 700; background: rgba(255,255,255,.10);
-                             border: 1px solid rgba(255,255,255,.20); color: #fff; }
 @media (min-width: 760px) {
     header.brand .ghost .lbl { display: inline; }
     header.brand .ghost .ico { display: none; }
@@ -104,6 +101,14 @@ body.hero-page header.brand {
     header.brand .brand-in { padding: 8px 14px; }
     header.brand .brand-mark img { height: 26px; }
     header.brand .brand-sub { display: none; }
+    header.brand .brand-sub.who { display: block; }   /* "Zalogowany: …" is worth its line */
+}
+/* Under 560px the page's own links („← szablony", „Pobierz szablon") leave the bar for the burger
+   menu — with them in the row the bar wrapped onto a second line on every phone (2026-09-03). */
+@media (max-width: 559px) {
+    header.brand .brand-extra { display: none; }
+    header.brand .brand-menu { display: flex; }
+    header.brand .menu-row.extra { display: flex; }
 }
 </style>
 <header class="brand">
@@ -122,7 +127,10 @@ body.hero-page header.brand {
         {% if extra_actions %}<span class="brand-extra ghost-links">{{ extra_actions|safe }}</span>{% endif %}
         <button type="button" id="tourBtn" class="ghost square fold-3" aria-label="Uruchom przewodnik"
                 title="Przewodnik po stronie">?</button>
-        <button type="button" id="themeToggle" class="theme-toggle fold-2">Motyw: auto</button>
+        <button type="button" id="themeToggle" class="ghost fold-2" aria-label="Motyw: auto — kliknij, żeby zmienić">
+            <svg class="ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+            <span class="lbl">Motyw: auto</span>
+        </button>
         <button type="button" id="loginBtn" class="ghost fold-1" hidden aria-label="Zaloguj się" title="Zaloguj się">
             <svg class="ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
             <span class="lbl">Zaloguj się</span>
@@ -181,6 +189,7 @@ body.hero-page header.brand {
         if (logged) {
             const name = who(token());
             $('brandWho').textContent = name ? `Zalogowany: ${name}` : 'Zalogowany';
+            $('brandWho').classList.add('who');
         }
     }
     function login() {
@@ -210,7 +219,11 @@ body.hero-page header.brand {
         });
     }
     async function tour() {
-        const steps = (window.PREPRESS_TOUR || []).filter((s) => !s.element || document.querySelector(s.element));
+        const onScreen = (selector) => {
+            const node = document.querySelector(selector);
+            return !!(node && node.offsetWidth > 0 && node.offsetHeight > 0 && !node.closest('[hidden]'));
+        };
+        const steps = (window.PREPRESS_TOUR || []).filter((s) => !s.element || onScreen(s.element));
         if (!steps.length) return;
         try { await loadDriver(); } catch (e) { return; }
         window.driver.js.driver({
@@ -224,6 +237,16 @@ body.hero-page header.brand {
 
     document.addEventListener('DOMContentLoaded', () => {
         paint();
+        // The page's own links, mirrored into the menu for the widths that fold them.
+        const menu0 = $('brandMenu');
+        document.querySelectorAll('.brand-extra a').forEach((link) => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'menu-row extra';
+            row.textContent = link.textContent.trim();
+            row.addEventListener('click', () => { window.location.href = link.href; });
+            menu0.insertBefore(row, menu0.firstChild);
+        });
         $('loginBtn').addEventListener('click', login);
         $('logoutBtn').addEventListener('click', logout);
         $('tourBtn').addEventListener('click', tour);

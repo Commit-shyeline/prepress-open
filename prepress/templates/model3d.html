@@ -24,6 +24,13 @@ header .spacer { flex: 1; }
 .legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
 .legend label { display: flex; gap: 7px; align-items: center; font-weight: 600; cursor: pointer;
                 margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); }
+/* The wind switch stands under the flag itself, not in the legend's corner. */
+.wind-float { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+              display: flex; gap: 8px; align-items: center; font-size: 12.5px; font-weight: 600;
+              cursor: pointer; white-space: nowrap;
+              background: color-mix(in srgb, var(--surface) 88%, transparent);
+              border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; }
+body.bare .wind-float { display: none; }
 .note-float { position: absolute; right: 12px; bottom: 12px; font-size: 12px; color: var(--muted);
               background: color-mix(in srgb, var(--surface) 88%, transparent);
               border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
@@ -59,7 +66,7 @@ body.cutting .note-float { top: 12px; bottom: auto; max-width: 34%; }
 </head>
 <body class="{{ 'bare' if bare else '' }}{{ ' embed' if embed else '' }}">
 {% with page_title = name, page_sub = 'podgląd 3D szablonu',
-        extra_actions = '<a href="' ~ base ~ '/api/templates/' ~ token ~ '/pdf">pobierz PDF</a>'
+        extra_actions = '<a href="' ~ base ~ '/api/templates/' ~ token ~ '/pdf">Pobierz szablon</a>'
                         ~ '<a href="' ~ base ~ '/">← szablony</a>' %}
 {% include "_brand_header.html" %}{% endwith %}
 
@@ -68,8 +75,8 @@ body.cutting .note-float { top: 12px; bottom: auto; max-width: 34%; }
         <span><i style="background:#d81a73"></i> linia cięcia — tak zostanie wycięta</span>
         <span><i style="background:#2f9e52"></i> obszar bezpieczny — tu trzymaj teksty i logo</span>
         <span class="note" id="mastNote"></span>
-        <label><input type="checkbox" id="wind"> Wiatr</label>
     </div>
+    <label class="wind-float"><input type="checkbox" id="wind"> Sztuczna symulacja wiatru</label>
     <div class="note-float" id="sideNote"></div>
     <div id="err"></div>
 </div>

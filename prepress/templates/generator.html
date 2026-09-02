@@ -154,6 +154,8 @@ td.num { text-align: right; white-space: nowrap; }
             <select id="tplFamily"></select>
         </label>
         <div id="tplList"></div>
+        <p class="note" style="margin:10px 0 0">P.R. — bezpieczna powierzchnia reklamowa: tyle miejsca
+            masz na napisy i logo, w rozmiarze gotowej flagi.</p>
     </div>
 
     <div class="card">
@@ -437,11 +439,14 @@ async function loadTemplates() {
             short = short.replace(/^Flaga\s+(Vento\s+Regular|[SML]|XL)\s*/i, '') || short;
             const mm = t.trim_mm || [];
             const cm = mm.map((v) => Math.round(v / 10)).join(' × ');
+            // P.R. — the safe area's own size, the surface the customer can actually put a message on.
+            const pr = (t.safe_size_mm || []).map((v) => Math.round(v / 10)).join(' × ');
             return `<div class="tpl">
                 <div class="fill">
                     <span class="nm">${escapeHtml(short)}</span>
                     <span class="sz" title="dokładnie ${mm.map(round).join(' × ')} mm ·
-                        spad ${t.bleed_mm} mm · obszar bezpieczny ${t.safe_mm} mm">${cm} cm</span>
+                        spad ${t.bleed_mm} mm · obszar bezpieczny ${t.safe_mm} mm od linii cięcia">${cm} cm${pr
+                        ? ` <span class="pr">(P.R. ${pr} cm)</span>` : ''}</span>
                     ${t.note ? `<div class="note">${escapeHtml(t.note)}</div>` : ''}
                 </div>
                 <div class="act">
