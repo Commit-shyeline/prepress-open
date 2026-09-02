@@ -40,6 +40,7 @@ def _font():
 
 
 def _bold():
+    _report._font_name()          # registers the regular face first: that is what marks text as unicode-safe
     return _report.bold_font_name()
 WORDMARK_FONT, CREDIT_FONT = "Helvetica-Bold", "Helvetica"
 # Breathing room inside the inscribed box, as a fraction of its width.
