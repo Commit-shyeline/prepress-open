@@ -84,10 +84,11 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
         <div class="card">
             <h2>Twój plik</h2>
             <label class="dropzone" id="drop" for="file">
-                <b>Przeciągnij tu plik PDF</b>
+                <b>Przeciągnij tu plik PDF, TIFF, JPG lub PNG</b>
                 <span class="note">albo kliknij i wybierz. Najlepiej projekt na naszym
                     szablonie. Flaga dwustronna? Wrzuć oba pliki naraz, przód i tył.</span>
-                <input id="file" type="file" accept=".pdf,application/pdf" multiple>
+                <input id="file" type="file" multiple
+                       accept=".pdf,.tif,.tiff,.jpg,.jpeg,.png,application/pdf,image/tiff,image/jpeg,image/png">
             </label>
             {% if path_hint %}
             <details id="pathBox" style="margin-top:12px">
@@ -111,7 +112,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
                 <div id="pickBtns" style="display:flex;gap:8px;flex-wrap:wrap"></div>
             </div>
             <div id="freeSize" hidden style="margin-top:12px">
-                <p class="note" style="margin:0 0 8px"><b>To nie jest plik na naszym szablonie</b> —
+                <p class="note" style="margin:0 0 8px" id="freeSizeNote"><b>To nie jest plik na naszym szablonie</b> —
                     baner, płyta, naklejka? Podaj materiał i rozmiar gotowego produktu, a sprawdzimy
                     spady, obszar bezpieczny, rozdzielczość i kolory według zasad dla tego materiału.</p>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -192,9 +193,9 @@ el('file').addEventListener('change', () => takeFiles([...el('file').files]));
    convention of the real order folders — and kolejność wyboru rozstrzyga remis. */
 let PAIR = null;                                    // { front: File, back: File|null }
 function takeFiles(files) {
-    const pdfs = files.filter((f) => /\.pdf$/i.test(f.name || ''));
+    const pdfs = files.filter((f) => /\.(pdf|tiff?|jpe?g|png)$/i.test(f.name || ''));
     if (!pdfs.length) {
-        return message('To nie są pliki PDF Sprawdzamy pliki PDF.', true);
+        return message('Sprawdzamy pliki PDF, TIFF, JPG i PNG.', true);
     }
     if (pdfs.length > 2) {
         return message('Najwyżej dwa pliki: przód i tył flagi dwustronnej.', true);
@@ -416,6 +417,12 @@ async function offerFreeSize(front) {
             height: el('freeH').value,
         }));
     }
+    el('freeSizeNote').innerHTML = front.kind === 'raster'
+        ? `<b>Bitmapa</b> — podaj materiał i rozmiar gotowego produktu. Rozdzielczość policzymy
+           z pikseli w tym rozmiarze, sprawdzimy też spady, obszar bezpieczny, kolory i spłaszczenie.`
+        : `<b>To nie jest plik na naszym szablonie</b> — baner, płyta, naklejka? Podaj materiał
+           i rozmiar gotowego produktu, a sprawdzimy spady, obszar bezpieczny, rozdzielczość
+           i kolory według zasad dla tego materiału.`;
     const prefill = sizeHints(front);
     if (prefill) {
         el('freeW').value = Math.round(prefill[0]);
@@ -424,9 +431,12 @@ async function offerFreeSize(front) {
     el('freeSize').hidden = false;
     el('reportCard').hidden = false;
     el('summary').textContent = '';
-    el('checks').innerHTML = `<div class="unrec">Nie rozpoznaliśmy szablonu.<br>
-        <span class="note">Projekt na fladze? Pobierz szablon z <a href="${BASE}/">generatora</a>
-        i umieść projekt na nim. Inny produkt? Wskaż materiał i rozmiar powyżej.</span></div>`;
+    el('checks').innerHTML = front.kind === 'raster'
+        ? `<div class="unrec">Bitmapa nie ma naszego szablonu.<br>
+           <span class="note">Wskaż materiał i rozmiar powyżej, a sprawdzimy ją w tym rozmiarze.</span></div>`
+        : `<div class="unrec">Nie rozpoznaliśmy szablonu.<br>
+           <span class="note">Projekt na fladze? Pobierz szablon z <a href="${BASE}/">generatora</a>
+           i umieść projekt na nim. Inny produkt? Wskaż materiał i rozmiar powyżej.</span></div>`;
 }
 
 function renderReport(front, back) {

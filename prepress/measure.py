@@ -34,7 +34,7 @@ full-bleed background is SUPPOSED to fill the ring, so any-ink flagged every cor
 about type and logos, so what is measured is DETAIL — local contrast — because flat colour has almost
 none and lettering has a lot.
 """
-from . import structure
+from . import raster, structure
 
 # Render fine enough that a millimetre is two pixels, which is well under any tolerance we judge on,
 # and coarse enough that a 5 m banner stays a sane raster.
@@ -146,12 +146,57 @@ def measure(pdf_bytes, expected, page_index=0):
     """
     scale = expected.get("scale", 1) or 1
     artwork_height_mm = expected["brutto_mm"][1] / scale
+    data = _bytes(pdf_bytes)
+    if raster.is_raster(data):
+        return _measure_raster(data, expected, page_index)
     try:
-        array, px_per_mm = _render(_bytes(pdf_bytes), page_index, artwork_height_mm)
+        array, px_per_mm = _render(data, page_index, artwork_height_mm)
     except Exception as error:                       # noqa: BLE001 — unmeasurable is an ANSWER
-        return {"blank_edges_mm": None, "safe_intrusion_mm": None, "min_dpi": None,
-                "guides_present": None, "reason": f"{type(error).__name__}: {error}"[:140]}
+        return _unmeasurable(error)
 
+    facts = _ink_facts(array, px_per_mm, expected)
+    if facts.get("min_dpi", "unset") != "unset":
+        return facts                                 # the blank page: nothing more to read
+    placements = structure.placed_images(data, page_index)
+    facts["min_dpi"] = structure.min_significant_dpi(placements)
+    # Every placement big enough to judge by, WITH its rectangle — so a low-resolution verdict can
+    # point at the image instead of shrugging at the whole page.
+    facts["image_placements"] = [
+        {"rect_mm": p.get("rect_mm"), "dpi": p["dpi"], "placed_mm": list(p["placed_mm"])}
+        for p in structure.significant_placements(placements) if p.get("rect_mm")]
+    facts["text_min_height_mm"] = _text_min_height_mm(data, page_index, scale)
+    return facts
+
+
+def _unmeasurable(error):
+    return {"blank_edges_mm": None, "safe_intrusion_mm": None, "min_dpi": None,
+            "guides_present": None, "reason": f"{type(error).__name__}: {error}"[:140]}
+
+
+def _measure_raster(data, expected, page_index):
+    """A flat raster IS the artwork: its pixels map onto the declared brutto box exactly, so the
+    ink maths are the same and the resolution is pixels over the declared size. No guides (we did
+    not issue this page), no live text, one placement — the whole image."""
+    scale = expected.get("scale", 1) or 1
+    artwork_mm = (expected["brutto_mm"][0] / scale, expected["brutto_mm"][1] / scale)
+    try:
+        array, px_per_mm, dpi = raster.render_array(data, page_index, artwork_mm,
+                                                    TARGET_PX_PER_MM, MAX_RENDER_PX)
+    except Exception as error:                       # noqa: BLE001 — unmeasurable is an ANSWER
+        return _unmeasurable(error)
+    facts = _ink_facts(array, px_per_mm, expected)
+    facts["guides_present"] = None
+    # At full size, like every other number here: a 1:10 raster prints ten times larger.
+    facts["min_dpi"] = round(dpi / scale, 1)
+    facts["image_placements"] = [{"rect_mm": [0, 0, round(artwork_mm[0], 1), round(artwork_mm[1], 1)],
+                                  "dpi": facts["min_dpi"], "placed_mm": list(artwork_mm)}]
+    facts["text_min_height_mm"] = None
+    return facts
+
+
+def _ink_facts(array, px_per_mm, expected):
+    """Guides, blank edges and safe-area intrusion off a rendered RGB array."""
+    scale = expected.get("scale", 1) or 1
     ink = _ink(array)
     height_px, width_px = ink.shape
     run_px = max(2, int(round(SOLID_RUN_MM * px_per_mm)))
@@ -170,7 +215,7 @@ def measure(pdf_bytes, expected, page_index=0):
         # A page with no artwork at all: every edge is blank by the full artwork depth.
         facts["blank_edges_mm"] = (width_px / px_per_mm / 2,) * 4
         facts["safe_intrusion_mm"] = 0.0
-        facts["min_dpi"] = None
+        facts["min_dpi"] = None                      # the caller reads this as "stop here"
         return facts
 
     # Each edge: how far in before a SOLID run of artwork starts. None means no solid artwork at all
@@ -189,14 +234,6 @@ def measure(pdf_bytes, expected, page_index=0):
     regions, worst = _intrusion_regions(_detail_mask(array), px_per_mm, expected)
     facts["safe_intrusion_mm"] = worst
     facts["safe_intrusion_regions_mm"] = regions
-    placements = structure.placed_images(_bytes(pdf_bytes), page_index)
-    facts["min_dpi"] = structure.min_significant_dpi(placements)
-    # Every placement big enough to judge by, WITH its rectangle — so a low-resolution verdict can
-    # point at the image instead of shrugging at the whole page.
-    facts["image_placements"] = [
-        {"rect_mm": p.get("rect_mm"), "dpi": p["dpi"], "placed_mm": list(p["placed_mm"])}
-        for p in structure.significant_placements(placements) if p.get("rect_mm")]
-    facts["text_min_height_mm"] = _text_min_height_mm(_bytes(pdf_bytes), page_index, scale)
     return facts
 
 

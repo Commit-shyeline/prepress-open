@@ -156,6 +156,12 @@ CHECK_MESSAGES = {
         "Obrys cięcia podaj jako kolor dodatkowy nazwany „Cut”, w krzywych, tylko obrys bez "
         "wypełnienia. Jeśli wykrojnik jest w czerni albo w Pantone, sprawdzimy go ręcznie.",
 
+    "check.raster_flat.ok": "Plik spłaszczony",
+    "check.raster_flat.layers": "Plik nie jest spłaszczony ({mode})",
+    "check.raster_flat.layers.detail":
+        "Bitmapa ma kanał przezroczystości albo dodatkowe kanały. Spłaszcz obraz (bez warstw i "
+        "masek) i zapisz ponownie, np. TIFF z kompresją LZW.",
+
     "check.fonts.ok": "Teksty zamienione na krzywe",
     "check.fonts.present": "Teksty nie są zamienione na krzywe",
     "check.fonts.present.detail":

@@ -369,7 +369,8 @@ def test_every_rule_the_panel_offers_is_a_rule_that_runs():
              "spot_names": ["PANTONE 711 C"], "producer": "Microsoft Word",
              "blank_edges_mm": (9, 0, 0, 0), "safe_intrusion_mm": 4.0, "min_dpi": 20,
              "guides_present": True, "declared_boxes_mm": {"trimbox": (980, 1980)},
-             "text_min_height_mm": 4.0, "named_size_mm": [800, 2000], "named_unit_stated": True}
+             "text_min_height_mm": 4.0, "named_size_mm": [800, 2000], "named_unit_stated": True,
+             "raster_alpha": True}
     produced = {f["id"] for f in rules.run(facts, _expected(), STICKER)}
     # The split rule only has something to say about a job over the threshold on both sides.
     huge = identify.stamped_geometry(generate.stamp_payload(item.resolve(BANNER, 6000, 7000)))
@@ -456,6 +457,45 @@ def test_size_semantics_finishing_oversize_and_two_faces():
     # The material's own allowance replaces the default.
     tight = dict(BANNER, finishing_mm=50)
     assert size((1240, 2240), tight)["code"] == "check.page_size.oversize"
+
+
+def test_a_raster_is_judged_by_its_pixels_at_the_declared_size():
+    """A 1000 x 500 px CMYK TIFF declared as a 1000 x 500 mm banner: 25 DPI, CMYK, flat."""
+    import io as _io
+
+    from PIL import Image
+
+    from prepress import measure, raster
+
+    image = Image.new("CMYK", (1000, 500), (0, 0, 0, 255))
+    holder = _io.BytesIO()
+    image.save(holder, format="TIFF", compression="tiff_lzw")
+    data = holder.getvalue()
+    assert raster.is_raster(data) and raster.page_count(data) == 1
+    declared = raster.facts(data, "baner 1000x500.tif")
+    assert declared["colour_spaces"] == ["DeviceCMYK"]
+    assert declared["raster_alpha"] is False and declared["fonts"] is None
+    expected = identify.stamped_geometry(generate.stamp_payload(item.resolve(
+        dict(BANNER, bleed_mm=0), 1000, 500)))
+    facts = measure.measure(data, expected)
+    assert facts["min_dpi"] == 25.4
+    assert facts["guides_present"] is None and facts["text_min_height_mm"] is None
+    assert max(facts["blank_edges_mm"]) <= 0.5           # solid black reaches every edge
+    facts.update({k: v for k, v in declared.items() if k not in ("readable", "reason")})
+    facts["page_mm"] = (1000, 500)
+    findings = rules.run(facts, expected, BANNER)
+    assert _one(findings, "resolution")["level"] == "red"
+    assert _one(findings, "raster_flat")["level"] == "green"
+    assert _one(findings, "colour_mode")["level"] == "green"
+    assert _one(findings, "fonts") is None and _one(findings, "spot_inks") is None
+    # An RGBA PNG: RGB is flagged, and the alpha means it was not flattened.
+    png = _io.BytesIO()
+    Image.new("RGBA", (200, 100), (255, 0, 0, 128)).save(png, format="PNG")
+    declared = raster.facts(png.getvalue(), "x.png")
+    facts = {"page_mm": (1000, 500), **{k: v for k, v in declared.items() if k not in ("readable", "reason")}}
+    findings = rules.run(facts, expected, BANNER)
+    assert _one(findings, "raster_flat")["code"] == "check.raster_flat.layers"
+    assert _one(findings, "colour_mode")["code"] == "check.colour_mode.rgb"
 
 
 def test_a_page_at_one_to_ten_is_a_scaled_file_not_a_wrong_size():

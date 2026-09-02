@@ -246,6 +246,27 @@ def test_an_unstamped_file_reports_the_size_its_name_claims(client):
     assert [round(v) for v in answer["page_mm"]] == [1000, 500]
 
 
+def test_a_raster_goes_straight_to_material_and_size(client):
+    from PIL import Image
+    holder = io.BytesIO()
+    Image.new("RGB", (400, 200), (10, 20, 200)).save(holder, format="PNG", dpi=(100, 100))
+    first = client.post("/api/check", data={"file": (io.BytesIO(holder.getvalue()), "baner 1000x500.png")},
+                        content_type="multipart/form-data").get_json()
+    assert first["recognised"] is False and first["kind"] == "raster"
+    assert [round(v) for v in first["page_mm"]] == [102, 51]      # what the 100 DPI tag implies
+    assert first["named_size_mm"] == [1000.0, 500.0]
+    judged = client.post(f"/api/recheck/{first['token']}",
+                         data={"material": "banner-frontlit-510", "width": "1000", "height": "500"},
+                         content_type="multipart/form-data").get_json()
+    assert judged["recognised"] is True and judged["kind"] == "raster"
+    # 400 x 200 px over the brutto box (1000 + 2 x 20 bleed) x (500 + 40): 9.4 DPI on the short side.
+    assert judged["measured"]["min_dpi"] == 9.4
+    ids = {c["id"]: c["level"] for c in judged["checks"]}
+    assert ids["resolution"] == "red" and ids["raster_flat"] == "green"
+    assert "fonts" not in ids and "cut_path" not in ids
+    assert judged["preview_png"]
+
+
 def test_the_pages_stay_reachable_behind_the_gate(client, monkeypatch):
     """A visitor who followed a link meets the page and is told to log in — not a bare 401."""
     monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)

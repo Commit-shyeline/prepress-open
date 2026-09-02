@@ -332,6 +332,17 @@ def check_cut_path(facts, expected=None, material=None):
     return _finding("cut_path", "amber", "missing")
 
 
+def check_raster_flattened(facts, expected=None, material=None):
+    """A raster must arrive flattened: an alpha channel or extra samples mean layers or masks
+    survived the export, and the RIP will decide for the customer how to flatten them."""
+    alpha = facts.get("raster_alpha")
+    if alpha is None:
+        return None
+    if alpha:
+        return _finding("raster_flat", "amber", "layers", mode=facts.get("raster_mode") or "")
+    return _finding("raster_flat", "green", "ok")
+
+
 def check_fonts_converted(facts, expected=None, material=None):
     """Live text means the text was not converted to curves.
 
@@ -431,8 +442,8 @@ def check_filename(facts, expected=None, material=None):
 RULES = (check_page_size, check_declared_trim, check_template_guides_removed,
          check_artwork_reaches_bleed, check_safe_area, check_resolution,
          check_office_origin, check_colour_mode, check_spot_inks, check_cut_path,
-         check_fonts_converted, check_overprint, check_page_count, check_text_height,
-         check_split_required, check_named_size, check_filename)
+         check_raster_flattened, check_fonts_converted, check_overprint, check_page_count,
+         check_text_height, check_split_required, check_named_size, check_filename)
 
 # Every rule a shop can silence or re-grade, in the order the rules run, mapped to the message code
 # that best DESCRIBES it — the sentence a customer would get when the rule fires.
@@ -452,6 +463,7 @@ RULE_LABELS = {
     "colour_mode": "check.colour_mode.rgb",
     "spot_inks": "check.spot_inks.found",
     "cut_path": "check.cut_path.missing",
+    "raster_flat": "check.raster_flat.layers",
     "fonts": "check.fonts.present",
     "overprint": "check.overprint.on",
     "page_count": "check.page_count.many",

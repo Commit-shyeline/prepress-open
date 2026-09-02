@@ -26,7 +26,7 @@ from urllib.parse import quote
 from werkzeug.utils import secure_filename
 
 from . import (from_template, generate, identify, item, lines, materials, measure, messages,
-               named_size, offset, outline, rules, shape, structure)
+               named_size, offset, outline, raster, rules, shape, structure)
 
 logger = logging.getLogger(__name__)
 
@@ -733,17 +733,25 @@ def _judge(data, filename, form, token=None):
         page_index = max(int(form.get("page") or 0), 0)
     except ValueError:
         page_index = 0
+    # A flat raster (TIFF, JPEG, PNG) or a PDF. A raster has no stamp and no page to match, so it
+    # goes straight to the fourth rung: the customer names material and size, and the pixels are
+    # judged against them (`raster.py`). Its "page" is what its DPI tag implies, when plausible.
+    kind = "raster" if raster.is_raster(data) else "pdf"
     try:
-        import pikepdf as _pikepdf
-        with _pikepdf.open(io.BytesIO(data)) as _pdf:
-            page_count = len(_pdf.pages)
+        if kind == "raster":
+            page_count = raster.page_count(data)
+        else:
+            import pikepdf as _pikepdf
+            with _pikepdf.open(io.BytesIO(data)) as _pdf:
+                page_count = len(_pdf.pages)
     except Exception:                               # noqa: BLE001 — an unreadable file is a verdict
         return jsonify({"recognised": False, "reason": "The file could not be read."}), 200
     if page_index >= page_count:
         return jsonify({"error": f"Ten plik ma {page_count} stron — strony "
                                  f"{page_index + 1} w nim nie ma."}), 400
     try:
-        page_mm = identify.page_size_mm(data, page_index)
+        page_mm = (raster.page_mm(data, page_index) if kind == "raster"
+                   else identify.page_size_mm(data, page_index))
     except Exception:                               # noqa: BLE001 — an unreadable page is a verdict
         return jsonify({"recognised": False, "reason": "The page size could not be read."}), 200
 
@@ -778,6 +786,12 @@ def _judge(data, filename, form, token=None):
         stamp = generate.stamp_payload(resolved)
         assumed = True
         free_size = True
+    elif kind == "raster":
+        named, stated = named_size.parse_mm(filename)
+        return jsonify({"recognised": False, "reason": "raster", "kind": kind,
+                        "candidates": [], "page_mm": page_mm,
+                        "named_size_mm": list(named_size.reconcile(named, stated, page_mm) or [])
+                        or None, "token": token}), 200
     else:
         found = identify.read_stamp(data, page_index)
         if not found:
@@ -815,6 +829,10 @@ def _judge(data, filename, form, token=None):
             assumed = False
     expected = identify.stamped_geometry(stamp)
     facts = dict(measure.measure(data, expected, page_index))
+    # A raster without a plausible DPI tag has no size of its own: the declared size IS its page.
+    if page_mm is None:
+        page_mm = [expected["brutto_mm"][0] / expected["scale"],
+                   expected["brutto_mm"][1] / expected["scale"]]
     facts["page_mm"] = page_mm
     # Guides, detected by VECTORS when the template is in hand. The raster detector only ever saw
     # straight guides — a winder's curved cut line never fills a row, so a file consisting of
@@ -841,11 +859,11 @@ def _judge(data, filename, form, token=None):
         and blank
         and max(blank[0] / max(expected["brutto_mm"][0], 1),
                 blank[1] / max(expected["brutto_mm"][1], 1)) > 0.3)
-    facts["declared_boxes_mm"] = identify.declared_boxes_mm(data)
+    facts["declared_boxes_mm"] = {} if kind == "raster" else identify.declared_boxes_mm(data)
     # What the objects declare: fonts, colour spaces, colorants, overprint, page count, producer.
     # `readable` and `reason` are dropped rather than merged — the render already reported why it
     # could not measure, and two facts under one name is how a verdict quietly loses its reason.
-    declared = structure.facts(data, filename)
+    declared = raster.facts(data, filename) if kind == "raster" else structure.facts(data, filename)
     facts.update({key: value for key, value in declared.items()
                   if key not in ("readable", "reason")})
     material = materials.get(expected["material_id"] or "")
@@ -868,10 +886,12 @@ def _judge(data, filename, form, token=None):
         # small print to survive an oblique camera. The admin preview stays at its own size — this
         # raster is a TEXTURE, that one is a picture to recognise a shape in.
         preview_png = base64.b64encode(
-            shape.render_preview(data, page_index, max_pixels=2800)).decode()
+            raster.preview_png(data, page_index, max_pixels=2800) if kind == "raster"
+            else shape.render_preview(data, page_index, max_pixels=2800)).decode()
     except Exception:                               # noqa: BLE001 — the verdict outranks the picture
         preview_png = None
     return jsonify({"recognised": True, "expected": expected, "page_mm": page_mm,
+                    "kind": kind,
                     # Send this back to /api/recheck/<token> instead of the file again.
                     "token": token,
                     # The clean template itself — nothing to judge, and the page says so instead
