@@ -51,6 +51,13 @@ MAX_NAMES_LISTED = 4
 # roll exists, so the graphic has to be split before printing.
 DEFAULT_MIN_TEXT_MM = 10.0
 DEFAULT_SPLIT_OVER_MM = 5000.0
+# How much bigger than the finished size a NON-cut file may be and still be finishing (a tunnel, a
+# sleeve, a hem, a pocket) rather than a wrong size (`finishing_mm` on the material overrides).
+DEFAULT_FINISHING_MM = 500.0
+# Two faces side by side: halving must land within the finishing allowance AND within a factor of
+# two of the ordered size — geometry alone cannot otherwise tell two flag faces from a sheet of
+# twenty labels (the in-house engine learned this on `etykiety-flagi_7x3,7cm` on A4).
+TWO_UP_MAX_FACTOR = 2.0
 # A file drawn at 1:N. Templates come at 1:1 up to 1:10 (`item.choose_scale`), so those are the
 # scales a returned file can honestly be in.
 SCALES_RECOGNISED = range(2, 11)
@@ -111,9 +118,53 @@ def check_page_size(facts, expected, material=None):
                 return _finding("page_size", "info", "scaled", scale=divisor,
                                 expected_w=_mm(width), expected_h=_mm(art_height),
                                 page_w=_mm(actual_w), page_h=_mm(actual_h))
-    return _finding("page_size", "red", "wrong",
-                    expected_w=_mm(width), expected_h=_mm(art_height + strip),
-                    page_w=_mm(actual_w), page_h=_mm(actual_h))
+    actual, brutto = (actual_w, actual_h), (width, art_height)
+    values = {"expected_w": _mm(width), "expected_h": _mm(art_height + strip),
+              "page_w": _mm(actual_w), "page_h": _mm(actual_h)}
+    allowance = float((material or {}).get("finishing_mm") or DEFAULT_FINISHING_MM)
+    # Checked BEFORE the finishing branch: a small doubled file (200x100 ordered, 400x100 sent) would
+    # otherwise sit inside the allowance and read as a hem.
+    if _two_faces_in_one_file(actual, brutto, allowance):
+        return _finding("page_size", "red", "two_up", **values)
+    # Cut work has an exact bleed, so an oversize plate is a defect there — only non-cut materials
+    # get the finishing reading, and an oversize is never an ERROR for them: the difference could
+    # still be finishing; only UNDERSIZE is definitely wrong.
+    if not (material or {}).get("cut_path"):
+        if _oversize_within(actual, brutto, allowance):
+            return _finding("page_size", "green", "finishing", allowance=_mm(allowance), **values)
+        if _oversize(actual, brutto):
+            return _finding("page_size", "amber", "oversize", allowance=_mm(allowance), **values)
+    return _finding("page_size", "red", "wrong", **values)
+
+
+def _oversize(actual, expected):
+    """At least as large as expected on BOTH sides, in either orientation."""
+    return (all(a >= e for a, e in zip(actual, expected))
+            or (actual[0] >= expected[1] and actual[1] >= expected[0]))
+
+
+def _oversize_within(actual, expected, allowance):
+    """Bigger than expected on both sides by no more than `allowance`, in either orientation."""
+    for candidate in (actual, (actual[1], actual[0])):
+        if all(0 <= a - e <= allowance for a, e in zip(candidate, expected)):
+            return True
+    return False
+
+
+def _two_faces_in_one_file(actual, expected, allowance):
+    """HALF the page, split along either axis, is plausibly the expected size."""
+    import math
+    for axis in (0, 1):
+        half = list(actual)
+        half[axis] /= 2
+        if not _oversize_within(half, expected, allowance):
+            continue
+        for candidate in (half, half[::-1]):
+            distance = max(abs(math.log(max(a, 1e-6) / max(e, 1e-6)))
+                           for a, e in zip(candidate, expected))
+            if distance <= math.log(TWO_UP_MAX_FACTOR):
+                return True
+    return False
 
 
 def check_declared_trim(facts, expected, material=None):

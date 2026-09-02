@@ -435,6 +435,29 @@ def test_the_named_size_rule_informs_never_judges():
     assert _one(rules.run({"page_mm": (1040, 2040)}, _expected(), BANNER), "named_size") is None
 
 
+def test_size_semantics_finishing_oversize_and_two_faces():
+    expected = _expected()                           # brutto 1040 x 2040 (20 mm bleed each side)
+    def size(page, material=BANNER):
+        return _one(rules.run({"page_mm": page}, expected, material), "page_size")
+    # A hem's worth bigger is correct, not a size error — and rotated counts too.
+    assert size((1240, 2240))["code"] == "check.page_size.finishing"
+    assert size((2240, 1240))["level"] == "green"
+    # Beyond the allowance: warn, never fail — the difference could still be finishing.
+    assert size((2000, 3000))["code"] == "check.page_size.oversize"
+    assert size((2000, 3000))["level"] == "amber"
+    # Two faces side by side is red, and it wins over the finishing reading.
+    two_up = size((2080, 2040))
+    assert two_up["code"] == "check.page_size.two_up" and two_up["level"] == "red"
+    assert size((1040, 4080))["code"] == "check.page_size.two_up"
+    # Cut work has an exact bleed: an oversize plate stays a wrong size.
+    assert size((1240, 2240), STICKER)["code"] == "check.page_size.wrong"
+    # Undersize is simply wrong.
+    assert size((900, 1800))["code"] == "check.page_size.wrong"
+    # The material's own allowance replaces the default.
+    tight = dict(BANNER, finishing_mm=50)
+    assert size((1240, 2240), tight)["code"] == "check.page_size.oversize"
+
+
 def test_a_page_at_one_to_ten_is_a_scaled_file_not_a_wrong_size():
     expected = _expected()                           # 1000 x 2000 netto, 20 mm bleed → 1040 x 2040
     finding = _one(rules.run({"page_mm": (104, 204)}, expected, BANNER), "page_size")

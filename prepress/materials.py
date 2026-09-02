@@ -22,9 +22,16 @@ ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$")
 
 # Every field an admin can set, with the type it must be and whether it may be omitted.
 NUMERIC_FIELDS = ("bleed_mm", "safe_mm", "min_dpi", "max_width_mm",
-                  "panel_max_long_mm", "panel_max_short_mm")
+                  "panel_max_long_mm", "panel_max_short_mm",
+                  # The three thresholds the check reads with a shop default when unset:
+                  #   finishing_mm  how much bigger than the finished size a file may be and still
+                  #                 be a hem, a tunnel or a pocket rather than a wrong size
+                  #   min_text_mm   the smallest legible lettering at print size
+                  #   split_over_mm the finished side length above which the job is split
+                  "finishing_mm", "min_text_mm", "split_over_mm")
 # Fields a material may leave unset. bleed and safe are the only ones a shop MUST decide.
-OPTIONAL_NUMERIC_FIELDS = ("max_width_mm", "min_dpi", "panel_max_long_mm", "panel_max_short_mm")
+OPTIONAL_NUMERIC_FIELDS = ("max_width_mm", "min_dpi", "panel_max_long_mm", "panel_max_short_mm",
+                           "finishing_mm", "min_text_mm", "split_over_mm")
 COLOUR_MODES = ("cmyk", "any")
 # Where the human-readable spec block sits on a template page.
 #   panel   a centred info panel INSIDE the artwork: scale, graphic area, safe area, each in its own

@@ -75,6 +75,18 @@ CHECK_MESSAGES = {
     "check.page_size.scaled.detail":
         "Strona ma {page_w}×{page_h} mm, gotowy produkt {expected_w}×{expected_h} mm. "
         "Rozdzielczość i wielkość tekstu ocenialiśmy w rozmiarze docelowym.",
+    "check.page_size.two_up": "To wygląda na dwie strony w jednym pliku: {page_w}×{page_h} mm",
+    "check.page_size.two_up.detail":
+        "Połowa pliku odpowiada rozmiarowi {expected_w}×{expected_h} mm, więc wygląda to na dwie "
+        "strony obok siebie. Prześlij każdą stronę jako osobny plik, inaczej wydruk pójdzie "
+        "w złym rozmiarze.",
+    "check.page_size.finishing": "Rozmiar z zapasem na wykończenie: {page_w}×{page_h} mm",
+    "check.page_size.finishing.detail":
+        "Format docelowy {expected_w}×{expected_h} mm. Różnica to zapewne tunel, rękaw albo zakładka.",
+    "check.page_size.oversize": "Plik znacznie większy niż podany rozmiar: {page_w}×{page_h} mm",
+    "check.page_size.oversize.detail":
+        "Podany rozmiar to {expected_w}×{expected_h} mm, a różnica przekracza {allowance} mm zapasu "
+        "na wykończenie. Sprawdź, czy to właściwy plik i czy rozmiar jest podany dobrze.",
     "check.page_size.wrong": "Rozmiar strony nie zgadza się z szablonem",
     "check.page_size.wrong.detail":
         "Oczekujemy {expected_w}×{expected_h} mm, plik ma {page_w}×{page_h} mm. "
