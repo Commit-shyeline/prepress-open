@@ -80,7 +80,9 @@ def layout_mm(template):
     run = (height if tall else width) * 0.8
     wordmark_size = min(width * 0.28 if tall else height * 0.35,
                         run / (stringWidth(WORDMARK, _bold(), 1.0) or 1.0))
-    credit_size = wordmark_size * 0.55            # readable from where a flag is seen
+    # Readable from where a flag is seen — but never longer than the run the wordmark fits in.
+    credit_size = min(wordmark_size * 0.55,
+                      run / (stringWidth(CREDIT, _bold(), 1.0) or 1.0))
     word_len = stringWidth(WORDMARK, _bold(), wordmark_size)
     credit_len = stringWidth(CREDIT, _bold(), credit_size)
     ascent, descent = 0.72, 0.21                      # Helvetica, as fractions of the size

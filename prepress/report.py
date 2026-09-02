@@ -21,7 +21,7 @@ from reportlab.pdfgen import canvas
 
 FONT_ENV = "PREPRESS_REPORT_FONT"
 BOLD_CANDIDATES = (
-    r"C:\Windows\Fontsrialbd.ttf",
+    r"C:\Windows\Fonts\arialbd.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
