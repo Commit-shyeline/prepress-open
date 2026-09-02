@@ -12,9 +12,15 @@
 body { margin: 0; background: var(--canvas); color: var(--ink);
        font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; }
 header b { font-size: 16px; }
-main { max-width: 1180px; margin: 0 auto; padding: 20px; display: grid; gap: 18px;
-       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
-@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+/* Three columns: the files, the picture with its buttons, the verdict. Read left to right, the
+   way a grafik reads a job: what came in, what it looks like, what is wrong with it. */
+main { max-width: 1600px; margin: 0 auto; padding: 20px; display: grid; gap: 18px;
+       grid-template-columns: minmax(260px, 1fr) minmax(0, 1.4fr) minmax(0, 1.4fr);
+       align-items: start; }
+@media (max-width: 1100px) { main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+                             #colFiles { grid-column: 1 / -1; } }
+@media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+#colPicture, #colReport { display: grid; gap: 18px; align-content: start; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
         padding: 16px; }
 h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
@@ -52,7 +58,6 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 .unrec { border-left: 3px solid #c77700; padding: 10px 14px; background: var(--accent-soft);
          border-radius: 0 8px 8px 0; font-size: 14px; }
 /* The model frame keeps the flag inspectable next to the verdict. */
-#results { display: grid; gap: 18px; align-content: start; }
 #modelFrame { width: 100%; height: min(78vh, 760px); border: 1px solid var(--line);
               border-radius: 12px; background: var(--canvas); }
 .msg { font-size: 13px; font-weight: 600; margin-top: 10px; }
@@ -96,7 +101,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 {% include "_brand_header.html" %}{% endwith %}
 
 <main>
-    <div>
+    <div id="colFiles">
         <div class="card">
             <h2>Twój plik</h2>
             <label class="dropzone" id="drop" for="file">
@@ -148,9 +153,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
         </div>
     </div>
 
-    <!-- The verdict lives in the RIGHT column: the file card on the left stays short, and the
-         3D frame (a flag only) sits above the report so the two are read together. -->
-    <div id="results">
+    <div id="colPicture">
     <div id="modelWrap" hidden>
         <iframe id="modelFrame" title="Podgląd 3D twojego pliku na fladze"></iframe>
         <p class="note" style="margin-top:6px">Czerwone i bursztynowe ramki na fladze to miejsca
@@ -161,16 +164,20 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
             <canvas id="overlay"></canvas>
             <p class="note" id="overlayLegend" style="margin:8px 0 0"></p>
         </div>
+        <div class="card" id="actionsCard" hidden>
+            <div id="actions" class="acts" style="margin-top:0">
+                <button type="button" class="pick" id="reportBtn">Pobierz raport PDF</button>
+                <a class="pick main" id="mailBtn" hidden>Wyślij pliki do nas</a>
+            </div>
+            <p class="note" id="actionsNote" style="margin:10px 0 0">Raport PDF załącz do wiadomości razem
+                z plikiem — pomoże nam szybciej przygotować zamówienie.</p>
+        </div>
+    </div>
+    <div id="colReport">
         <div class="card" id="reportCard" hidden>
             <h2>Wynik kontroli</h2>
             <p class="summary" id="summary"></p>
             <div id="checks"></div>
-            <div id="actions" class="acts" hidden>
-                <button type="button" class="pick" id="reportBtn">Pobierz raport PDF</button>
-                <a class="pick main" id="mailBtn" hidden>Wyślij pliki do nas</a>
-            </div>
-            <p class="note" id="actionsNote" hidden>Raport PDF załącz do wiadomości razem z plikiem —
-                pomoże nam szybciej przygotować zamówienie.</p>
         </div>
     </div>
 </main>
@@ -429,7 +436,7 @@ function renderTiles() {
 
 /* ── Painting the panel for the selected entry ─────────────────────────────── */
 function paint(entry) {
-    ['reportCard', 'modelWrap', 'pickTpl', 'freeSize', 'overlayCard', 'actions', 'actionsNote',
+    ['reportCard', 'modelWrap', 'pickTpl', 'freeSize', 'overlayCard', 'actionsCard',
      'pageNav'].forEach((id) => { el(id).hidden = true; });
     message('');
     if (!entry || !entry.view) return;
@@ -662,8 +669,7 @@ function subjectLine(front) {
    Capped, because a mailto: goes through the OS shell and a long one is silently dropped. */
 const MAILTO_MAX_CHARS = 1600;
 function offerActions() {
-    el('actions').hidden = false;
-    el('actionsNote').hidden = false;
+    el('actionsCard').hidden = false;
     const mail = el('mailBtn');
     if (!ORDER_EMAIL) { mail.hidden = true; return; }
     const done = ENTRIES.filter((e) => e.view && e.view.state === 'report');
