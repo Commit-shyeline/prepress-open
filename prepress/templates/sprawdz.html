@@ -52,7 +52,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 .unrec { border-left: 3px solid #c77700; padding: 10px 14px; background: var(--accent-soft);
          border-radius: 0 8px 8px 0; font-size: 14px; }
 /* The model frame keeps the flag inspectable next to the verdict. */
-#modelWrap { position: sticky; top: 12px; }
+#results { display: grid; gap: 18px; align-content: start; }
 #modelFrame { width: 100%; height: min(78vh, 760px); border: 1px solid var(--line);
               border-radius: 12px; background: var(--canvas); }
 .msg { font-size: 13px; font-weight: 600; margin-top: 10px; }
@@ -146,7 +146,17 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
                      align-items:center" hidden></div>
             </div>
         </div>
-        <div class="card" id="reportCard" hidden style="margin-top:18px">
+    </div>
+
+    <!-- The verdict lives in the RIGHT column: the file card on the left stays short, and the
+         3D frame (a flag only) sits above the report so the two are read together. -->
+    <div id="results">
+    <div id="modelWrap" hidden>
+        <iframe id="modelFrame" title="Podgląd 3D twojego pliku na fladze"></iframe>
+        <p class="note" style="margin-top:6px">Czerwone i bursztynowe ramki na fladze to miejsca
+            z wyniku kontroli To ta sama geometria, którą mierzy raport.</p>
+    </div>
+        <div class="card" id="reportCard" hidden>
             <h2>Wynik kontroli</h2>
             <p class="summary" id="summary"></p>
             <div id="checks"></div>
@@ -157,17 +167,11 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
             <p class="note" id="actionsNote" hidden>Raport PDF załącz do wiadomości razem z plikiem —
                 pomoże nam szybciej przygotować zamówienie.</p>
         </div>
-        <div class="card" id="overlayCard" hidden style="margin-top:18px">
+        <div class="card" id="overlayCard" hidden>
             <h2>Podgląd z ramkami</h2>
             <canvas id="overlay"></canvas>
             <p class="note" id="overlayLegend" style="margin:8px 0 0"></p>
         </div>
-    </div>
-
-    <div id="modelWrap" hidden>
-        <iframe id="modelFrame" title="Podgląd 3D twojego pliku na fladze"></iframe>
-        <p class="note" style="margin-top:6px">Czerwone i bursztynowe ramki na fladze to miejsca
-            z wyniku kontroli To ta sama geometria, którą mierzy raport.</p>
     </div>
 </main>
 
