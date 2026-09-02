@@ -25,8 +25,8 @@ from flask import (Flask, Response, jsonify, redirect, render_template, request,
 from urllib.parse import quote
 from werkzeug.utils import secure_filename
 
-from . import (from_template, generate, identify, item, lines, materials, measure, messages,
-               named_size, offset, outline, raster, rules, shape, structure)
+from . import (demo_artwork, from_template, generate, identify, item, lines, materials, measure,
+               messages, named_size, offset, outline, raster, rules, shape, structure)
 
 logger = logging.getLogger(__name__)
 
@@ -584,6 +584,31 @@ def api_demo_artwork():
     Cached in memory after the first render: it is the same bytes for every visitor, and a 3 m flag
     at texture resolution costs about a second of pypdfium2 that nobody should pay twice.
     """
+    # Asked for a TEMPLATE's demo: drawn inside that template's own safe outline, so the hero never
+    # wears detail in the keep-out ring of the page that offers to catch exactly that. Cached per
+    # template and per store version; falls through to the bundled file when the template is gone.
+    token = (request.args.get("token") or "").strip()
+    template = materials.get_template(token) if token else None
+    if template:
+        stamp = f"{token}:{os.path.getmtime(materials.DEFAULT_STORE) if os.path.exists(materials.DEFAULT_STORE) else 0}"
+        etag = f'"demo-{abs(hash(stamp))}"'
+        if request.headers.get("If-None-Match") == etag:
+            return Response(status=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+        if _demo_artwork_cache.get("stamp") != stamp or _demo_artwork_cache.get("token") != token:
+            try:
+                png = shape.render_preview(demo_artwork.build_pdf(template), 0, max_pixels=2800)
+            except (demo_artwork.DemoError, from_template.TemplateError) as error:
+                logger.info("demo artwork for %s not drawable: %s", token, error)
+                template = None                     # bare cloth beats a wrong picture
+            except Exception as error:              # noqa: BLE001 — a demo is decoration
+                logger.warning("demo artwork render failed for %s: %s", token, error)
+                template = None
+            else:
+                _demo_artwork_cache.clear()
+                _demo_artwork_cache.update({"stamp": stamp, "token": token, "png": png})
+        if template:
+            return Response(_demo_artwork_cache["png"], mimetype="image/png",
+                            headers={"Cache-Control": "no-cache", "ETag": etag})
     bundled = os.path.join(app.static_folder, "demo-artwork.pdf")
     source = os.environ.get(DEMO_ARTWORK_ENV, "").strip() or bundled
     if not os.path.exists(source):
@@ -598,7 +623,7 @@ def api_demo_artwork():
     etag = f'"demo-{int(stamp)}"'
     if request.headers.get("If-None-Match") == etag:
         return Response(status=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
-    if _demo_artwork_cache.get("stamp") != stamp:
+    if _demo_artwork_cache.get("stamp") != stamp or _demo_artwork_cache.get("token"):
         try:
             with open(source, "rb") as handle:
                 png = shape.render_preview(handle.read(), 0, max_pixels=2800)
@@ -606,7 +631,7 @@ def api_demo_artwork():
             logger.warning("demo artwork render failed for %s: %s", source, error)
             return jsonify({"error": "Nie udało się wyrenderować przykładowej grafiki."}), 500
         _demo_artwork_cache.clear()
-        _demo_artwork_cache.update({"stamp": stamp, "png": png})
+        _demo_artwork_cache.update({"stamp": stamp, "token": None, "png": png})
     return Response(_demo_artwork_cache["png"], mimetype="image/png",
                     headers={"Cache-Control": "no-cache", "ETag": etag})
 

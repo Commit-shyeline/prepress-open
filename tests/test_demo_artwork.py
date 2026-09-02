@@ -35,6 +35,39 @@ def test_nothing_in_the_demo_artwork_leaves_the_safe_area():
     assert demo.intrusions_mm() == []
 
 
+def _shop_templates():
+    """The templates the repository ships in materials.json — the hero wears one of them."""
+    from prepress import materials
+    return materials.load_templates(os.path.join(ROOT, "materials.json"))
+
+
+@pytest.mark.parametrize("template", _shop_templates(), ids=lambda t: t.get("name") or t.get("token"))
+def test_the_per_template_demo_stays_inside_that_templates_safe_area(template):
+    """The hero's flag is a FEATHER: its safe area is a curved outline, and a rectangle laid out in
+    page fractions cannot promise to stay inside it. The per-template demo is laid out inside the
+    largest box that fits the safe outline, and every element must land there."""
+    from prepress import demo_artwork, from_template, offset
+
+    try:
+        box = demo_artwork.safe_box_mm(template)
+    except (demo_artwork.DemoError, from_template.TemplateError):
+        pytest.skip("no drawable safe area on this template")
+    assert demo_artwork.intrusions_mm(template) == []
+    # And the box itself really is inside the safe outline — every corner of every element is.
+    drawing, _ = from_template.derive(template)
+    rings = [offset.flatten(e) for e in drawing["safe"]]
+    for name, (x0, y0, x1, y1) in demo_artwork.elements_mm(template).items():
+        for corner in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
+            assert offset.all_inside(rings, corner), (name, corner, box)
+    pdf = demo_artwork.build_pdf(template)
+    assert pdf.startswith(b"%PDF")
+    import pikepdf, io
+    with pikepdf.open(io.BytesIO(pdf)) as doc:
+        w, h = [float(v) for v in doc.pages[0].mediabox][2:]
+        assert abs(w * 25.4 / 72 - float(template["page_mm"][0])) < 0.05
+        assert abs(h * 25.4 / 72 - float(template["page_mm"][1])) < 0.05
+
+
 @pytest.mark.parametrize("name", ["wordmark", "credit", "sun"])
 def test_every_element_is_accounted_for(name):
     """A safe-area check that silently skips an element is worse than none — it reads as a pass."""

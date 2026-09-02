@@ -1569,7 +1569,8 @@ function build(data, cutFrom) {
             }
         }, undefined, () => { /* no artwork — bare cloth is the correct fallback */ });
     }
-    wearArtwork('{{ base }}/api/demo-artwork.jpg', 0);
+    // THIS template's demo — laid out inside its own safe outline (demo_artwork.py).
+    wearArtwork(`{{ base }}/api/demo-artwork.jpg?token=${encodeURIComponent(token)}`, 0);
 
     /* The check page hands over the CUSTOMER's raster and the findings' regions. Same origin only:
        the message carries a data URI and rectangles, and nothing else is trusted. Regions join the
