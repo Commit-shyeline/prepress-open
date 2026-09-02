@@ -606,15 +606,28 @@ function drawOverlay(front) {
         const artW = exp.brutto_mm[0] / s, artH = exp.brutto_mm[1] / s, bleed = exp.bleed_mm / s;
         const sides = exp.safe_sides_mm || {};
         const safe = (side) => (bleed + (sides[side] ?? exp.safe_mm) / s);
-        const box = (x, y, w, h, colour, width) => {
-            ctx.strokeStyle = colour; ctx.lineWidth = width; ctx.setLineDash([]);
+        // Every line gets a white halo first: a hairline in one colour vanishes on artwork of a
+        // similar colour (a green safe box on a blue banner was invisible, 2026-09-02).
+        const box = (x, y, w, h, colour, width, dash = []) => {
+            ctx.setLineDash([]);
+            ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = width * 2.4;
+            ctx.strokeRect(x * px, y * px, w * px, h * px);
+            ctx.setLineDash(dash.map((d) => d * width));
+            ctx.strokeStyle = colour; ctx.lineWidth = width;
             ctx.strokeRect(x * px, y * px, w * px, h * px);
         };
-        const hair = Math.max(1.5, canvas.width / 600);
-        box(0, 0, artW, artH, 'rgba(90,90,96,.9)', hair);                          // brutto
-        box(bleed, bleed, artW - 2 * bleed, artH - 2 * bleed, '#d91a72', hair);       // netto
-        box(safe('left'), safe('top'), artW - safe('left') - safe('right'),
-            artH - safe('top') - safe('bottom'), '#2e9e52', hair);                    // safe
+        const hair = Math.max(2, canvas.width / 350);
+        // The keep-out ring — everything outside the safe box — is shaded, so the safe area reads as
+        // a shape and not as one more thin line: "keep your text inside the clear part".
+        const sl = safe('left'), st = safe('top'), sr = safe('right'), sb = safe('bottom');
+        ctx.fillStyle = 'rgba(255,255,255,.28)';
+        ctx.fillRect(0, 0, artW * px, st * px);
+        ctx.fillRect(0, (artH - sb) * px, artW * px, sb * px);
+        ctx.fillRect(0, st * px, sl * px, (artH - st - sb) * px);
+        ctx.fillRect((artW - sr) * px, st * px, sr * px, (artH - st - sb) * px);
+        box(0, 0, artW, artH, 'rgba(60,60,66,.95)', hair);                          // brutto
+        box(bleed, bleed, artW - 2 * bleed, artH - 2 * bleed, '#d91a72', hair, [4, 3]); // netto
+        box(sl, st, artW - sl - sr, artH - st - sb, '#1f9d4d', hair);                // safe
         for (const check of front.checks || []) {
             const tone = LEVEL_RGBA[check.level];
             if (!tone) continue;
@@ -632,8 +645,8 @@ function drawOverlay(front) {
 
 function overlayLegend(front) {
     const marked = (front.checks || []).some((c) => (c.regions || []).length && LEVEL_RGBA[c.level]);
-    return 'Szara ramka: spad (brutto). Różowa: linia cięcia. Zielona: obszar bezpieczny — napisy '
-        + 'i logo trzymaj wewnątrz niej.' + (marked
+    return 'Szara ramka: spad (brutto). Różowa przerywana: linia cięcia. Zielona: obszar bezpieczny — '
+        + 'rozjaśniony pas wokół niego to strefa, w której nie powinno być napisów ani logo.' + (marked
             ? ' Czerwone i bursztynowe pola: miejsca z wyniku kontroli.' : '');
 }
 
