@@ -34,7 +34,7 @@ full-bleed background is SUPPOSED to fill the ring, so any-ink flagged every cor
 about type and logos, so what is measured is DETAIL — local contrast — because flat colour has almost
 none and lettering has a lot.
 """
-from . import raster, structure
+from . import die, raster, structure
 
 # Render fine enough that a millimetre is two pixels, which is well under any tolerance we judge on,
 # and coarse enough that a 5 m banner stays a sane raster.
@@ -165,6 +165,14 @@ def measure(pdf_bytes, expected, page_index=0):
         {"rect_mm": p.get("rect_mm"), "dpi": p["dpi"], "placed_mm": list(p["placed_mm"])}
         for p in structure.significant_placements(placements) if p.get("rect_mm")]
     facts["text_min_height_mm"] = _text_min_height_mm(data, page_index, scale)
+    # The die, when the file draws one in a cut colorant: its geometry, and the share of its
+    # perimeter with bare paper a bleed's width outside — sampled on the same render.
+    facts["die"] = die.geometry(data, page_index)
+    if facts["die"]:
+        facts["die"]["bare_perimeter"] = die.bare_perimeter(
+            array, px_per_mm, facts["die"]["polylines"],
+            max(expected["bleed_mm"] / scale, 1.0), PAPER_MIN_CHANNEL)
+        del facts["die"]["polylines"]                # geometry for the rules, not for the response
     return facts
 
 

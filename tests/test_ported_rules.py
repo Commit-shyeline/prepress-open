@@ -370,7 +370,10 @@ def test_every_rule_the_panel_offers_is_a_rule_that_runs():
              "blank_edges_mm": (9, 0, 0, 0), "safe_intrusion_mm": 4.0, "min_dpi": 20,
              "guides_present": True, "declared_boxes_mm": {"trimbox": (980, 1980)},
              "text_min_height_mm": 4.0, "named_size_mm": [800, 2000], "named_unit_stated": True,
-             "raster_alpha": True}
+             "raster_alpha": True,
+             "die": {"colorant": "Cut", "origin_mm": (10, 10), "size_mm": (50, 50),
+                     "page_mm": (70, 70), "length_mm": 200, "contours": 1, "closed": True,
+                     "filled": True, "bare_perimeter": 0.5}}
     produced = {f["id"] for f in rules.run(facts, _expected(), STICKER)}
     # The split rule only has something to say about a job over the threshold on both sides.
     huge = identify.stamped_geometry(generate.stamp_payload(item.resolve(BANNER, 6000, 7000)))
@@ -496,6 +499,56 @@ def test_a_raster_is_judged_by_its_pixels_at_the_declared_size():
     findings = rules.run(facts, expected, BANNER)
     assert _one(findings, "raster_flat")["code"] == "check.raster_flat.layers"
     assert _one(findings, "colour_mode")["code"] == "check.colour_mode.rgb"
+
+
+def _sticker(artwork_inset_pt, die_painter="stroke"):
+    """A 200 x 200 pt page: a filled artwork square, and a die rectangle 20 pt inside the page
+    drawn in a `Cut` separation. `artwork_inset_pt` says how far the artwork stops from the page
+    edge: 0 bleeds past the die, 20 ends exactly ON the knife."""
+    def draw(pdf):
+        pdf.setFillColorRGB(0.1, 0.2, 0.8)
+        pdf.rect(artwork_inset_pt, artwork_inset_pt, 200 - 2 * artwork_inset_pt,
+                 200 - 2 * artwork_inset_pt, stroke=0, fill=1)
+        cut = CMYKColorSep(0, 1, 0, 0, spotName="Cut")
+        pdf.setStrokeColor(cut)
+        pdf.setFillColor(cut)
+        pdf.setLineWidth(0.5)
+        if die_painter == "stroke":
+            pdf.rect(20, 20, 160, 160, stroke=1, fill=0)
+        else:
+            pdf.rect(20, 20, 160, 160, stroke=0, fill=1)
+    return _pdf(draw)
+
+
+def test_the_die_is_measured_and_the_bleed_outside_it_sampled():
+    from prepress import die, measure
+
+    found = die.geometry(_sticker(0))
+    assert found["colorant"] == "Cut" and found["contours"] == 1 and found["closed"]
+    assert not found["filled"]
+    assert [round(v) for v in found["size_mm"]] == [56, 56]              # 160 pt
+    assert [round(v) for v in found["origin_mm"]] == [7, 7]              # 20 pt from top-left
+    assert round(found["length_mm"]) == 226                             # 4 x 160 pt
+
+    material = dict(STICKER, bleed_mm=3, safe_mm=3)
+    expected = identify.stamped_geometry(generate.stamp_payload(item.resolve(material, 50, 50)))
+    bleeding = measure.measure(_sticker(0), expected)
+    assert bleeding["die"]["bare_perimeter"] <= 0.06
+    on_the_knife = measure.measure(_sticker(20), expected)
+    assert on_the_knife["die"]["bare_perimeter"] > 0.5
+
+    page = {"page_mm": (70.56, 70.56)}
+    ok = rules.run({**page, **bleeding}, expected, material)
+    assert _one(ok, "cut_margins")["level"] == "green"
+    assert _one(ok, "cut_geometry")["code"] == "check.cut_geometry.ok"
+    bare = rules.run({**page, **on_the_knife}, expected, material)
+    assert _one(bare, "cut_margins")["code"] == "check.cut_margins.bare"
+    filled = rules.run({**page, **measure.measure(_sticker(0, "fill"), expected)}, expected, material)
+    assert _one(filled, "cut_geometry")["code"] == "check.cut_geometry.filled"
+    # No die drawn: neither rule says anything.
+    plain = rules.run({**page, **measure.measure(_pdf(lambda p: p.rect(5, 5, 50, 50, fill=1)), expected)},
+                      expected, material)
+    assert _one(plain, "cut_geometry") is None and _one(plain, "cut_margins") is None
 
 
 def test_a_page_at_one_to_ten_is_a_scaled_file_not_a_wrong_size():

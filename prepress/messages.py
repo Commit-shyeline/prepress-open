@@ -156,6 +156,32 @@ CHECK_MESSAGES = {
         "Obrys cięcia podaj jako kolor dodatkowy nazwany „Cut”, w krzywych, tylko obrys bez "
         "wypełnienia. Jeśli wykrojnik jest w czerni albo w Pantone, sprawdzimy go ręcznie.",
 
+    "check.cut_geometry.ok": "Wykrojnik „{cut}”: {cut_w}×{cut_h} mm",
+    "check.cut_geometry.ok.detail":
+        "Długość cięcia: {length}, kontury: {contours}. Zmierzone z krzywych w tym kolorze dodatkowym.",
+    "check.cut_geometry.filled": "Wykrojnik „{cut}” jest wypełniony, a nie obrysowany",
+    "check.cut_geometry.filled.detail":
+        "Linia cięcia ma być samym obrysem bez wypełnienia — wypełnienie w kolorze „{cut}” "
+        "wydrukuje się albo zakryje grafikę. Zostaw tylko kontur.",
+    "check.cut_geometry.open": "Wykrojnik „{cut}” nie jest zamknięty",
+    "check.cut_geometry.open.detail":
+        "Ploter tnie po zamkniętym kontrze. Połącz końce ścieżki cięcia.",
+
+    "check.cut_margins.ok": "Grafika dochodzi do linii cięcia",
+    "check.cut_margins.ok.detail":
+        "Tło wychodzi poza wykrojnik „{cut}” na całym obwodzie. Napisy i logo trzymaj wewnątrz "
+        "obszaru bezpiecznego.",
+    "check.cut_margins.bare": "Grafika nie dochodzi do linii cięcia ({share} obwodu)",
+    "check.cut_margins.bare.detail":
+        "Tuż za linią „{cut}” nie ma już grafiki na około {share} obwodu. Nóż nigdy nie trafia "
+        "w linię co do milimetra, więc wyjdzie tam biały rąbek — rozciągnij tło co najmniej "
+        "{bleed} mm POZA linię cięcia. Jeśli grafika jest tam po prostu biała, zignoruj tę uwagę.",
+    "check.cut_margins.off_sheet": "Wykrojnik wychodzi poza arkusz ({sides})",
+    "check.cut_margins.off_sheet.detail":
+        "Linia cięcia „{cut}” wychodzi poza plik. Nóż nie ma po czym jechać — powiększ arkusz "
+        "albo przesuń wykrojnik.",
+    "check.cut_margins.unmeasured": "Nie zmierzyliśmy grafiki wokół wykrojnika „{cut}”",
+
     "check.raster_flat.ok": "Plik spłaszczony",
     "check.raster_flat.layers": "Plik nie jest spłaszczony ({mode})",
     "check.raster_flat.layers.detail":

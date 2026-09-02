@@ -131,13 +131,17 @@ def _subpaths(pdf_bytes, page_index):
         return []
 
 
-def _walk(container, resources, ctm, depth, walking, collected, group):
+def _walk(container, resources, ctm, depth, walking, collected, group, colour=(None, None)):
     """One content stream: track the CTM, build paths, and record them when they are painted.
 
     `group` is a one-element counter shared down the whole walk, so every subpath knows WHICH painting
     operation drew it. That matters twice: an outline with a hole is several subpaths of one operation
     and must be offered as one candidate, and comparing against a reader that unions per operation is
     otherwise apples to oranges.
+
+    `colour` is (stroke colorant, fill colorant): the NAME of the Separation/DeviceN a path is painted
+    in, or None for a process colour. It is part of the graphics state (saved by q, restored by Q,
+    inherited by a form) and is what lets `die.py` pick the paths drawn in `Cut` out of the artwork.
     """
     import pikepdf
 
@@ -148,6 +152,7 @@ def _walk(container, resources, ctm, depth, walking, collected, group):
 
     stack = []
     current = ctm
+    stroke_colorant, fill_colorant = colour
     builder = _PathBuilder()
     clip_pending = False
 
@@ -155,9 +160,17 @@ def _walk(container, resources, ctm, depth, walking, collected, group):
         name = str(operator)
         try:
             if name == "q":
-                stack.append(current)
+                stack.append((current, stroke_colorant, fill_colorant))
             elif name == "Q":
-                current = stack.pop() if stack else ctm
+                current, stroke_colorant, fill_colorant = stack.pop() if stack else (ctm, *colour)
+            elif name == "CS" and operands:
+                stroke_colorant = _colorant_of(resources, operands[0])
+            elif name == "cs" and operands:
+                fill_colorant = _colorant_of(resources, operands[0])
+            elif name in ("G", "RG", "K"):
+                stroke_colorant = None                # a process colour: no longer a separation
+            elif name in ("g", "rg", "k"):
+                fill_colorant = None
             elif name == "cm" and len(operands) == 6:
                 current = pikepdf.Matrix(*[float(v) for v in operands]) @ current
             elif name == "m" and len(operands) == 2:
@@ -185,12 +198,16 @@ def _walk(container, resources, ctm, depth, walking, collected, group):
                 painted = _painted_as(name, clip_pending)
                 if painted:
                     group[0] += 1
-                    collected.extend(builder.finish(painted, group[0],
-                                                    close=name in ("s", "b", "b*")))
+                    for subpath in builder.finish(painted, group[0],
+                                                  close=name in ("s", "b", "b*")):
+                        subpath["stroke_colorant"] = stroke_colorant if "stroke" in painted or painted == "both" else None
+                        subpath["fill_colorant"] = fill_colorant if painted in ("fill", "both") else None
+                        collected.append(subpath)
                 builder = _PathBuilder()
                 clip_pending = False
             elif name == "Do" and operands and depth < MAX_FORM_DEPTH:
-                _enter_form(resources, operands[0], current, depth, walking, collected, group)
+                _enter_form(resources, operands[0], current, depth, walking, collected, group,
+                            (stroke_colorant, fill_colorant))
         except Exception:                           # noqa: BLE001 — one bad operator is not a page
             continue
 
@@ -208,7 +225,28 @@ def _painted_as(operator, clip_pending):
     return "stroke" if strokes else "fill"
 
 
-def _enter_form(resources, name, ctm, depth, walking, collected, group):
+def _colorant_of(resources, name):
+    """The colorant a named colour space resource stands for, or None for anything process.
+
+    `/Separation /Cut …` → "Cut"; `/DeviceN [/Cut /Regmark] …` → "Cut, Regmark". Deliberately the
+    NAME only: the alternate space and tint transform say how to display it, not what it is.
+    """
+    try:
+        spaces = resources.get("/ColorSpace") if resources is not None else None
+        space = spaces.get(str(name)) if spaces is not None else None
+        if space is None or not hasattr(space, "__len__") or len(space) < 2:
+            return None
+        family = str(space[0])
+        if family == "/Separation":
+            return str(space[1]).lstrip("/")
+        if family == "/DeviceN":
+            return ", ".join(str(n).lstrip("/") for n in space[1])
+    except Exception:                               # noqa: BLE001 — an odd resource is not a colorant
+        return None
+    return None
+
+
+def _enter_form(resources, name, ctm, depth, walking, collected, group, colour=(None, None)):
     import pikepdf
 
     form = None
@@ -232,7 +270,7 @@ def _enter_form(resources, name, ctm, depth, walking, collected, group):
     walking.add(key)
     try:
         _walk(form, form.get("/Resources") or resources, inner, depth + 1, walking, collected,
-              group)
+              group, colour)
     finally:
         walking.discard(key)
 

@@ -332,6 +332,61 @@ def check_cut_path(facts, expected=None, material=None):
     return _finding("cut_path", "amber", "missing")
 
 
+def check_cut_geometry(facts, expected=None, material=None):
+    """What the die line IS: finished size, knife travel, contours — and two ways it can be wrong.
+
+    Stated as information because the cutting length is the number nobody reads off a file by eye.
+    A FILLED die is wrong (the knife follows an outline, and a fill prints), and an OPEN one is wrong
+    (a plotter cannot close a contour the file left open).
+    """
+    found = facts.get("die")
+    if not found:
+        return None
+    values = {"cut": found["colorant"], "cut_w": _mm(found["size_mm"][0]),
+              "cut_h": _mm(found["size_mm"][1]), "length": _length(found["length_mm"]),
+              "contours": found["contours"]}
+    if found.get("filled"):
+        return _finding("cut_geometry", "amber", "filled", **values)
+    if not found.get("closed", True):
+        return _finding("cut_geometry", "amber", "open", **values)
+    return _finding("cut_geometry", "info", "ok", **values)
+
+
+def check_cut_margins(facts, expected, material=None):
+    """Artwork must keep going a bleed's width OUTSIDE the die, and the die must stay on the sheet.
+
+    Measured against the DIE, not the page — that is the point of finding it. The bounding box says
+    nothing about a shaped die, so the outline itself was sampled (`die.bare_perimeter`).
+    """
+    found = facts.get("die")
+    if not found or not facts.get("page_mm"):
+        return None
+    page_w, page_h = found.get("page_mm") or facts["page_mm"]
+    ox, oy = found["origin_mm"]
+    w, h = found["size_mm"]
+    bleed = float((material or {}).get("bleed_mm") or expected.get("bleed_mm") or 0) or 3.0
+    outside = {"left": ox, "top": oy, "right": page_w - ox - w, "bottom": page_h - oy - h}
+    off_sheet = [side for side, gap in outside.items() if gap < -0.5]
+    values = {"cut": found["colorant"], "bleed": _mm(bleed)}
+    if off_sheet:
+        return _finding("cut_margins", "red", "off_sheet", sides=", ".join(off_sheet), **values)
+    bare = found.get("bare_perimeter")
+    if bare is None:
+        return _finding("cut_margins", "info", "unmeasured", **values)
+    if bare > BARE_PERIMETER_TOLERANCE:
+        return _finding("cut_margins", "amber", "bare", share=f"{bare:.0%}", **values)
+    return _finding("cut_margins", "green", "ok", **values)
+
+
+# How much of the die's perimeter may sample as bare paper before it is worth saying so: the
+# outline is sampled on a pixel grid against a stroke of real width, so a few per cent land light.
+BARE_PERIMETER_TOLERANCE = 0.06
+
+
+def _length(length_mm):
+    return f"{length_mm / 1000:.2f} m" if length_mm >= 1000 else f"{length_mm:.0f} mm"
+
+
 def check_raster_flattened(facts, expected=None, material=None):
     """A raster must arrive flattened: an alpha channel or extra samples mean layers or masks
     survived the export, and the RIP will decide for the customer how to flatten them."""
@@ -442,6 +497,7 @@ def check_filename(facts, expected=None, material=None):
 RULES = (check_page_size, check_declared_trim, check_template_guides_removed,
          check_artwork_reaches_bleed, check_safe_area, check_resolution,
          check_office_origin, check_colour_mode, check_spot_inks, check_cut_path,
+         check_cut_geometry, check_cut_margins,
          check_raster_flattened, check_fonts_converted, check_overprint, check_page_count,
          check_text_height, check_split_required, check_named_size, check_filename)
 
@@ -463,6 +519,8 @@ RULE_LABELS = {
     "colour_mode": "check.colour_mode.rgb",
     "spot_inks": "check.spot_inks.found",
     "cut_path": "check.cut_path.missing",
+    "cut_geometry": "check.cut_geometry.filled",
+    "cut_margins": "check.cut_margins.bare",
     "raster_flat": "check.raster_flat.layers",
     "fonts": "check.fonts.present",
     "overprint": "check.overprint.on",
