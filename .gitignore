@@ -43,3 +43,6 @@ desktop.ini
 
 # A shop own rules are its data. Start from materials.example.json.
 materials.json
+
+# Business notes (customer intake, per-customer notes) are not part of the open-source project.
+/docs/
