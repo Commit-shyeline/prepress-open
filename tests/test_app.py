@@ -733,3 +733,11 @@ def test_a_session_cookie_identifies_a_navigation_like_a_bearer_does(client, mon
     with caplog.at_level(logging.INFO, logger="prepress.app"):
         client.get("/health")
     assert any(" 5261234567 GET /health " in r.getMessage() for r in caplog.records)
+
+
+def test_the_admin_page_hides_its_token_field_behind_a_proxy_that_holds_it(client, monkeypatch):
+    monkeypatch.setenv("PREPRESS_ADMIN_TOKEN", "t")
+    plain = client.get("/admin").get_data(as_text=True)
+    assert "const PROXIED = false" in plain and 'aria-label="Token panelu">' in plain
+    proxied = client.get("/admin", headers={"X-Admin-Token": "t"}).get_data(as_text=True)
+    assert "const PROXIED = true" in proxied and 'aria-label="Token panelu" hidden>' in proxied

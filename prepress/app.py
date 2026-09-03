@@ -1060,9 +1060,15 @@ def api_report():
 
 @app.route("/admin")
 def admin_page():
-    """The page loads without a token; every ACTION on it needs one."""
+    """The page loads without a token; every ACTION on it needs one.
+
+    `proxied`: a proxy in front already holds the token and stamps it on every request (the ERP
+    dev console mounts this panel under its own login), so the page hides its token field and
+    sends a placeholder the proxy overwrites.
+    """
     return render_template("admin.html", configured=bool(admin_token()),
-                           token_env=ADMIN_TOKEN_ENV)
+                           token_env=ADMIN_TOKEN_ENV,
+                           proxied=bool(request.headers.get("X-Admin-Token")))
 
 
 @app.route("/api/admin/materials", methods=["POST"])

@@ -164,8 +164,8 @@ code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; 
         <a href="#s-msg">Komunikaty</a>
         <span class="spacer"></span>
         <input id="token" type="password" placeholder="token panelu" autocomplete="off"
-               aria-label="Token panelu">
-        <label class="remember" for="tokenRemember">
+               aria-label="Token panelu"{% if proxied %} hidden{% endif %}>
+        <label class="remember" for="tokenRemember"{% if proxied %} hidden{% endif %}>
             <input id="tokenRemember" type="checkbox"> zapamiętaj
         </label>
     </nav>
@@ -394,12 +394,17 @@ const LEVEL_LABELS = { '': 'domyślnie — jak ocenia reguła', off: 'wyłączon
 // explicit choice rather than taken silently, because a panel with one admin who has now lost the
 // token twice is a usability problem, not a security win.
 const TOKEN_KEY = 'prepress_admin_token';
+// Behind a trusting proxy the real token is stamped on the way through; the page only has to send
+// SOMETHING so its own "podaj token" guards pass. Nothing is stored in that mode.
+const PROXIED = {{ proxied|tojson }};
 
 function readToken() {
+    if (PROXIED) return 'proxied';
     return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || '';
 }
 
 function storeToken(value, remember) {
+    if (PROXIED) return;
     sessionStorage.setItem(TOKEN_KEY, value);
     if (remember) localStorage.setItem(TOKEN_KEY, value);
     else localStorage.removeItem(TOKEN_KEY);
