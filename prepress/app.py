@@ -1384,17 +1384,34 @@ def api_templates():
     } for t in materials.load_templates()]})
 
 
+# Deriving a template's safe outline costs about a second, and the landing page asks for the whole
+# list twice — uncached that was 26 s of spinner (Shyeline, 2026-09-03). Keyed on the store's
+# modification time, so an admin's edit invalidates every entry at once.
+_safe_size_cache = {"stamp": None, "sizes": {}}
+
+
 def _safe_size_mm(template):
     """(w, h) of the safe outline's bounding box, or None when the template cannot be drawn."""
     try:
+        stamp = os.path.getmtime(materials.DEFAULT_STORE)
+    except OSError:
+        stamp = None
+    if _safe_size_cache["stamp"] != stamp:
+        _safe_size_cache.update(stamp=stamp, sizes={})
+    token = template.get("token")
+    if token in _safe_size_cache["sizes"]:
+        return _safe_size_cache["sizes"][token]
+    size = None
+    try:
         drawing, _notes = from_template.derive(template)
         points = [p for entry in drawing.get("safe") or [] for p in offset.flatten(entry)]
+        if len(points) >= 3:
+            xs, ys = [p[0] for p in points], [p[1] for p in points]
+            size = [round(max(xs) - min(xs), 1), round(max(ys) - min(ys), 1)]
     except Exception:                                # noqa: BLE001 — a list entry, not a verdict
-        return None
-    if len(points) < 3:
-        return None
-    xs, ys = [p[0] for p in points], [p[1] for p in points]
-    return [round(max(xs) - min(xs), 1), round(max(ys) - min(ys), 1)]
+        size = None
+    _safe_size_cache["sizes"][token] = size
+    return size
 
 
 @app.route("/api/admin/rules", methods=["GET"])
