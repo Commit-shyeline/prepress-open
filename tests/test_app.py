@@ -719,3 +719,17 @@ def test_access_log_names_the_caller_and_the_request(client, caplog):
         client.get("/health", headers={"X-Forwarded-For": "203.0.113.9, 10.0.0.1"})
     lines = [r.getMessage() for r in caplog.records if " GET /health " in r.getMessage()]
     assert lines and lines[0].startswith("203.0.113.9 ") and " 200 " in lines[0]
+
+
+def test_a_session_cookie_identifies_a_navigation_like_a_bearer_does(client, monkeypatch, caplog):
+    """Links carry no Authorization header; the bar mirrors the token into a cookie of the same
+    name, and the server reads either — so a template download is logged under the NIP."""
+    import logging
+    import jwt
+    monkeypatch.setenv("PREPRESS_SESSION_SECRET", "s3cret")
+    monkeypatch.setenv("PREPRESS_SESSION_STORAGE_KEY", "status_token")
+    token = jwt.encode({"nip": "5261234567"}, "s3cret", algorithm="HS256")
+    client.set_cookie("status_token", token)
+    with caplog.at_level(logging.INFO, logger="prepress.app"):
+        client.get("/health")
+    assert any(" 5261234567 GET /health " in r.getMessage() for r in caplog.records)

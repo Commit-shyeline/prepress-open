@@ -180,8 +180,19 @@ body.hero-page header.brand {
             return payload.name || payload.nip || payload.sub || '';
         } catch (e) { return ''; }
     }
+    /* The token lives in sessionStorage, which a plain link click (a template PDF, the 3D page)
+       cannot carry. Mirrored into a same-origin cookie under the same name, so the server can tell
+       who downloaded what; cleared on logout. Secure + SameSite=Lax: never sent cross-site. */
+    function mirrorCookie() {
+        const jwt = token();
+        const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+        document.cookie = jwt
+            ? `${TOKEN_KEY}=${jwt}; Path=/; SameSite=Lax${secure}`
+            : `${TOKEN_KEY}=; Path=/; Max-Age=0; SameSite=Lax${secure}`;
+    }
     function paint() {
         const logged = GATED && !!token();
+        if (GATED) mirrorCookie();
         $('loginBtn').hidden = !(GATED && !logged && LOGIN_URL);
         $('loginMenu').hidden = $('loginBtn').hidden;
         $('logoutBtn').hidden = !logged;
@@ -199,6 +210,7 @@ body.hero-page header.brand {
     }
     function logout() {
         try { sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem('status_nip'); } catch (e) { /* fine */ }
+        mirrorCookie();
         window.location.reload();
     }
     /* The guide: driver.js, fetched on first use so no page pays for it until someone asks. Steps

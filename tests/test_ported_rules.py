@@ -378,6 +378,10 @@ def test_every_rule_the_panel_offers_is_a_rule_that_runs():
     # The split rule only has something to say about a job over the threshold on both sides.
     huge = identify.stamped_geometry(generate.stamp_payload(item.resolve(BANNER, 6000, 7000)))
     produced |= {f["id"] for f in rules.run(facts, huge, STICKER)}
+    # With a die on cut work the page-edge bleed and safe-area rules step aside for cut_margins;
+    # without one they speak.
+    produced |= {f["id"] for f in rules.run({k: v for k, v in facts.items() if k != "die"},
+                                            _expected(), STICKER)}
     assert set(rules.RULE_IDS) - produced == set(), set(rules.RULE_IDS) - produced
 
 
@@ -708,3 +712,56 @@ def test_every_offered_severity_is_actually_accepted(level, tmp_path):
     store = str(tmp_path / "materials.json")
     materials.save_all([BANNER], store)
     assert materials.save_rule_levels({"fonts": level}, store) == {"fonts": level}
+
+
+def _arrow_sticker(size_pt=200):
+    """The KTW arrow file's shape, authored: a die rectangle stroked in Cut over a WHITE fill, the
+    same rectangle stroked once more, and an open-ended outline whose ends meet. One drawing tool
+    exports every die like this (2026-09-03)."""
+    def draw(pdf):
+        cut = CMYKColorSep(0, 1, 0, 0, spotName="Cut")
+        pdf.setStrokeColor(cut)
+        pdf.setFillColorCMYK(0, 0, 0, 0)
+        pdf.setLineWidth(0.5)
+        pdf.rect(2, 2, size_pt - 4, size_pt - 4, stroke=1, fill=1)
+        pdf.rect(2, 2, size_pt - 4, size_pt - 4, stroke=1, fill=0)
+        path = pdf.beginPath()
+        path.moveTo(50, 50)
+        path.lineTo(150, 50)
+        path.lineTo(100, 150)
+        path.lineTo(50, 50)                          # back to the start, never `close()`d
+        pdf.drawPath(path, stroke=1, fill=0)
+    return _pdf(draw)
+
+
+def test_a_white_fill_under_the_die_is_not_a_filled_die_and_twins_count_once():
+    from prepress import die
+
+    found = die.geometry(_arrow_sticker())
+    assert not found["filled"], "the fill is white, only the stroke is in the knife colour"
+    assert found["closed"], "a path that returns to its start is closed"
+    assert found["contours"] == 2, "the twin rectangle is the same knife path"
+    assert round(found["length_mm"]) == round((4 * 196 + 100 + 2 * (50 ** 2 + 100 ** 2) ** 0.5) / 72 * 25.4)
+
+
+def test_cut_work_accepts_a_page_between_finished_and_finished_plus_bleed():
+    material = dict(STICKER, bleed_mm=3, safe_mm=3)
+    expected = identify.stamped_geometry(generate.stamp_payload(item.resolve(material, 50, 50)))
+    die = {"colorant": "Cut", "origin_mm": (0.5, 0.5), "size_mm": (50, 50), "page_mm": (51, 51),
+           "length_mm": 200, "contours": 1, "closed": True, "filled": False, "bare_perimeter": 0.0}
+    facts = {"page_mm": (50.9, 50.9), "blank_edges_mm": [25.5, 25.5, 25.5, 25.5],
+             "safe_intrusion_mm": 6.0, "die": die}
+    findings = rules.run(facts, expected, material)
+    assert _one(findings, "page_size")["code"] == "check.page_size.no_bleed"      # 0.9 mm growth
+    assert _one(findings, "bleed_coverage") is None, "the knife, not the page edge, is judged"
+    assert _one(findings, "safe_area") is None, "the die line sits in the ring by definition"
+    # 56 x 56 is the template's own brutto and reads "ok"; a plate grown by 2 mm a side is the
+    # other correct way to add bleed, and gets its own sentence.
+    with_bleed = rules.run({**facts, "page_mm": (54, 54)}, expected, material)
+    assert _one(with_bleed, "page_size")["code"] == "check.page_size.with_bleed"
+    assert _one(with_bleed, "page_size")["level"] == "green"
+    wrong = rules.run({**facts, "page_mm": (70, 70)}, expected, material)
+    assert _one(wrong, "page_size")["code"] == "check.page_size.wrong"
+    # Without a die the page-edge rules speak again.
+    no_die = rules.run({k: v for k, v in facts.items() if k != "die"}, expected, material)
+    assert _one(no_die, "bleed_coverage") is not None and _one(no_die, "safe_area") is not None

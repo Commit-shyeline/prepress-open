@@ -132,7 +132,7 @@ def _inject_base_path():
     """`base` in every template, so a page's own links survive being mounted under a prefix."""
     return {"base": base_path(), "asset": asset,
             "login_url": _login_url(), "gated": _gated(),
-            "session_key": os.environ.get(SESSION_KEY_ENV) or DEFAULT_SESSION_KEY,
+            "session_key": _session_key(),
             "order_email": (os.environ.get(ORDER_EMAIL_ENV) or "").strip(),
             "upload_limit_mb": _upload_limit_mb(),
             "path_hint": _path_hint(),
@@ -143,6 +143,10 @@ def _inject_base_path():
 
 def _session_secret():
     return (os.environ.get(SESSION_SECRET_ENV) or "").strip()
+
+
+def _session_key():
+    return os.environ.get(SESSION_KEY_ENV) or DEFAULT_SESSION_KEY
 
 
 def _login_url():
@@ -228,9 +232,13 @@ def session_identity():
     if not secret:
         return None
     header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        return None
-    token = header[len("Bearer "):].strip()
+    token = header[len("Bearer "):].strip() if header.startswith("Bearer ") else ""
+    # A browser NAVIGATION (a template download, the 3D page, the generator) carries no
+    # Authorization header and never can; the bar mirrors the session token into a same-origin
+    # cookie of the same name so those requests are somebody too — the access log read every
+    # download as "anonymous" (Shyeline, 2026-09-03). Same token, same verification.
+    if not token:
+        token = (request.cookies.get(_session_key()) or "").strip()
     if not token:
         return None
     try:
@@ -994,6 +1002,8 @@ def _judge(data, filename, form, token=None):
                     # so the page can offer the pick. Sent whatever the material is.
                     "separations": facts.get("spot_names") or [],
                     "cut_spot": cut_spot or ((facts.get("die") or {}).get("colorant") or None),
+                    # The knife as drawn (outline_mm, page mm, y down) for the overlay.
+                    "die": facts.get("die"),
                     "preview_png": preview_png,
                     "measured": {k: facts.get(k) for k in
                                  ("blank_edges_mm", "safe_intrusion_mm", "min_dpi",

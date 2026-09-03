@@ -126,6 +126,17 @@ def check_page_size(facts, expected, material=None):
     netto = tuple(v / expected["scale"] for v in expected["netto_mm"])
     if expected["bleed_mm"] > 0 and (close(actual, netto) or close((actual_h, actual_w), netto)):
         return _finding("page_size", "amber", "no_bleed", bleed=_mm(expected["bleed_mm"]), **values)
+    # Cut work: "3 mm spadu" is added per edge by some and per dimension by others, so anything
+    # from the finished size up to twice the bleed per side is a correctly prepared plate (the
+    # in-house engine's `_oversize_is_bleed`). Less than a millimetre of growth is no bleed at all.
+    if (material or {}).get("cut_path") and expected["bleed_mm"] > 0:
+        growth = _bleed_growth(actual, netto, expected["bleed_mm"] / expected["scale"])
+        if growth is not None:
+            if growth < MIN_DETECTABLE_BLEED_MM:
+                return _finding("page_size", "amber", "no_bleed",
+                                bleed=_mm(expected["bleed_mm"]), **values)
+            return _finding("page_size", "green", "with_bleed",
+                            netto_w=_mm(netto[0]), netto_h=_mm(netto[1]), **values)
     allowance = float((material or {}).get("finishing_mm") or DEFAULT_FINISHING_MM)
     # Checked BEFORE the finishing branch: a small doubled file (200x100 ordered, 400x100 sent) would
     # otherwise sit inside the allowance and read as a hem.
@@ -140,6 +151,20 @@ def check_page_size(facts, expected, material=None):
         if _oversize(actual, brutto):
             return _finding("page_size", "amber", "oversize", allowance=_mm(allowance), **values)
     return _finding("page_size", "red", "wrong", **values)
+
+
+# Below this much growth over the finished size a cut file has no bleed worth the name.
+MIN_DETECTABLE_BLEED_MM = 1.0
+
+
+def _bleed_growth(actual, netto, bleed):
+    """The smallest per-side overshoot of the page over the finished size, when every side lies
+    within the bleed window (0 .. 2 x bleed), in either orientation — else None."""
+    for candidate in (actual, (actual[1], actual[0])):
+        overshoot = [side - finished for side, finished in zip(candidate, netto)]
+        if all(-TOLERANCE_MM <= over <= 2 * bleed + TOLERANCE_MM for over in overshoot):
+            return max(0.0, min(overshoot))
+    return None
 
 
 def _oversize(actual, expected):
@@ -223,6 +248,8 @@ def check_artwork_reaches_bleed(facts, expected, material=None):
     `blank_edges_mm` is how much untouched paper sits on each side; anything more than a rounding
     error means the design stops short of the bleed.
     """
+    if (material or {}).get("cut_path") and facts.get("die"):
+        return None                                  # cut_margins judges this against the knife
     blank = facts.get("blank_edges_mm")
     if blank is None:
         return _finding("bleed_coverage", "info", "unmeasured")
@@ -237,6 +264,8 @@ def check_artwork_reaches_bleed(facts, expected, material=None):
 def check_safe_area(facts, expected, material=None):
     """Nothing important outside the safe box, measured as DETAIL in the keep-out ring — a full-bleed
     background is supposed to fill that ring, so any-ink would flag every correct file."""
+    if (material or {}).get("cut_path") and facts.get("die"):
+        return None                                  # the die line itself sits in the ring
     intrusion = facts.get("safe_intrusion_mm")
     if intrusion is None:
         return _finding("safe_area", "info", "unmeasured")

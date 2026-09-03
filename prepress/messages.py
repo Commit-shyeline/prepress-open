@@ -79,6 +79,9 @@ CHECK_MESSAGES = {
     "check.page_size.no_bleed.detail":
         "Ten materiał wymaga {bleed} mm spadu z każdej strony, czyli strony {expected_w}×{expected_h} mm. "
         "Powiększ tło poza rozmiar gotowy — przy cięciu zostanie inaczej biały rąbek.",
+    "check.page_size.with_bleed": "Rozmiar zgodny ze spadem: {page_w}×{page_h} mm",
+    "check.page_size.with_bleed.detail":
+        "Format docelowy {netto_w}×{netto_h} mm plus spad. Tak ma być.",
     "check.page_size.two_up": "To wygląda na dwie strony w jednym pliku: {page_w}×{page_h} mm",
     "check.page_size.two_up.detail":
         "Połowa pliku odpowiada rozmiarowi {expected_w}×{expected_h} mm, więc wygląda to na dwie "

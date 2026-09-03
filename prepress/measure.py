@@ -172,8 +172,22 @@ def measure(pdf_bytes, expected, page_index=0, cut_spot=None):
         facts["die"]["bare_perimeter"] = die.bare_perimeter(
             array, px_per_mm, facts["die"]["polylines"],
             max(expected["bleed_mm"] / scale, 1.0), PAPER_MIN_CHANNEL)
-        del facts["die"]["polylines"]                # geometry for the rules, not for the response
+        # The outline itself goes to the page (the overlay draws the knife, not a rectangle);
+        # thinned so a curvy die does not ship thousands of points.
+        facts["die"]["outline_mm"] = [_thin(line) for line in facts["die"]["polylines"]]
+        del facts["die"]["polylines"]                # full geometry was for the rules
     return facts
+
+
+OUTLINE_POINTS_MAX = 400
+
+
+def _thin(points):
+    stride = max(1, -(-len(points) // OUTLINE_POINTS_MAX))
+    kept = list(points[::stride])
+    if kept[-1] != points[-1]:
+        kept.append(points[-1])
+    return [[round(x, 2), round(y, 2)] for x, y in kept]
 
 
 def _unmeasurable(error):

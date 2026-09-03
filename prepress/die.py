@@ -43,11 +43,20 @@ def geometry(pdf_bytes, page_index=0, cut_spot=None):
         page_w, page_h = outline.page_size_mm(pdf_bytes, page_index)
     except Exception:                                # noqa: BLE001 — no page size, no frame to flip in
         return None
-    polylines, length, boxes = [], 0.0, []
+    polylines, length, boxes, seen, closed = [], 0.0, [], set(), []
     for subpath in subpaths:
         points = _sample(subpath["segments"], subpath["start"])
         if len(points) < 2:
             continue
+        # The same contour drawn twice (a white-filled copy under the stroked one is how one
+        # drawing tool exports a die) is one knife path, not two — the arrow sticker counted 556 mm
+        # of cutting for 356 mm of line (2026-09-03).
+        key = tuple((round(x, 1), round(y, 1)) for x, y in points)
+        if key in seen:
+            continue
+        seen.add(key)
+        # A path that returns to its start IS closed, whether or not the file said `h`.
+        closed.append(bool(subpath.get("closed")) or math.dist(points[0], points[-1]) <= CLOSED_GAP_MM)
         length += sum(math.dist(points[i], points[i + 1]) for i in range(len(points) - 1))
         if subpath.get("closed") and points[0] != points[-1]:
             length += math.dist(points[-1], points[0])
@@ -66,8 +75,10 @@ def geometry(pdf_bytes, page_index=0, cut_spot=None):
             "page_mm": (round(page_w, 2), round(page_h, 2)),
             "length_mm": round(length, 1),
             "contours": len(polylines),
-            "closed": all(s.get("closed") for s in subpaths),
-            "filled": any(s.get("painted") in ("fill", "both") for s in subpaths),
+            "closed": all(closed),
+            # Filled IN THE KNIFE COLOUR. A die stroked in Cut over a white fill is a stroke.
+            "filled": any(s.get("painted") in ("fill", "both") and is_knife(s.get("fill_colorant"))
+                          for s in subpaths),
             "polylines": polylines}
 
 
@@ -112,6 +123,10 @@ def bare_perimeter(array, px_per_mm, polylines, bleed_mm, paper_min_channel):
     if taken == 0:
         return None
     return round(bare / taken, 3)
+
+
+# How far apart a path's first and last point may be and still count as one closed contour.
+CLOSED_GAP_MM = 0.1
 
 
 def _sample(segments, start):

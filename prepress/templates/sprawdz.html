@@ -398,6 +398,9 @@ if (GATED) {
    re-runs BOTH sides against the chosen template, so przód and tył are judged by the same lines. */
 async function check(entry, template, page = 0, free = null, cut = null) {
     entry.args = { template, page, free, cut };
+    // What the last check said about this file — a refused re-check (a 5×5 mm size on a 3 mm
+    // material) must leave the settings card standing, or the customer is stuck (2026-09-03).
+    const known = (entry.view && entry.view.front) || null;
     setView(entry, { state: 'checking' });
     let front, back = null;
     try {
@@ -407,9 +410,10 @@ async function check(entry, template, page = 0, free = null, cut = null) {
                                   free, 'back', cut);
         }
     } catch (e) {
-        return setView(entry, { state: 'error', message: 'Nie udało się sprawdzić pliku: ' + e.message });
+        return setView(entry, { state: 'error', front: known,
+                                message: 'Nie udało się sprawdzić pliku: ' + e.message });
     }
-    if (front.error) return setView(entry, { state: 'error', message: front.error });
+    if (front.error) return setView(entry, { state: 'error', message: front.error, front: known });
     if (back && back.error) return setView(entry, { state: 'error', message: 'Tył: ' + back.error });
     if (!front.recognised && (front.candidates || []).length) {
         return setView(entry, { state: 'candidates', front });
@@ -464,7 +468,11 @@ function paint(entry) {
     if (view.state === 'checking') {
         return message(`<span class="spin"></span>Sprawdzamy ${escapeHtml(entry.front.name)}…`, false);
     }
-    if (view.state === 'error') return message(escapeHtml(view.message), true);
+    if (view.state === 'error') {
+        message(escapeHtml(view.message), true);
+        if (view.front && !view.front.template_token) paintSettings(entry);
+        return;
+    }
     const front = view.front;
     // A multi-page file gets pagination: each page is its own full check (both sides of a pair).
     if (front.recognised && (front.page_count || 1) > 1) {
@@ -572,6 +580,8 @@ async function paintSettings(entry) {
     el('freeSizeNote').innerHTML = front.kind === 'raster'
         ? `<b>Bitmapa.</b> Rozdzielczość liczymy z pikseli w podanym rozmiarze; sprawdzamy też spady,
            obszar bezpieczny, kolory i spłaszczenie.`
+        : entry.view.state === 'error'
+        ? `Popraw materiał albo rozmiar i sprawdź ponownie.`
         : judged
         ? `Sprawdzono według zasad dla tego materiału i rozmiaru. Zmień i sprawdź ponownie, jeśli
            zamawiasz inaczej.`
@@ -673,15 +683,38 @@ function drawOverlay(front) {
         ctx.fillRect(0, st * px, sl * px, (artH - st - sb) * px);
         ctx.fillRect((artW - sr) * px, st * px, sr * px, (artH - st - sb) * px);
         box(0, 0, artW, artH, 'rgba(60,60,66,.95)', hair);                          // brutto
-        box(bleed, bleed, artW - 2 * bleed, artH - 2 * bleed, '#d91a72', hair, [4, 3]); // netto
+        const knife = (front.die && front.die.outline_mm) || [];
+        if (knife.length) {
+            // The die as drawn — a shaped sticker is cut along its outline, not along a rectangle.
+            for (const line of knife) {
+                const path = new Path2D();
+                line.forEach(([x, y], i) => (i ? path.lineTo(x * px, y * px) : path.moveTo(x * px, y * px)));
+                ctx.setLineDash([]); ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = hair * 2.4;
+                ctx.stroke(path);
+                ctx.setLineDash([4 * hair, 3 * hair]); ctx.strokeStyle = '#d91a72'; ctx.lineWidth = hair;
+                ctx.stroke(path);
+            }
+        } else {
+            box(bleed, bleed, artW - 2 * bleed, artH - 2 * bleed, '#d91a72', hair, [4, 3]); // netto
+        }
         box(sl, st, artW - sl - sr, artH - st - sb, '#1f9d4d', hair);                // safe
+        // A finding's rectangle is real geometry: a 6 mm intrusion on a 5 m banner is 3 px here and
+        // invisible on screen. Every marked region is drawn at least this big, centred on the real
+        // spot, so the eye finds it; the caption still says the true size (2026-09-03).
+        const minSide = canvas.width / 25;
         for (const check of front.checks || []) {
             const tone = LEVEL_RGBA[check.level];
             if (!tone) continue;
             for (const [x, y, w, h] of check.regions || []) {
+                const drawW = Math.max(w * px, minSide), drawH = Math.max(h * px, minSide);
+                const drawX = (x + w / 2) * px - drawW / 2, drawY = (y + h / 2) * px - drawH / 2;
                 ctx.fillStyle = tone + '.18)';
-                ctx.fillRect(x * px, y * px, w * px, h * px);
-                box(x, y, w, h, tone + '.95)', hair * 1.6);
+                ctx.fillRect(drawX, drawY, drawW, drawH);
+                ctx.setLineDash([]);
+                ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = hair * 1.6 * 2.4;
+                ctx.strokeRect(drawX, drawY, drawW, drawH);
+                ctx.strokeStyle = tone + '.95)'; ctx.lineWidth = hair * 1.6;
+                ctx.strokeRect(drawX, drawY, drawW, drawH);
             }
         }
         el('overlayLegend').textContent = overlayLegend(front);
