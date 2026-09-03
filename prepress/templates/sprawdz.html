@@ -148,6 +148,9 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
         <iframe id="modelFrame" title="Podgląd 3D twojego pliku na fladze"></iframe>
         <p class="note" style="margin-top:6px">Czerwone i bursztynowe ramki na fladze to miejsca
             z wyniku kontroli To ta sama geometria, którą mierzy raport.</p>
+        <div class="acts" style="margin-top:8px">
+            <button type="button" class="pick" id="glbBtn" hidden>Pobierz model 3D (.glb)</button>
+        </div>
     </div>
         <div class="card" id="overlayCard" hidden>
             <h2>Podgląd z ramkami</h2>
@@ -777,6 +780,8 @@ function showModel(front, back) {
         window.PrepressLastArtwork.remember(`data:image/png;base64,${front.preview_png}`);
     }
     frame.src = `${BASE}/model/${encodeURIComponent(front.template_token)}?embed=1`;
+    el('glbBtn').hidden = true;
+    el('glbBtn').dataset.name = front.name || '';
     frame.addEventListener('load', () => {
         // The scene builds after its own fetch; a short delay beats racing it. Regions come from
         // the findings — the same rectangles the report was judged on, nothing recomputed.
@@ -789,9 +794,35 @@ function showModel(front, back) {
                     ? `data:image/png;base64,${back.preview_png}` : null,
                 regions,
             }, window.location.origin);
+            el('glbBtn').hidden = false;
         }, 900);
     }, { once: true });
 }
+
+/* The 3D scene bakes the posed flag into a .glb (see exportGlb in model3d.html) and hands the bytes
+   back over postMessage; the page only names and saves the file. */
+el('glbBtn').addEventListener('click', () => {
+    const btn = el('glbBtn');
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Przygotowujemy model…';
+    const onExported = (event) => {
+        if (event.origin !== window.location.origin || !event.data || !event.data.exported) return;
+        window.removeEventListener('message', onExported);
+        btn.disabled = false;
+        btn.textContent = label;
+        const { glb, error } = event.data.exported;
+        if (!glb) return message('Nie udało się przygotować modelu 3D: ' + escapeHtml(error || ''), true);
+        const url = URL.createObjectURL(glb);
+        const saver = document.createElement('a');
+        saver.href = url;
+        saver.download = `${(btn.dataset.name || 'flaga').replace(/\.[^.]+$/, '')}-3d.glb`;
+        document.body.appendChild(saver); saver.click(); saver.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+    };
+    window.addEventListener('message', onExported);
+    el('modelFrame').contentWindow.postMessage({ export: 'glb' }, window.location.origin);
+});
 
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g,

@@ -314,6 +314,31 @@ def api_session():
                     "login": _login_url()})
 
 
+# ── Access log ──────────────────────────────────────────────────────────────
+# Waitress logs nothing per request, so the console of a public checker stayed blank while
+# customers downloaded templates and ran checks. One line per request: who (the session's
+# NIP, or the door), from where, what, how it went, how long. Static assets are left out.
+
+def _client_ip():
+    """The real client behind the proxies: first hop of X-Forwarded-For, else the socket."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    return forwarded.split(",")[0].strip() or request.remote_addr or "-"
+
+
+@app.before_request
+def _start_clock():
+    request._started = time.perf_counter()
+
+
+@app.after_request
+def _access_log(response):
+    if not request.path.startswith(f"{base_path()}/static/"):
+        elapsed_ms = (time.perf_counter() - getattr(request, "_started", time.perf_counter())) * 1000
+        logger.info("%s %s %s %s %d %.0fms", _client_ip(), _caller(), request.method,
+                    request.full_path.rstrip("?"), response.status_code, elapsed_ms)
+    return response
+
+
 ADMIN_TOKEN_ENV = "PREPRESS_ADMIN_TOKEN"
 MAX_QUEUE_ITEMS = 50
 

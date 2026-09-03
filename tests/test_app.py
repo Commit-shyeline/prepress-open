@@ -710,3 +710,12 @@ def test_the_back_of_a_pair_is_not_asked_for_a_wykrojnik(client):
 def test_rule_severities_are_admin_only(client):
     assert client.get("/api/admin/rules").status_code == 403
     assert client.post("/api/admin/rules", json={"rules": {}}).status_code == 403
+
+
+def test_access_log_names_the_caller_and_the_request(client, caplog):
+    """One INFO line per request — who, from where, what, status, time — or the console stays blank."""
+    import logging
+    with caplog.at_level(logging.INFO, logger="prepress.app"):
+        client.get("/health", headers={"X-Forwarded-For": "203.0.113.9, 10.0.0.1"})
+    lines = [r.getMessage() for r in caplog.records if " GET /health " in r.getMessage()]
+    assert lines and lines[0].startswith("203.0.113.9 ") and " 200 " in lines[0]

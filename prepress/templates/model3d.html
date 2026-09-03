@@ -1647,6 +1647,7 @@ function build(data, cutFrom) {
             group.add(line);
         }
         if ((event.data.regions || []).length) calmDown();   // re-stamp z offsets onto new lines
+        if (event.data.export === 'glb') exportGlb(event.source);
     });
 
     // Guide lines: separate objects so they stay crisp, but displaced by the SAME wind function
@@ -2013,6 +2014,51 @@ function build(data, cutFrom) {
     flag.add(cloth, ...guides.map(g => g.line), ...hemFolds.map(f => f.mesh), rig);
     if (sheetRig) flag.add(sheetRig);
     group.add(flag);
+
+    /* ── „Pobierz model 3D (.glb)" — asked for by the check page over postMessage ──
+       glTF has no alphaMap and no shader hooks, so the export bakes what the live scene composes
+       at draw time: the artwork's page sub-rectangle (the same offset/repeat the cloth texture
+       carries) and the silhouette into ONE RGBA texture on a plain standard material. Cloth and
+       rig only — not our guide lines, not the cutting bench, not the hem folds. Known losses,
+       accepted: sheen, the weave bump and the mirrored show-through (BackSide is not a glTF
+       concept). It reads as a matte flag in the pose it was exported in. */
+    async function exportGlb(reply) {
+        try {
+            const { GLTFExporter } = await import('{{ asset("GLTFExporter.js") }}');
+            const baked = document.createElement('canvas');
+            baked.width = alpha.width;
+            baked.height = alpha.height;
+            const bakedCtx = baked.getContext('2d');
+            const artwork = clothMaterial.map && clothMaterial.map.image;
+            if (artwork) {
+                const { repeat, offset } = clothMaterial.map;
+                // Canvas y grows down; the texture's offset.y counts from the page's bottom.
+                bakedCtx.drawImage(artwork,
+                    offset.x * artwork.width, (1 - offset.y - repeat.y) * artwork.height,
+                    repeat.x * artwork.width, repeat.y * artwork.height,
+                    0, 0, baked.width, baked.height);
+            } else {
+                bakedCtx.fillStyle = '#f4f4f6';
+                bakedCtx.fillRect(0, 0, baked.width, baked.height);
+            }
+            bakedCtx.globalCompositeOperation = 'destination-in';
+            bakedCtx.drawImage(alpha, 0, 0, baked.width, baked.height);
+            const texture = new THREE.CanvasTexture(baked);
+            texture.colorSpace = THREE.SRGBColorSpace;
+            const posed = cloth.clone();
+            posed.material = new THREE.MeshStandardMaterial({
+                map: texture, roughness: 0.72, metalness: 0,
+                transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+            new GLTFExporter().parse([posed, rig],
+                (glb) => reply.postMessage({ exported: {
+                    glb: new Blob([glb], { type: 'model/gltf-binary' }) } }, window.location.origin),
+                (error) => reply.postMessage({ exported: { error: String(error) } },
+                                             window.location.origin),
+                { binary: true, onlyVisible: true });
+        } catch (error) {
+            reply.postMessage({ exported: { error: String(error) } }, window.location.origin);
+        }
+    }
     /* Far enough down to leave the frame entirely — and the frame reaches below the bench, where
        the waste hangs, so clearing the mast's own height is not enough: at mastH + 4 the curved
        tip sat in shot at the bottom for the whole of every cut. */
