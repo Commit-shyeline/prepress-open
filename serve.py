@@ -36,6 +36,17 @@ def main():
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger(__name__).info("prepress-open on %s:%s, %s threads",
                                      args.host, args.port, args.threads)
+    # The template list derives every safe outline once (a second each); done here, in the
+    # background, so the first visitor after a restart does not pay for it.
+    import threading
+
+    from prepress import app as prepress_app, materials
+
+    def warm():
+        with prepress_app.app.test_request_context():
+            for template in materials.load_templates():
+                prepress_app._safe_size_mm(template)
+    threading.Thread(target=warm, daemon=True, name="warm-safe-sizes").start()
     # A 1 GB upload over a slow uplink takes minutes; the default channel timeout would cut it.
     serve(app, host=args.host, port=args.port, threads=args.threads,
           channel_timeout=900, max_request_body_size=1024 * 1024 * 1024)
