@@ -526,6 +526,14 @@ function checksHtml(data) {
         </div>`).join('');
 }
 
+/* The measured size of the separation that was read as the knife — so the picker says
+   „Cut — 150×100 mm" the way the in-house checker does, not a bare colour name. */
+function knifeSize(front, name) {
+    const die = front.die;
+    if (!die || !die.size_mm || name !== (front.cut_spot || die.colorant)) return '';
+    return ` — ${Math.round(die.size_mm[0])}×${Math.round(die.size_mm[1])} mm`;
+}
+
 /* The fourth rung. Materials come from the same public list the generator reads. The size is
    pre-filled from the file's NAME when it states one (`baner_800x2000.pdf` — the designer saying
    what they made), otherwise from the page; when the two disagree both are offered as one-click
@@ -609,7 +617,7 @@ async function paintSettings(entry) {
         el('cutSel').innerHTML = [`<option value="">automatycznie${front.cut_spot && !chosen
             ? ` (${escapeHtml(front.cut_spot)})` : ''}</option>`]
             .concat(spots.map((name) => `<option value="${escapeHtml(name)}"${name === chosen ? ' selected' : ''}>
-                ${escapeHtml(name)}</option>`)).join('');
+                ${escapeHtml(name)}${knifeSize(front, name)}</option>`)).join('');
     }
     el('freeSize').hidden = false;
 }
@@ -660,9 +668,22 @@ function drawOverlay(front) {
         ctx.drawImage(image, 0, 0);
         const px = canvas.width / front.page_mm[0];          // pixels per PAGE millimetre
         const exp = front.expected, s = exp.scale || 1;
-        const artW = exp.brutto_mm[0] / s, artH = exp.brutto_mm[1] / s, bleed = exp.bleed_mm / s;
+        let artW = exp.brutto_mm[0] / s, artH = exp.brutto_mm[1] / s;
+        const bleed = exp.bleed_mm / s;
         const sides = exp.safe_sides_mm || {};
         const safe = (side) => (bleed + (sides[side] ?? exp.safe_mm) / s);
+        /* Where the frames sit on the PAGE. A knife line is the truth: the netto IS its box and
+           the bleed and safe frames hang off it. Without one, a page that is not exactly the
+           expected brutto (a plate with 0.6 mm of bleed instead of 3) gets the frames centred —
+           anchored at the top-left they hung off the bottom-right edge (2026-09-03). */
+        const die = front.die;
+        let fx, fy;
+        if (die && die.origin_mm && die.size_mm) {
+            fx = die.origin_mm[0] - bleed; fy = die.origin_mm[1] - bleed;
+            artW = die.size_mm[0] + 2 * bleed; artH = die.size_mm[1] + 2 * bleed;
+        } else {
+            fx = (front.page_mm[0] - artW) / 2; fy = (front.page_mm[1] - artH) / 2;
+        }
         // Every line gets a white halo first: a hairline in one colour vanishes on artwork of a
         // similar colour (a green safe box on a blue banner was invisible, 2026-09-02).
         const box = (x, y, w, h, colour, width, dash = []) => {
@@ -678,11 +699,11 @@ function drawOverlay(front) {
         // a shape and not as one more thin line: "keep your text inside the clear part".
         const sl = safe('left'), st = safe('top'), sr = safe('right'), sb = safe('bottom');
         ctx.fillStyle = 'rgba(255,255,255,.28)';
-        ctx.fillRect(0, 0, artW * px, st * px);
-        ctx.fillRect(0, (artH - sb) * px, artW * px, sb * px);
-        ctx.fillRect(0, st * px, sl * px, (artH - st - sb) * px);
-        ctx.fillRect((artW - sr) * px, st * px, sr * px, (artH - st - sb) * px);
-        box(0, 0, artW, artH, 'rgba(60,60,66,.95)', hair);                          // brutto
+        ctx.fillRect(fx * px, fy * px, artW * px, st * px);
+        ctx.fillRect(fx * px, (fy + artH - sb) * px, artW * px, sb * px);
+        ctx.fillRect(fx * px, (fy + st) * px, sl * px, (artH - st - sb) * px);
+        ctx.fillRect((fx + artW - sr) * px, (fy + st) * px, sr * px, (artH - st - sb) * px);
+        box(fx, fy, artW, artH, 'rgba(60,60,66,.95)', hair);                        // brutto
         const knife = (front.die && front.die.outline_mm) || [];
         if (knife.length) {
             // The die as drawn — a shaped sticker is cut along its outline, not along a rectangle.
@@ -695,9 +716,9 @@ function drawOverlay(front) {
                 ctx.stroke(path);
             }
         } else {
-            box(bleed, bleed, artW - 2 * bleed, artH - 2 * bleed, '#d91a72', hair, [4, 3]); // netto
+            box(fx + bleed, fy + bleed, artW - 2 * bleed, artH - 2 * bleed, '#d91a72', hair, [4, 3]); // netto
         }
-        box(sl, st, artW - sl - sr, artH - st - sb, '#1f9d4d', hair);                // safe
+        box(fx + sl, fy + st, artW - sl - sr, artH - st - sb, '#1f9d4d', hair);      // safe
         // A finding's rectangle is real geometry: a 6 mm intrusion on a 5 m banner is 3 px here and
         // invisible on screen. Every marked region is drawn at least this big, centred on the real
         // spot, so the eye finds it; the caption still says the true size (2026-09-03).

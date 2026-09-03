@@ -187,6 +187,11 @@ CHECK_MESSAGES = {
     "check.cut_margins.off_sheet.detail":
         "Linia cięcia „{cut}” wychodzi poza plik. Nóż nie ma po czym jechać — powiększ arkusz "
         "albo przesuń wykrojnik.",
+    "check.cut_margins.tight": "Za mało pliku poza linią cięcia ({sides})",
+    "check.cut_margins.tight.detail":
+        "Poza wykrojnikiem „{cut}” zostaje mniej niż {bleed} mm materiału: {sides}. Nóż nigdy nie "
+        "trafia w linię co do milimetra, więc na tej krawędzi wyjdzie biały rąbek — powiększ stronę "
+        "i rozciągnij tło co najmniej {bleed} mm poza linię cięcia.",
     "check.cut_margins.unmeasured": "Nie zmierzyliśmy grafiki wokół wykrojnika „{cut}”",
 
     "check.raster_flat.ok": "Plik spłaszczony",

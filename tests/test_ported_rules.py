@@ -765,3 +765,21 @@ def test_cut_work_accepts_a_page_between_finished_and_finished_plus_bleed():
     # Without a die the page-edge rules speak again.
     no_die = rules.run({k: v for k, v in facts.items() if k != "die"}, expected, material)
     assert _one(no_die, "bleed_coverage") is not None and _one(no_die, "safe_area") is not None
+
+
+def test_a_die_hugging_the_page_edge_is_too_tight_not_unmeasured():
+    """A 150 x 100 die on a 151.2 x 101.2 page: the bleed sample falls off the page, but the
+    verdict is known — under 3 mm of file beyond the knife on every side (2026-09-03)."""
+    material = dict(STICKER, bleed_mm=3, safe_mm=3)
+    expected = identify.stamped_geometry(generate.stamp_payload(item.resolve(material, 150, 100)))
+    die = {"colorant": "Cut", "origin_mm": (0.25, 0.96), "size_mm": (150, 100),
+           "page_mm": (151.21, 101.21), "length_mm": 500, "contours": 1, "closed": True,
+           "filled": False, "bare_perimeter": None}
+    finding = _one(rules.run({"page_mm": (151.21, 101.21), "die": die}, expected, material),
+                   "cut_margins")
+    assert finding["code"] == "check.cut_margins.tight" and finding["level"] == "amber"
+    assert "z lewej 0.2 mm" in finding["title"] or "z lewej 0.3 mm" in finding["title"]
+    # Comfortably inside the page the same None stays honest: unmeasured.
+    roomy = {**die, "origin_mm": (10, 10), "page_mm": (170, 120)}
+    assert _one(rules.run({"page_mm": (170, 120), "die": roomy}, expected, material),
+                "cut_margins")["code"] == "check.cut_margins.unmeasured"

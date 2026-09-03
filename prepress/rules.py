@@ -407,6 +407,14 @@ def check_cut_margins(facts, expected, material=None):
     values = {"cut": found["colorant"], "bleed": _mm(bleed)}
     if off_sheet:
         return _finding("cut_margins", "red", "off_sheet", sides=", ".join(off_sheet), **values)
+    # The die closer to the page edge than a bleed: there is not enough FILE beyond the knife on
+    # that side, whatever the artwork does — and the perimeter sample cannot even be taken there
+    # (it lands off the page and used to come back as "unmeasured"; a 151 x 101 mm page around a
+    # 150 x 100 die, 2026-09-03).
+    tight = [f"{SIDE_NAMES_PL[side]} {gap:.1f} mm" for side, gap in outside.items()
+             if gap < bleed - TOLERANCE_MM]
+    if tight:
+        return _finding("cut_margins", "amber", "tight", sides=", ".join(tight), **values)
     bare = found.get("bare_perimeter")
     if bare is None:
         return _finding("cut_margins", "info", "unmeasured", **values)
@@ -415,6 +423,7 @@ def check_cut_margins(facts, expected, material=None):
     return _finding("cut_margins", "green", "ok", **values)
 
 
+SIDE_NAMES_PL = {"left": "z lewej", "top": "u góry", "right": "z prawej", "bottom": "u dołu"}
 # How much of the die's perimeter may sample as bare paper before it is worth saying so: the
 # outline is sampled on a pixel grid against a stroke of real width, so a few per cent land light.
 BARE_PERIMETER_TOLERANCE = 0.06
