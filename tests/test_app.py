@@ -51,6 +51,27 @@ def test_without_a_secret_the_app_is_open(client):
     assert answer["authenticated"] is True
 
 
+def test_only_a_page_that_opened_announces_a_visit(client, monkeypatch):
+    """The visit webhook must fire for an arrival, never for a capability check.
+
+    Another surface may ask this endpoint on every one of ITS logins just to decide whether to
+    offer a link here — announcing that reports people who never opened the checker. `?opened=1`
+    is how a page of this app says the answer is also an arrival.
+    """
+    monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)
+    monkeypatch.setenv(app_module.VISIT_WEBHOOK_ENV, "http://127.0.0.1:1/hook")
+    monkeypatch.setattr(app_module, "_visit_last", {})
+    announced = []
+    monkeypatch.setattr(app_module, "announce_visit",
+                        lambda who, page: announced.append(who))
+
+    assert client.get("/api/session", headers=_bearer()).status_code == 200
+    assert announced == []
+
+    assert client.get("/api/session?opened=1", headers=_bearer()).status_code == 200
+    assert announced == ["1234567890"]
+
+
 def test_a_gated_check_refuses_an_anonymous_upload(client, monkeypatch):
     monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)
     answer = client.post("/api/check", data={"file": (io.BytesIO(b"%PDF-1.7"), "x.pdf")},

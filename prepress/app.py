@@ -313,9 +313,16 @@ def announce_visit(who, page):
 
 @app.route("/api/session")
 def api_session():
-    """Whether this caller is logged in — what the pages ask before offering to do anything."""
+    """Whether this caller is logged in — what the pages ask before offering to do anything.
+
+    `?opened=1` means the asker is a page of this app that just loaded, and only then is the answer
+    also an arrival worth announcing. Without that distinction a visit could not be told from a
+    capability check: another surface may poll this endpoint on every one of its own logins merely
+    to decide whether to offer a link here, and announcing that reports customers who never opened
+    the checker at all.
+    """
     who = session_identity()
-    if who:
+    if who and request.args.get("opened"):
         announce_visit(who, request.headers.get("Referer") or "/")
     return jsonify({"gated": _gated(),
                     "authenticated": bool(who) or not _gated(),

@@ -384,7 +384,7 @@ async function checkOne(entry, file, template, side, page, free, slot = 'front',
    subdomain would see no session at all. Standalone (no `gated`), none of this runs and the page
    behaves exactly as it always has. */
 if (GATED) {
-    fetch(`${BASE}/api/session`, { headers: authHeaders() })
+    fetch(`${BASE}/api/session?opened=1`, { headers: authHeaders() })
         .then((resp) => resp.json())
         .then((data) => {
             if (data.authenticated) return;
