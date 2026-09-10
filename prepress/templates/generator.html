@@ -439,14 +439,15 @@ async function loadTemplates() {
             let short = (t.name || '').trim();
             if (trim) short = short.split(/\s+/).slice(0, -trim).join(' ');
             short = short.replace(/^Flaga\s+(Vento\s+Regular|[SML]|XL)\s*/i, '') || short;
-            const mm = t.trim_mm || [];
+            // The size the price list sells (60×220), not the cut outline — that is the hem, ~13 cm wider.
+            const mm = t.finished_mm || t.trim_mm || [];
             const cm = mm.map((v) => Math.round(v / 10)).join(' × ');
             // P.R. — the safe area's own size, the surface the customer can actually put a message on.
             const pr = (t.safe_size_mm || []).map((v) => Math.round(v / 10)).join(' × ');
             return `<div class="tpl">
                 <div class="fill">
                     <span class="nm">${escapeHtml(short)}</span>
-                    <span class="sz" title="dokładnie ${mm.map(round).join(' × ')} mm ·
+                    <span class="sz" title="linia cięcia ${(t.trim_mm || []).map(round).join(' × ')} mm ·
                         spad ${t.bleed_mm} mm · obszar bezpieczny ${t.safe_mm} mm od linii cięcia">${cm} cm${pr
                         ? ` <span class="pr">(P.R. ${pr} cm)</span>` : ''}</span>
                     ${t.note ? `<div class="note">${escapeHtml(t.note)}</div>` : ''}

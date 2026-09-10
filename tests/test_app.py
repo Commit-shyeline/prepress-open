@@ -671,6 +671,22 @@ def test_a_silenced_rule_stops_appearing_in_a_real_check(client):
     assert font_findings() == []
 
 
+def test_finished_size_is_the_price_list_size_not_the_hem():
+    """The caption under a Vento template must read what the price list sells (S Play = 60×220,
+    Regular S = 75×220): page − 200 mm. A non-Vento template keeps its cut outline."""
+    from prepress.app import _finished_mm
+
+    vento = {"name": "Flaga S Play A jednostronna", "page_mm": [800.76, 2400.76],
+             "trim_mm": [722.91, 2320.33]}
+    regular = {"name": "Flaga Vento Regular S", "page_mm": [950.35, 2400.35],
+               "trim_mm": [890.0, 2340.0]}
+    banner = {"name": "Stadion Miejski", "page_mm": [1006.0, 3006.0], "trim_mm": [1000.0, 3000.0]}
+    assert [round(v / 10) for v in _finished_mm(vento)] == [60, 220]
+    assert [round(v / 10) for v in _finished_mm(regular)] == [75, 220]
+    assert _finished_mm(banner) == [1000.0, 3000.0]
+    assert _finished_mm({"name": "Flaga S Play A"}) is None
+
+
 def test_a_file_rebuilt_by_a_design_app_is_recognised_by_its_printed_token(client):
     """Illustrator/Affinity exports rebuild the PDF: the page-dictionary stamp dies, the drawn
     content survives. Stripping the stamp key simulates that export — the checker must still

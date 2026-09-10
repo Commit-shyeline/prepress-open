@@ -567,7 +567,7 @@ def api_template_shape(token):
     # (220->270, 280->330, 380->430). Finished = page - 200 mm on both axes, the same key the
     # sticker sheets already use.
     page_mm = template.get("page_mm") or [0, 0]
-    finished_height_mm = max(float(page_mm[1]) - 200.0, 0.0)
+    finished_height_mm = max(float(page_mm[1]) - VENTO_FINISHED_INSET_MM, 0.0)
     is_regular = "regular" in (template.get("name") or "").lower()
     mast_mm = finished_height_mm + (500.0 if is_regular else 400.0)
 
@@ -714,9 +714,9 @@ def api_template_pdf(token):
     # "Play A.pdf" told a customer nothing (2026-09-02): the sheet is named in full, with the
     # finished size in centimetres, the unit flags are ordered in.
     name = (template.get("name") or token).replace("/", "-")
-    trim = template.get("trim_mm") or []
-    if len(trim) == 2:
-        name += f" {round(float(trim[0]) / 10)}x{round(float(trim[1]) / 10)} cm"
+    finished = _finished_mm(template) or []
+    if len(finished) == 2:
+        name += f" {round(finished[0] / 10)}x{round(finished[1] / 10)} cm"
     return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf",
                      as_attachment=True, download_name=f"{name}.pdf")
 
@@ -1418,6 +1418,8 @@ def api_templates():
         "name": t.get("name"),
         "page_mm": t.get("page_mm"),
         "trim_mm": t.get("trim_mm"),
+        # The size the price list sells the flag as — what the caption under a template reads.
+        "finished_mm": _finished_mm(t),
         "sides": t.get("sides") or 1,
         # How many lines of each kind, so a customer sees "this one creases" without getting the
         # geometry of somebody's die.
@@ -1430,6 +1432,25 @@ def api_templates():
         "material": t.get("material"),
         "note": t.get("note"),
     } for t in materials.load_templates()]})
+
+
+# A Vento template's page is the finished flag plus 100 mm on every side — hem, tunnel and bleed
+# together — so the size the price list sells (60×220, 75×220 …) is page − 200 mm on both axes,
+# the same key the mast and the sticker sheets already use. The cut outline (`trim_mm`) is the
+# hem, ~13 cm wider than the flag, and it misled the captions until 2026-09-10.
+VENTO_FINISHED_INSET_MM = 200.0
+_VENTO_NAME = re.compile(r"\b(vento|play)\b", re.IGNORECASE)
+
+
+def _finished_mm(template):
+    """(w, h) the customer orders the product as: page − 200 mm for a Vento flag, the cut outline
+    for anything else, or None when neither is known."""
+    page = template.get("page_mm") or []
+    if _VENTO_NAME.search(template.get("name") or "") and len(page) == 2:
+        return [round(float(page[0]) - VENTO_FINISHED_INSET_MM, 1),
+                round(float(page[1]) - VENTO_FINISHED_INSET_MM, 1)]
+    trim = template.get("trim_mm") or []
+    return [float(trim[0]), float(trim[1])] if len(trim) == 2 else None
 
 
 # Deriving a template's safe outline costs about a second, and the landing page asks for the whole
