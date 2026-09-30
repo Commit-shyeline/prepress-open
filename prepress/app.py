@@ -961,7 +961,8 @@ def _judge(data, filename, form, token=None):
         own = [(float(o.get("width_mm") or 0), float(o.get("height_mm") or 0))
                for o in (template_record.get("outlines") or [])]
         try:
-            uploaded = outline.candidates(data)
+            # The page being judged — page 1's outlines used to answer for every page (2026-09-30).
+            uploaded = outline.candidates(data, page_index)
         except Exception:                           # noqa: BLE001 — unreadable vectors = no guides
             uploaded = []
         facts["guides_present"] = any(
@@ -979,7 +980,9 @@ def _judge(data, filename, form, token=None):
         and blank
         and max(blank[0] / max(expected["brutto_mm"][0], 1),
                 blank[1] / max(expected["brutto_mm"][1], 1)) > 0.3)
-    facts["declared_boxes_mm"] = {} if kind == "raster" else identify.declared_boxes_mm(data)
+    # The judged page's own boxes: a check of page 2 read page 1's TrimBox until 2026-09-30.
+    facts["declared_boxes_mm"] = ({} if kind == "raster"
+                                  else identify.declared_boxes_mm(data, page_index))
     # What the objects declare: fonts, colour spaces, colorants, overprint, page count, producer.
     # `readable` and `reason` are dropped rather than merged — the render already reported why it
     # could not measure, and two facts under one name is how a verdict quietly loses its reason.

@@ -870,6 +870,10 @@ def test_page_geometry_is_weighed_at_the_scale_the_page_is_drawn():
         trim = _one(findings, "declared_trim")
         assert trim["level"] == "green" and (trim["values"]["trim_w"], trim["values"]["trim_h"]) == (
             "1000", "500")
+        knife = _one(findings, "cut_geometry")["values"]
+        assert (knife["cut_w"], knife["cut_h"], knife["length"]) == ("990", "490", "2.96 m")
     as_one_to_one = rules.run(facts, at_one, STICKER)
     assert _one(as_one_to_one, "cut_margins")["code"] == "check.cut_margins.tight"
     assert _one(as_one_to_one, "declared_trim")["level"] == "red"
+    knife = _one(as_one_to_one, "cut_geometry")["values"]
+    assert (knife["cut_w"], knife["cut_h"], knife["length"]) == ("99", "49", "296 mm")

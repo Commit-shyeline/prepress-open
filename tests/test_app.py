@@ -661,28 +661,34 @@ CUT_BANNER = dict(BANNER, id="baner-ciety", name="Baner cięty", cut_path=True)
 
 @pytest.mark.parametrize("road", ["stamp", "material"])
 @pytest.mark.parametrize("scale", [1, 10])
-def test_the_file_beyond_the_knife_is_weighed_at_full_size(client, scale, road):
+def test_the_knife_is_measured_and_weighed_at_full_size(client, scale, road):
     """25 mm of artwork beyond the knife is a good cut file at any scale; 5 mm is too little
     against a 20 mm bleed, and the customer reads 5 mm. The die margins ignored the scale: at 1:10
-    the good file read as too tight ("z lewej 2.5 mm") and the tight one said 0.5 mm (2026-09-30)."""
+    the good file read as too tight ("z lewej 2.5 mm") and the tight one said 0.5 mm; the die
+    itself read 99×49 mm with 296 mm of cutting for a 990 x 490 mm knife (2026-09-30)."""
     client.post("/api/admin/materials", headers={"X-Admin-Token": TOKEN},
                 json={"material": CUT_BANNER})
     template = client.post("/api/template", json={"items": [
         {"material": CUT_BANNER["id"], "width": "1000", "height": "500", "scale": scale}]}).data
     by_material = {"material": CUT_BANNER["id"], "width": "1000", "height": "500"}
 
-    def cut_margins(gap_mm):
+    def knife(gap_mm):
         pdf = _painted_over(template, die_gap_mm=gap_mm / scale)
         form = {"file": (io.BytesIO(pdf), "wykrojnik.pdf"),
                 **(by_material if road == "material" else {})}
         body = client.post("/api/check", data=form, content_type="multipart/form-data").get_json()
         assert body["expected"]["scale"] == (scale if road == "stamp" else 1)
         assert body["die"]["contours"] == 1
-        return next(c for c in body["checks"] if c["id"] == "cut_margins")
+        return {c["id"]: c for c in body["checks"] if c["id"] in ("cut_margins", "cut_geometry")}
 
-    good = cut_margins(25)
-    assert good["level"] == "green", good["title"]
-    tight = cut_margins(5)
+    good = knife(25)
+    assert good["cut_margins"]["level"] == "green", good["cut_margins"]["title"]
+    # The 1040 x 540 mm page less 25 mm a side: a 990 x 490 mm die, 2.96 m of knife travel.
+    geometry = good["cut_geometry"]
+    assert (geometry["values"]["cut_w"], geometry["values"]["cut_h"]) == ("990", "490")
+    assert geometry["values"]["length"] == "2.96 m"
+    assert "990×490 mm" in geometry["title"]
+    tight = knife(5)["cut_margins"]
     assert tight["code"] == "check.cut_margins.tight"
     assert tight["values"]["sides"] == ("z lewej 5.0 mm, u góry 5.0 mm, "
                                         "z prawej 5.0 mm, u dołu 5.0 mm")
@@ -932,6 +938,55 @@ def test_a_file_rebuilt_by_a_design_app_is_recognised_by_its_printed_token(clien
     assert body["recognised"] is True, body
     assert body["bare_template"] is True            # still the bare template, just re-exported
     assert not body.get("assumed_template")         # printed identity is exact, not a human guess
+
+
+def test_a_later_page_is_judged_by_its_own_outlines_and_boxes(client):
+    """Our bare sheet on page 1, the design on page 2 with a TrimBox 100 mm narrow. Checking page
+    2 read page 1's vectors and page 1's boxes: the design was told our guides were still in it,
+    and its own wrong TrimBox went unread (2026-09-30)."""
+    import pikepdf
+    from reportlab.pdfgen import canvas as rl_canvas
+
+    from prepress import from_template
+    from prepress.generate import STAMP_KEY
+
+    materials.upsert_template({
+        "token": "PagesT1", "name": "Baner testowy 100x300", "page_mm": [1006.0, 3006.0],
+        "trim_mm": [1000.0, 3000.0], "bleed_mm": 3.0, "safe_mm": 30.0, "sides": 1,
+        "material": "banner-frontlit-510", "source_name": "t.pdf", "note": "",
+        "outlines": [{"closed": True, "width_mm": 1000, "height_mm": 3000,
+                      "origin_mm": [3, 3], "start": [3, 3],
+                      "segments": [["l", 1003, 3], ["l", 1003, 3003], ["l", 3, 3003]],
+                      "type": "cut", "safe_base": False}]})
+    sheet = pikepdf.open(io.BytesIO(from_template.build_pdf(materials.get_template("PagesT1"))))
+    width, height = (float(v) for v in sheet.pages[0].mediabox[2:])
+    ink = io.BytesIO()
+    painter = rl_canvas.Canvas(ink, pagesize=(width, height))
+    painter.setFillColorRGB(0.2, 0.4, 0.8)
+    painter.rect(0, 0, width, height, fill=1, stroke=0)
+    painter.save()
+    design = pikepdf.open(ink)                   # kept open until the save: the page is borrowed
+    sheet.pages.append(design.pages[0])
+    second = sheet.pages[1]
+    second.obj[pikepdf.Name(STAMP_KEY)] = sheet.pages[0].obj[pikepdf.Name(STAMP_KEY)]
+    narrow, bleed = 900 * 72 / 25.4, 3 * 72 / 25.4
+    second.obj[pikepdf.Name("/TrimBox")] = pikepdf.Array(
+        [(width - narrow) / 2, bleed, (width + narrow) / 2, height - bleed])
+    two_pages = io.BytesIO()
+    sheet.save(two_pages)
+
+    def page(index):
+        return client.post("/api/check", data={"file": (io.BytesIO(two_pages.getvalue()), "dwie.pdf"),
+                                               "page": str(index)},
+                           content_type="multipart/form-data").get_json()
+
+    bare, designed = page(0), page(1)
+    assert bare["bare_template"] is True and bare["measured"]["guides_present"] is True
+    assert designed["measured"]["guides_present"] is False
+    checks = {c["id"]: c for c in designed["checks"]}
+    assert checks["template_guides"]["level"] == "green"
+    assert checks["declared_trim"]["level"] == "red"
+    assert designed["declared_boxes_mm"]["trimbox"][0] == pytest.approx(900, abs=0.1)
 
 
 def test_the_back_of_a_pair_is_not_asked_for_a_wykrojnik(client):

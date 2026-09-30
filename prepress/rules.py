@@ -182,7 +182,7 @@ def _page_scale(facts, expected):
     Until 2026-09-30 the die margins ignored the scale and the TrimBox took the stamp's, so a
     correctly bled 1:10 file read as cut too tight, and on the material road as a wrong trim.
     """
-    return facts.get("measured_scale") or expected.get("scale") or 1
+    return facts.get("measured_scale") or (expected or {}).get("scale") or 1
 
 
 # Below this much growth over the finished size a cut file has no bleed worth the name.
@@ -414,13 +414,17 @@ def check_cut_geometry(facts, expected=None, material=None):
     Stated as information because the cutting length is the number nobody reads off a file by eye.
     A FILLED die is wrong (the knife follows an outline, and a fill prints), and an OPEN one is wrong
     (a plotter cannot close a contour the file left open).
+
+    Said at full size — the knife cuts the job, not the page: a 1:10 file of a 990 x 490 mm die
+    read "99×49 mm" and "296 mm" of cutting where the plotter travels 2.96 m (2026-09-30).
     """
     found = facts.get("die")
     if not found:
         return None
-    values = {"cut": found["colorant"], "cut_w": _mm(found["size_mm"][0]),
-              "cut_h": _mm(found["size_mm"][1]), "length": _length(found["length_mm"]),
-              "contours": found["contours"]}
+    scale = _page_scale(facts, expected)
+    values = {"cut": found["colorant"], "cut_w": _mm(found["size_mm"][0] * scale),
+              "cut_h": _mm(found["size_mm"][1] * scale),
+              "length": _length(found["length_mm"] * scale), "contours": found["contours"]}
     if found.get("filled"):
         return _finding("cut_geometry", "amber", "filled", **values)
     if not found.get("closed", True):
