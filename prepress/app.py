@@ -50,10 +50,11 @@ def upload_too_large(_error):
 # default the tests and a fresh clone run under.
 
 BASE_PATH_ENV = "PREPRESS_BASE_PATH"
-# The shop's session secret. Set it and every endpoint that DOES work (uploads a file, builds a
-# template, reads geometry) demands a signed bearer token; leave it unset and the app is open, as a
-# public tool should be. Pages themselves stay reachable either way — the page tells the visitor to
-# log in, which is friendlier than a bare 401 from a URL they were given.
+# The shop's session secret. Set it and the endpoints that CHECK a file (`@require_session`) demand
+# a signed bearer token; leave it unset and the app is open, as a public tool should be. Templates
+# stay public either way — they are what we want every customer to have (customers were bounced to
+# a login, 2026-09-02). Pages stay reachable too — the page tells the visitor to log in, which is
+# friendlier than a bare 401 from a URL they were given.
 SESSION_SECRET_ENV = "PREPRESS_SESSION_SECRET"
 # Where an unauthenticated visitor is sent. `{next}` is replaced with the page they wanted.
 LOGIN_URL_ENV = "PREPRESS_LOGIN_URL"
@@ -92,6 +93,9 @@ DEFAULT_SESSION_KEY = "session_token"
 BRAND_NAME_ENV = "PREPRESS_BRAND_NAME"
 BRAND_LOGO_ENV = "PREPRESS_BRAND_LOGO"
 BRAND_ICON_ENV = "PREPRESS_BRAND_ICON"
+# The shop's own "how to prepare a file" document. A URL for the same reason as the logo: the guide
+# is the shop's content — its FTP, its prices, its products — not this project's. Unset = no link.
+GUIDE_URL_ENV = "PREPRESS_GUIDE_URL"
 # Somewhere to say "this person is using the checker", for a shop that wants to know. A URL, so
 # the app stays free of anyone's alerting: whatever is listening decides what an alert means.
 VISIT_WEBHOOK_ENV = "PREPRESS_VISIT_WEBHOOK"
@@ -140,7 +144,8 @@ def _inject_base_path():
             "path_hint": _path_hint(),
             "brand_name": os.environ.get(BRAND_NAME_ENV) or "prepress-open",
             "brand_logo": os.environ.get(BRAND_LOGO_ENV) or "",
-            "brand_icon": os.environ.get(BRAND_ICON_ENV) or ""}
+            "brand_icon": os.environ.get(BRAND_ICON_ENV) or "",
+            "guide_url": (os.environ.get(GUIDE_URL_ENV) or "").strip()}
 
 
 def _session_secret():
@@ -176,7 +181,7 @@ def _path_hint():
     if not host:
         return ""
     who = f", login {login}" if login else ""
-    return f"Serwer FTP: {host}{who}, hasło jak w instrukcji „Jak przygotować pliki”"
+    return f"Serwer FTP: {host}{who}, hasło jak w instrukcji „Jak przygotować plik do druku”"
 
 
 def _path_roots():

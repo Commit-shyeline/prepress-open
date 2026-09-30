@@ -428,6 +428,16 @@ def test_the_bar_carries_the_status_pages_controls(client, monkeypatch):
         assert '"/status/?next={next}"' in body
 
 
+def test_the_shops_guide_is_linked_only_when_configured(client, monkeypatch):
+    """The guide is the shop's document, so a bare install links nothing."""
+    guide = "/status/jak-przygotowac-plik.pdf"
+    for path in ("/plik", "/"):
+        assert guide not in client.get(path).get_data(as_text=True), path
+    monkeypatch.setenv(app_module.GUIDE_URL_ENV, guide)
+    for path in ("/plik", "/"):
+        assert f'href="{guide}"' in client.get(path).get_data(as_text=True), path
+
+
 def test_the_pages_stay_reachable_behind_the_gate(client, monkeypatch):
     """A visitor who followed a link meets the page and is told to log in — not a bare 401."""
     monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)

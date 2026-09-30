@@ -104,3 +104,4 @@ print shop.
 |---|---|
 | `PREPRESS_ADMIN_TOKEN` | enables the admin panel; unset means the panel is disabled, not open |
 | `PREPRESS_DEMO_ARTWORK` | path to a PDF whose page matches one of your templates. Its first page is rasterised and worn by the 3D flag — the marketing hero and the texture path both use it. Unset means bare cloth, which is a correct fallback. |
+| `PREPRESS_GUIDE_URL` | URL of your own "how to prepare a file" document; the landing and check pages link it. Unset means no link. |

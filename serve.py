@@ -10,7 +10,7 @@ WSGI server.
 Nothing here is shop-specific. The deployment decides who may use it through the environment:
 
     PREPRESS_ADMIN_TOKEN     the admin panel's token (unset = panel disabled)
-    PREPRESS_SESSION_SECRET  set it and every working endpoint needs a signed bearer token
+    PREPRESS_SESSION_SECRET  set it and the file-check endpoints need a signed bearer token
     PREPRESS_LOGIN_URL       where an unauthenticated visitor is sent ({next} = the page wanted)
     PREPRESS_BASE_PATH       the prefix this app is mounted under, when behind a proxy
     PREPRESS_MODELS_DIR      directory of .glb product models (unset = the 3D product list is empty)

@@ -117,11 +117,17 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
                 <input id="file" type="file" multiple
                        accept=".pdf,.tif,.tiff,.jpg,.jpeg,.png,application/pdf,image/tiff,image/jpeg,image/png">
             </label>
+            {# Outside the label: a link inside it would also open the file picker. #}
+            {% if guide_url %}
+            <p class="note" style="margin:8px 0 0">Pierwszy raz? <a href="{{ guide_url }}" target="_blank"
+                rel="noopener">Jak przygotować plik do druku (PDF)</a></p>
+            {% endif %}
             {% if path_hint %}
             <details id="pathBox" style="margin-top:12px">
                 <summary class="note" style="cursor:pointer"><b>Plik większy niż {{ upload_limit_mb }} MB?</b>
                     Wgraj go na nasz serwer FTP i wklej tu ścieżkę.</summary>
-                <p class="note" style="margin:8px 0">{{ path_hint }}. Po wgraniu wpisz ścieżkę tak,
+                <p class="note" style="margin:8px 0">{{ path_hint }}{% if guide_url %} (<a href="{{ guide_url }}"
+                    target="_blank" rel="noopener">instrukcja PDF</a>){% endif %}. Po wgraniu wpisz ścieżkę tak,
                     jak widzisz ją w programie FTP, np. <code>MojaFirma/baner.pdf</code>.</p>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
                     <input id="sharedPath" class="pick" type="text" spellcheck="false"

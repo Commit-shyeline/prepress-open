@@ -113,6 +113,7 @@ td.num { text-align: right; white-space: nowrap; }
              text-decoration: none; border: 1px solid var(--accent-mid); }
 .hero .cta:hover { filter: brightness(1.06); }
 .hero .cta:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+.hero .guide-link { color: var(--ink); font-weight: 700; font-size: 14.5px; }
 @media (max-width: 760px) {
     /* Stacked: the flag flies in the upper half at full strength, the words sit under it on the
        page's own background. Still no wash over the artwork. */
@@ -140,6 +141,8 @@ td.num { text-align: right; white-space: nowrap; }
         <p>Wgraj projekt. Sprawdzimy rozdzielczość, spady, kolory i obszar bezpieczny,
            i powiemy, co poprawić. Możesz też pobrać nasz szablon i projektować od razu na nim.</p>
         <a class="cta" href="{{ base }}/plik">Sprawdź swoje pliki</a>
+        {% if guide_url %}<a class="guide-link" href="{{ guide_url }}" target="_blank" rel="noopener">Jak
+            przygotować plik do druku (PDF)</a>{% endif %}
     </div>
 </section>
 
