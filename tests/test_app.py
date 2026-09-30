@@ -14,7 +14,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from prepress import app as app_module  # noqa: E402
-from prepress import identify, materials  # noqa: E402
+from prepress import identify, materials, messages  # noqa: E402
 
 TOKEN = "test-token-not-a-real-secret"
 BANNER = {"id": "banner-frontlit-510", "name": "Banner frontlit 510 g", "bleed_mm": 20,
@@ -560,6 +560,52 @@ def test_a_returned_blank_template_is_caught_not_passed(client):
     assert not body["summary"].lower().startswith("ok")
 
 
+def _banner_template(client, scale):
+    return client.post("/api/template", json={"items": [
+        {"material": "banner-frontlit-510", "width": "1000", "height": "500",
+         "scale": scale}]}).data
+
+
+# The same banner judged by material and size instead of by its stamp. That road always expects
+# 1:1, so at 1:10 only the scale the file was MEASURED at (`measured_at` in `_judge`) is 10 — the
+# road that tells a fix reading that scale from one reading the stamped one.
+BY_MATERIAL = {"material": "banner-frontlit-510", "width": "1000", "height": "500"}
+
+
+@pytest.mark.parametrize("road", ["stamp", "material"])
+@pytest.mark.parametrize("scale", [1, 10])
+def test_a_bare_template_is_recognised_at_any_scale(client, scale, road):
+    """A 1:10 template sent straight back read as artwork 52 mm short of the bleed, with no guides:
+    its blank edges were page millimetres divided by a full-size brutto, and the paper looked for
+    either side of its 2 mm netto line reached our own brutto line at the page edge (2026-09-30)."""
+    form = {"file": (io.BytesIO(_banner_template(client, scale)), "szablon.pdf"),
+            **(BY_MATERIAL if road == "material" else {})}
+    body = client.post("/api/check", data=form, content_type="multipart/form-data").get_json()
+    assert body["expected"]["scale"] == (scale if road == "stamp" else 1)
+    assert body["measured"]["guides_present"] is True
+    assert body["bare_template"] is True, body["summary"]
+    assert body["checks"] == []
+    assert body["summary"] == messages.render("summary.bare_template")
+
+
+@pytest.mark.parametrize("road", ["stamp", "material"])
+@pytest.mark.parametrize("scale", [1, 10])
+def test_a_bleed_shortfall_is_weighed_and_said_at_full_size(client, scale, road):
+    """Artwork stopping 15 mm short of the left edge — 1.5 page-mm at 1:10. Over half the 20 mm
+    bleed, so RED at every scale, and the customer reads the 15 mm the banner will show. In page
+    millimetres the 1:10 file weighed 1.5 against the full-size bleed: amber, "brakuje 1.5 mm"."""
+    pdf = _painted_over(_banner_template(client, scale), left_mm=15 / scale)
+    form = {"file": (io.BytesIO(pdf), "projekt.pdf"), **(BY_MATERIAL if road == "material" else {})}
+    body = client.post("/api/check", data=form, content_type="multipart/form-data").get_json()
+    assert body["expected"]["scale"] == (scale if road == "stamp" else 1)
+    assert body["bare_template"] is False
+    assert body["measured"]["blank_edges_mm"][0] == pytest.approx(15.0)
+    bleed = next(c for c in body["checks"] if c["id"] == "bleed_coverage")
+    assert bleed["level"] == "red"
+    assert bleed["values"] == {"missing": "15.0", "bleed": "20"}
+    assert "brakuje 15.0 mm" in bleed["title"]
+
+
 # ── The admin surface is gated ──────────────────────────────────────────────
 
 def test_admin_writes_are_refused_without_the_token(client):
@@ -708,9 +754,10 @@ def test_severities_round_trip_and_an_unknown_level_is_dropped(client):
                       headers=headers).get_json()["overrides"] == {"fonts": "off"}
 
 
-def _painted_over(template_pdf):
+def _painted_over(template_pdf, left_mm=0.0):
     """The template with a full-page rectangle of "artwork" inked over it — so the checker sees a
-    design (not the bare template) while the template's own fonts and stamp stay in the file."""
+    design (not the bare template) while the template's own fonts and stamp stay in the file.
+    `left_mm` of PAGE is left unpainted on the left, for artwork that stops short of the edge."""
     import pikepdf
     from reportlab.pdfgen import canvas as rl_canvas
 
@@ -720,7 +767,8 @@ def _painted_over(template_pdf):
     ink = io.BytesIO()
     painter = rl_canvas.Canvas(ink, pagesize=(width, height))
     painter.setFillColorRGB(0.2, 0.4, 0.8)
-    painter.rect(0, 0, width, height, fill=1, stroke=0)
+    left = left_mm * 72 / 25.4
+    painter.rect(left, 0, width - left, height, fill=1, stroke=0)
     painter.save()
     overlay = pikepdf.open(ink)                  # kept alive: add_overlay borrows the page
     page.add_overlay(overlay.pages[0])

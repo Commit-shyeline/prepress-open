@@ -962,7 +962,9 @@ def _judge(data, filename, form, token=None):
 
     # The bare template, said in its own words: our guides still drawn AND no artwork anywhere
     # near the edges (the blank scan found nothing but page furniture). Judging it like a design
-    # meant scolding our own spec panel for sitting in the safe area.
+    # meant scolding our own spec panel for sitting in the safe area. The blank edges come back at
+    # full size — measured at `measured_at`'s scale — so they divide by the full-size brutto as
+    # they stand; in page millimetres a 1:10 template fell ten times short of the 0.3 (2026-09-30).
     blank = facts.get("blank_edges_mm") or ()
     bare_template = bool(
         facts.get("guides_present")

@@ -1,11 +1,15 @@
 """Phase 2: measure what the ink rules need, by rendering the page.
 
-Three numbers, all in millimetres of the artwork area:
+The numbers, every one AT FULL SIZE — what the job measures once printed, whatever scale the page
+was drawn at — so a rule compares them with the material's bleed and safe margin as they stand:
 
     blank_edges_mm     untouched paper on each side — how far the design stops short of the bleed
     safe_intrusion_mm  how far ink reaches into the keep-out ring outside the safe box
-    min_dpi            effective resolution of the artwork AT FULL SIZE, from the placements
-    text_min_height_mm the smallest live glyph on the page, at full size (None when there is no text)
+    min_dpi            effective resolution of the artwork, from the placements
+    text_min_height_mm the smallest live glyph on the page (None when there is no text)
+
+GEOMETRY is the exception, and stays in page millimetres: the intrusion regions, the image
+rectangles and the die are drawn on the page by the overlay, so they keep the page's own frame.
 
 Rendering is pypdfium2 (Apache-2.0 / BSD-3), so the measurement layer adds no copyleft dependency.
 
@@ -126,13 +130,19 @@ def _first_solid_run(flags, run_length):
 
 
 def _looks_like_a_guide(flags, inset_px, clearance_px):
-    """True when there is a thin inked line at `inset_px` with clean paper on both sides of it."""
+    """True when there is a thin inked line at `inset_px` with clean paper on both sides of it.
+
+    The paper outside the line is looked for no nearer the edge than pixel 1, because pixel 0 is
+    where our own brutto guide is drawn. At 1:10 a 20 mm bleed is 2 page-mm, four pixels, so the
+    clearance reached the brutto line and read it as a design beside the netto guide — a bare 1:10
+    template measured as guide-free (2026-09-30).
+    """
     if inset_px <= 0 or inset_px >= len(flags):
         return False
     near = flags[max(0, inset_px - 1):inset_px + 2]
     if not near.any():
         return False
-    before = flags[max(0, inset_px - 1 - clearance_px):max(0, inset_px - 1)]
+    before = flags[max(1, inset_px - 1 - clearance_px):max(1, inset_px - 1)]
     after = flags[inset_px + 2:inset_px + 2 + clearance_px]
     # A line with paper on both sides is furniture; a line with ink beside it is part of a design.
     return not before.any() and not after.any()
@@ -230,7 +240,13 @@ def _measure_raster(data, expected, page_index):
 
 
 def _ink_facts(array, px_per_mm, expected):
-    """Guides, blank edges and safe-area intrusion off a rendered RGB array."""
+    """Guides, blank edges and safe-area intrusion off a rendered RGB array.
+
+    Measured in page pixels, REPORTED at full size: `expected["scale"]` is the scale the page was
+    measured at, which for a 1:N file checked against a 1:1 material-and-size expectation is N, not
+    the stamped 1. The blank edges were page millimetres until 2026-09-30, compared against a
+    full-size bleed and brutto — a 1:10 bare template read as artwork 52 mm short of the bleed.
+    """
     scale = expected.get("scale", 1) or 1
     ink = _ink(array)
     height_px, width_px = ink.shape
@@ -248,7 +264,7 @@ def _ink_facts(array, px_per_mm, expected):
 
     if not ink.any():
         # A page with no artwork at all: every edge is blank by the full artwork depth.
-        facts["blank_edges_mm"] = (width_px / px_per_mm / 2,) * 4
+        facts["blank_edges_mm"] = (width_px / px_per_mm / 2 * scale,) * 4
         facts["safe_intrusion_mm"] = 0.0
         facts["min_dpi"] = None                      # the caller reads this as "stop here"
         return facts
@@ -262,12 +278,15 @@ def _ink_facts(array, px_per_mm, expected):
         found = _first_solid_run(flags, run_px)
         return limit_mm if found is None else found / px_per_mm
 
-    facts["blank_edges_mm"] = (inward(columns_inked, half_width_mm),
-                               inward(rows_inked, half_height_mm),
-                               inward(columns_inked[::-1], half_width_mm),
-                               inward(rows_inked[::-1], half_height_mm))
+    facts["blank_edges_mm"] = tuple(edge * scale for edge in (
+        inward(columns_inked, half_width_mm),
+        inward(rows_inked, half_height_mm),
+        inward(columns_inked[::-1], half_width_mm),
+        inward(rows_inked[::-1], half_height_mm)))
     regions, worst = _intrusion_regions(_detail_mask(array), px_per_mm, expected)
-    facts["safe_intrusion_mm"] = worst
+    # The depth goes to full size with the other numbers; the regions stay where the overlay
+    # paints them, on the page.
+    facts["safe_intrusion_mm"] = round(worst * scale, 2)
     facts["safe_intrusion_regions_mm"] = regions
     return facts
 

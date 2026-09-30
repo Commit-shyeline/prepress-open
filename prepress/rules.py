@@ -267,7 +267,9 @@ def check_artwork_reaches_bleed(facts, expected, material=None):
     """Artwork must run to the page edge, or the trimmed job shows a white sliver.
 
     `blank_edges_mm` is how much untouched paper sits on each side; anything more than a rounding
-    error means the design stops short of the bleed.
+    error means the design stops short of the bleed. It is at FULL SIZE, like the bleed it is
+    weighed against and printed beside (`measure._ink_facts`) — at 1:10 it used to be page
+    millimetres, so a 15 mm shortfall read as 1.5 mm and amber instead of red (2026-09-30).
     """
     if (material or {}).get("cut_path") and facts.get("die"):
         return None                                  # cut_margins judges this against the knife

@@ -122,6 +122,41 @@ def test_the_verdict_scalar_is_derived_from_the_regions():
     assert bool(facts["safe_intrusion_regions_mm"]) == (facts["safe_intrusion_mm"] > 0)
 
 
+def test_a_page_measured_at_one_to_ten_reports_full_size_depths_and_page_regions():
+    """One frame: every scalar at full size, every region on the page. The same page measured as a
+    1:1 file and as a 1:10 one (geometry ten times larger) inks the same pixels, so the blank edge
+    and the intrusion depth come back ten times larger while the regions — what the overlay paints
+    on THIS page — do not move (2026-09-30)."""
+    buffer, pdf = _page()
+    pdf.setFillColorRGB(0.2, 0.4, 0.8)
+    pdf.rect(15 * PT, 0, 485 * PT, 800 * PT, stroke=0, fill=1)
+    pdf.drawImage(ImageReader(_checker_image()), 20 * PT, 300 * PT,
+                  width=25 * PT, height=200 * PT)
+    pdf.showPage()
+    pdf.save()
+    data = buffer.getvalue()
+
+    full = measure.measure(data, _expected())
+    tenth = measure.measure(data, dict(_expected(5000, 8000, bleed=200, safe=300), scale=10))
+    assert full["blank_edges_mm"][0] == pytest.approx(15.0)
+    assert list(tenth["blank_edges_mm"]) == pytest.approx([10 * e for e in full["blank_edges_mm"]])
+    assert full["safe_intrusion_mm"] > 0
+    assert tenth["safe_intrusion_mm"] == pytest.approx(10 * full["safe_intrusion_mm"])
+    assert tenth["safe_intrusion_regions_mm"] == full["safe_intrusion_regions_mm"]
+
+
+def test_our_brutto_line_at_the_edge_is_not_a_design_beside_the_netto_guide():
+    """Row coverage of a bare 1:10 banner template (brutto at 0, netto at 3-4, safe at 9-10): the
+    netto guide's 3 px of clearance used to reach pixel 0, our own brutto line. Ink BETWEEN the two
+    lines still makes the netto line part of a design."""
+    import numpy
+
+    rows = numpy.array([1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1], dtype=bool)
+    assert measure._looks_like_a_guide(rows, 4, 3)
+    rows[1] = True
+    assert not measure._looks_like_a_guide(rows, 4, 3)
+
+
 def test_the_safe_area_finding_carries_the_regions():
     finding = rules.check_safe_area(
         {"safe_intrusion_mm": 12.0, "safe_intrusion_regions_mm": [[0.0, 300.0, 50.0, 210.0]]},
