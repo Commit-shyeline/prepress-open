@@ -150,6 +150,65 @@ def test_a_file_with_no_template_is_judged_by_material_and_size(client):
     assert data["expected"]["material_id"] == "banner-frontlit-510"
 
 
+def _one_to_ten_banner():
+    """A 1000 x 500 mm banner with 20 mm bleed, drawn at 1:10 — a 104 x 54 mm page. The image is
+    300 DPI on the PAGE, a checkerboard logo sits 10 page-mm (100 mm at full size) in from the
+    left edge, and the live lettering is about 3.5 mm tall on the page."""
+    from PIL import Image
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas as _canvas
+
+    pt = 72 / 25.4
+    page_w, page_h = 104, 54
+    pixels = (round(page_w / 25.4 * 300), round(page_h / 25.4 * 300))
+    image = Image.new("RGB", pixels, (10, 200, 200))
+    for x in range(0, pixels[0], 5):
+        for y in range(0, pixels[1], 5):
+            image.putpixel((x, y), (200, 30, 30))
+    holder = io.BytesIO()
+    image.save(holder, format="PNG")
+    holder.seek(0)
+    buffer = io.BytesIO()
+    pdf = _canvas.Canvas(buffer, pagesize=(page_w * pt, page_h * pt))
+    pdf.drawImage(ImageReader(holder), 0, 0, width=page_w * pt, height=page_h * pt)
+    for i in range(8):
+        for j in range(8):
+            pdf.setFillColorRGB(*((0, 0, 0) if (i + j) % 2 else (1, 1, 1)))
+            pdf.rect((10 + i) * pt, (23 + j) * pt, pt, pt, stroke=0, fill=1)
+    pdf.setFillColorRGB(0, 0, 0)
+    pdf.setFont("Helvetica", 14)
+    pdf.drawString(50 * pt, 25 * pt, "NAPIS")
+    pdf.showPage()
+    pdf.save()
+    return buffer.getvalue()
+
+
+def test_a_one_to_ten_pdf_checked_by_material_and_size_is_measured_at_full_size(client):
+    """The material-and-size road expects 1:1, so a 1:10 banner was measured at PAGE size while the
+    report said it was judged at the finished size: 300 DPI passed (it prints at 30), 3.5 mm
+    lettering was flagged (it prints at 35 mm), and a logo 100 mm from the edge sat inside a safe
+    ring measured ten times too deep (2026-09-30)."""
+    banner = io.BytesIO(_one_to_ten_banner())
+    answer = client.post("/api/check", data={"file": (banner, "baner.pdf"),
+                                             "material": "banner-frontlit-510",
+                                             "width": "1000", "height": "500"},
+                         content_type="multipart/form-data").get_json()
+    checks = {c["id"]: c for c in answer["checks"]}
+    assert checks["page_size"]["code"] == "check.page_size.scaled"
+    assert checks["page_size"]["values"]["scale"] == 10
+    assert answer["expected"]["scale"] == 1, "the geometry the rules judge by is left as stamped"
+    assert answer["measured"]["min_dpi"] == 30
+    assert checks["resolution"]["level"] == "red"
+    assert checks["text_height"]["level"] == "green", checks["text_height"]["title"]
+    assert checks["safe_area"]["level"] == "green", checks["safe_area"]["title"]
+
+
+def test_the_panel_offers_no_split_threshold_now_the_roll_decides(client):
+    """`split_over_mm` went on 2026-09-30: the roll width decides panelling for the template and the
+    check alike. A control left in the panel would edit a number nothing reads."""
+    assert "split_over_mm" not in client.get("/admin").get_data(as_text=True)
+
+
 def test_a_free_size_check_refuses_an_unknown_material(client):
     sheet = client.post("/api/template", json={"items": [
         {"material": "banner-frontlit-510", "width": "100", "height": "50", "unit": "cm"}]}).data
@@ -268,6 +327,22 @@ def test_the_page_states_the_upload_limit_of_its_door(client, monkeypatch):
     assert "const UPLOAD_LIMIT_MB = 100;" in client.get("/plik").get_data(as_text=True)
     lan = client.get("/plik", headers={"X-Prepress-Open": "1"}).get_data(as_text=True)
     assert "const UPLOAD_LIMIT_MB = 1024;" in lan
+
+
+def test_the_too_large_answer_states_the_cap_that_refused_it(client, monkeypatch):
+    """From 2026-09-02 the cap was 1 GB and the 413 still said 512 MB, because the sentence kept its
+    own copy of the number. It reads the configured cap now — the same number the page states."""
+    with app_module.app.test_request_context("/api/check"):
+        said = app_module.upload_too_large(None)[0].get_json()["error"]
+    assert "1024 MB" in said and "512" not in said
+
+    monkeypatch.setitem(app_module.app.config, "MAX_CONTENT_LENGTH", 2 * 1024 * 1024)
+    too_big = io.BytesIO(b"%PDF-1.7 " + b"0" * (3 * 1024 * 1024))
+    answer = client.post("/api/check", data={"file": (too_big, "big.pdf")},
+                         content_type="multipart/form-data")
+    assert answer.status_code == 413
+    assert "limit to 2 MB" in answer.get_json()["error"]
+    assert "const UPLOAD_LIMIT_MB = 2;" in client.get("/plik").get_data(as_text=True)
 
 
 def test_a_file_on_the_shops_server_is_checked_by_path(client, monkeypatch, tmp_path):

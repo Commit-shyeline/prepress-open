@@ -4,7 +4,7 @@ Three numbers, all in millimetres of the artwork area:
 
     blank_edges_mm     untouched paper on each side — how far the design stops short of the bleed
     safe_intrusion_mm  how far ink reaches into the keep-out ring outside the safe box
-    min_dpi            effective resolution of the artwork, from `structure.placed_images`
+    min_dpi            effective resolution of the artwork AT FULL SIZE, from the placements
     text_min_height_mm the smallest live glyph on the page, at full size (None when there is no text)
 
 Rendering is pypdfium2 (Apache-2.0 / BSD-3), so the measurement layer adds no copyleft dependency.
@@ -158,11 +158,13 @@ def measure(pdf_bytes, expected, page_index=0, cut_spot=None):
     if facts.get("min_dpi", "unset") != "unset":
         return facts                                 # the blank page: nothing more to read
     placements = structure.placed_images(data, page_index)
-    facts["min_dpi"] = structure.min_significant_dpi(placements)
+    facts["min_dpi"] = _full_size_dpi(structure.min_significant_dpi(placements), scale)
     # Every placement big enough to judge by, WITH its rectangle — so a low-resolution verdict can
-    # point at the image instead of shrugging at the whole page.
+    # point at the image instead of shrugging at the whole page. The rectangle stays in page
+    # millimetres, which is what the overlay draws on; only the resolution is taken to full size.
     facts["image_placements"] = [
-        {"rect_mm": p.get("rect_mm"), "dpi": p["dpi"], "placed_mm": list(p["placed_mm"])}
+        {"rect_mm": p.get("rect_mm"), "dpi": _full_size_dpi(p["dpi"], scale),
+         "placed_mm": list(p["placed_mm"])}
         for p in structure.significant_placements(placements) if p.get("rect_mm")]
     facts["text_min_height_mm"] = _text_min_height_mm(data, page_index, scale)
     # The die, when the file draws one in a cut colorant: its geometry, and the share of its
@@ -190,6 +192,18 @@ def _thin(points):
     return [[round(x, 2), round(y, 2)] for x, y in kept]
 
 
+def _full_size_dpi(dpi, scale):
+    """A resolution read off the page, at the size the job prints — like every other number here.
+
+    A page drawn at 1:10 prints ten times larger, so an image at 300 DPI on the page is 30 DPI on
+    the banner. The raster path always divided; the PDF path did not, and passed 1:10 files at ten
+    times their real resolution (2026-09-30).
+    """
+    if dpi is None or (scale or 1) == 1:
+        return dpi
+    return round(dpi / scale, 1)
+
+
 def _unmeasurable(error):
     return {"blank_edges_mm": None, "safe_intrusion_mm": None, "min_dpi": None,
             "guides_present": None, "reason": f"{type(error).__name__}: {error}"[:140]}
@@ -208,8 +222,7 @@ def _measure_raster(data, expected, page_index):
         return _unmeasurable(error)
     facts = _ink_facts(array, px_per_mm, expected)
     facts["guides_present"] = None
-    # At full size, like every other number here: a 1:10 raster prints ten times larger.
-    facts["min_dpi"] = round(dpi / scale, 1)
+    facts["min_dpi"] = _full_size_dpi(dpi, scale)
     facts["image_placements"] = [{"rect_mm": [0, 0, round(artwork_mm[0], 1), round(artwork_mm[1], 1)],
                                   "dpi": facts["min_dpi"], "placed_mm": list(artwork_mm)}]
     facts["text_min_height_mm"] = None

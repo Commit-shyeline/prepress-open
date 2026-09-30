@@ -92,6 +92,26 @@ def choose_scale(width_mm, height_mm):
     raise ItemError(messages.notice("too_big_for_pdf", longest=_mm(longest)))
 
 
+def panel_count(material, width_mm, height_mm):
+    """How many strips a graphic of this finished size is printed in: 1 means one piece.
+
+    More than one means panelled — the short side WITH its bleed is wider than the roll, so neither
+    way round fits. Strips run along the long side, so the count follows the short one. A material
+    with no roll width (a sheet) is never panelled.
+
+    The one test for it. The generator's `panelled` notice and the checker's split warning both ask
+    here, because they used to ask different questions: the checker wanted over 5 m on BOTH sides,
+    so a 4 × 4 m banner on a 3.2 m roll was announced as welded and then checked without a word
+    (2026-09-30).
+    """
+    roll_mm = (material or {}).get("max_width_mm")
+    if not roll_mm:
+        return 1
+    bleed = float(material.get("bleed_mm") or 0.0)
+    brutto_short = min(width_mm, height_mm) + 2 * bleed
+    return max(1, math.ceil(brutto_short / float(roll_mm)))
+
+
 def resolve(material, width_mm, height_mm, label="", scale=None):
     """Material + size → the geometry a template page and a check both read.
 
@@ -112,26 +132,24 @@ def resolve(material, width_mm, height_mm, label="", scale=None):
                                         netto_w=_mm(width_mm), netto_h=_mm(height_mm)))
 
     notices = []
-    panels = 1
-    roll_mm = material.get("max_width_mm")
-    if roll_mm:
+    # Fitting the roll in EITHER direction is a non-event. Whether we turn the job on the roll is
+    # our production business, and saying so made a perfectly fine job look broken to a customer
+    # (shop rule, 2026-08-23). So: no notice at all in that case.
+    panels = panel_count(material, width_mm, height_mm)
+    if panels > 1:
+        # Neither way round fits, so the graphic is panelled — printed in strips and welded into one
+        # piece. That IS worth telling a customer, because the welds are visible in the finished
+        # product.
         brutto_short = min(width_mm, height_mm) + 2 * bleed
         brutto_long = max(width_mm, height_mm) + 2 * bleed
-        # Fitting the roll in EITHER direction is a non-event. Whether we turn the job on the roll is
-        # our production business, and saying so made a perfectly fine job look broken to a customer
-        # (shop rule, 2026-08-23). So: no notice at all in that case.
-        if brutto_short > roll_mm:
-            # Neither way round fits, so the graphic is panelled — printed in strips and welded into
-            # one piece. That IS worth telling a customer, because the welds are visible in the
-            # finished product. Strips run along the long side, so the count follows the short one.
-            panels = math.ceil(brutto_short / roll_mm)
-            long_limit = float(material.get("panel_max_long_mm") or DEFAULT_PANEL_MAX_LONG_MM)
-            short_limit = float(material.get("panel_max_short_mm") or DEFAULT_PANEL_MAX_SHORT_MM)
-            if brutto_long > long_limit or brutto_short > short_limit:
-                raise ItemError(messages.notice(
-                    "too_big_to_panel", netto_w=_mm(width_mm), netto_h=_mm(height_mm),
-                    panel_max_long=_mm(long_limit), panel_max_short=_mm(short_limit)))
-            notices.append(messages.notice("panelled", panels=panels, roll=_mm(roll_mm)))
+        long_limit = float(material.get("panel_max_long_mm") or DEFAULT_PANEL_MAX_LONG_MM)
+        short_limit = float(material.get("panel_max_short_mm") or DEFAULT_PANEL_MAX_SHORT_MM)
+        if brutto_long > long_limit or brutto_short > short_limit:
+            raise ItemError(messages.notice(
+                "too_big_to_panel", netto_w=_mm(width_mm), netto_h=_mm(height_mm),
+                panel_max_long=_mm(long_limit), panel_max_short=_mm(short_limit)))
+        notices.append(messages.notice("panelled", panels=panels,
+                                       roll=_mm(material["max_width_mm"])))
 
     resolved_scale = int(scale) if scale else choose_scale(width_mm + 2 * bleed,
                                                           height_mm + 2 * bleed)

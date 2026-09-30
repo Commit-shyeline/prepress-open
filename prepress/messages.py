@@ -224,10 +224,14 @@ CHECK_MESSAGES = {
         "Napisy poniżej {floor} mm wysokości są nieczytelne z odległości, z której ogląda się "
         "wydruk wielkoformatowy. Powiększ najmniejsze teksty.",
 
-    "check.split.required": "Grafika {netto_w}×{netto_h} mm będzie dzielona",
+    # The same fact as the `panelled` notice, said again at the check, and for the same reason
+    # without the roll width or the strip count: `{roll}` and `{panels}` are in the values for a
+    # shop that wants them back.
+    "check.split.required": "Grafika {netto_w}×{netto_h} mm będzie brytowana",
     "check.split.required.detail":
-        "Oba wymiary przekraczają {over} mm, więc wydruk powstanie z kilku części łączonych "
-        "przy wykończeniu. Trzymaj ważne elementy z dala od środka grafiki.",
+        "Przy tym rozmiarze wydruk powstanie z pasów zgrzewanych w jedną całość, a łączenia widać "
+        "z bliska. Twarze, logo i drobny tekst trzymaj z dala od łączeń — jeśli układ na to nie "
+        "pozwala, zapytaj nas, gdzie wypadnie łączenie.",
 
     "check.named_size.ok": "Rozmiar z nazwy pliku zgodny: {named_w}×{named_h} mm",
     "check.named_size.differs": "Nazwa pliku mówi {named_w}×{named_h} mm, sprawdzamy {netto_w}×{netto_h} mm",

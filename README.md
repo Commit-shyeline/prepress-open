@@ -78,7 +78,9 @@ the store is decided: short retention plus a one-time link, no backup. Custom di
 to be described by hand; only rectangles are derived automatically. Rule text is Polish for now.
 
 Panelling geometry is deliberately absent, not missing: the tool says a job will be panelled, because
-the welds show, but the strip layout belongs to the graphic team and the roll actually loaded.
+the welds show, but the strip layout belongs to the graphic team and the roll actually loaded. The
+rule is one and the same for the template and the check: panelled when the short side with its bleed
+is wider than the material's roll.
 
 ## Licence
 

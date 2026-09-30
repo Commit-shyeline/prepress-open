@@ -32,14 +32,16 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 # A template PDF request carries only JSON; the upload path is the only one that takes bytes.
-# 512 MB: flattened flag PDFs routinely pass 64 MB, and the first customer to hit the old cap
-# got an HTML 413 the frontend could not parse. The matching errorhandler keeps the answer JSON.
+# 1 GB: flattened flag PDFs routinely pass 64 MB, and the first customer to hit the old cap
+# got an HTML 413 the frontend could not parse. The matching errorhandler keeps the answer JSON,
+# and takes its number from `_upload_limit_mb` — from 2026-09-02, when the cap was raised to
+# 1 GB, until 2026-09-30 it went on saying 512 MB, because the sentence had its own copy.
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
 
 
 @app.errorhandler(413)
 def upload_too_large(_error):
-    return jsonify({"error": "Plik jest za duży — limit to 512 MB. Zmniejsz PDF "
+    return jsonify({"error": f"Plik jest za duży — limit to {_upload_limit_mb()} MB. Zmniejsz PDF "
                              "(spłaszczone bitmapy, kompresja) i spróbuj ponownie."}), 413
 
 # ── Mounting under a path, and the optional session gate ─────────────────────
@@ -928,7 +930,14 @@ def _judge(data, filename, form, token=None):
     expected = identify.stamped_geometry(stamp)
     # Which separation is the knife, when the customer said (the page offers the file's own list).
     cut_spot = (form.get("cut") or "").strip() or None
-    facts = dict(measure.measure(data, expected, page_index, cut_spot=cut_spot))
+    # A PDF drawn at 1:N against a 1:1 expectation — the material-and-size road always expects
+    # 1:1 — is MEASURED at 1:N, so its resolution, text height and safe ring come out at full size,
+    # as the page-size finding tells the customer. The rules still get the stamped geometry, so
+    # that finding still says "1:N". A raster needs none of it: its pixels are mapped onto the
+    # declared full-size box whatever page its DPI tag implies.
+    drawn = rules.drawn_scale(page_mm, expected) if kind == "pdf" else 1
+    measured_at = dict(expected, scale=drawn) if drawn > 1 else expected
+    facts = dict(measure.measure(data, measured_at, page_index, cut_spot=cut_spot))
     facts["cut_spot"] = cut_spot
     # A raster without a plausible DPI tag has no size of its own: the declared size IS its page.
     if page_mm is None:

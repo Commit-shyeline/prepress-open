@@ -375,7 +375,7 @@ def test_every_rule_the_panel_offers_is_a_rule_that_runs():
                      "page_mm": (70, 70), "length_mm": 200, "contours": 1, "closed": True,
                      "filled": True, "bare_perimeter": 0.5}}
     produced = {f["id"] for f in rules.run(facts, _expected(), STICKER)}
-    # The split rule only has something to say about a job over the threshold on both sides.
+    # The split rule only has something to say about a job too wide for the roll both ways round.
     huge = identify.stamped_geometry(generate.stamp_payload(item.resolve(BANNER, 6000, 7000)))
     produced |= {f["id"] for f in rules.run(facts, huge, STICKER)}
     # With a die on cut work the page-edge bleed and safe-area rules step aside for cut_margins;
@@ -404,14 +404,45 @@ def test_the_text_floor_is_the_materials_when_it_sets_one():
     assert _one(rules.run(facts, _expected(), lenient), "text_height")["level"] == "green"
 
 
-def test_a_job_over_the_split_threshold_on_both_sides_is_said_so():
+def test_a_job_too_wide_for_the_roll_both_ways_round_is_said_so():
     huge = identify.stamped_geometry(generate.stamp_payload(item.resolve(BANNER, 6000, 7000)))
     finding = _one(rules.run({"page_mm": (6040, 7040)}, huge, BANNER), "split")
     assert finding["level"] == "amber"
-    assert finding["values"] == {"netto_w": "6000", "netto_h": "7000", "over": "5000"}
+    assert finding["values"] == {"netto_w": "6000", "netto_h": "7000", "panels": 4, "roll": "1600"}
+    # The customer hears THAT it is welded, never the roll width or the strip count.
+    assert "1600" not in finding["title"] + finding["detail"]
     # One long side alone comes off the roll in one piece — nothing to say.
     long_one = identify.stamped_geometry(generate.stamp_payload(item.resolve(BANNER, 1000, 7000)))
     assert _one(rules.run({"page_mm": (1040, 7040)}, long_one, BANNER), "split") is None
+
+
+ROLL_3200 = dict(BANNER, max_width_mm=3200, bleed_mm=0)
+FILM_1370 = dict(STICKER, max_width_mm=1370, bleed_mm=3, safe_mm=3)
+
+
+@pytest.mark.parametrize("material, size, welded", [
+    # The case that found it: 4 x 4 m on a 3.2 m roll is welded, though neither side passes 5 m.
+    (ROLL_3200, (4000, 4000), True),
+    (ROLL_3200, (3200, 9000), False),                # exactly the roll: one piece
+    (ROLL_3200, (3300, 3000), False),                # fits turned: one piece, and nothing said
+    # The bleed counts: 1366 mm of film plus 3 mm a side is 1372, over a 1370 mm roll.
+    (FILM_1370, (1366, 2000), True),
+    (FILM_1370, (1360, 2000), False),
+    # No roll is a sheet, and a sheet is never welded — however big.
+    (dict(BANNER, max_width_mm=None), (6000, 7000), False),
+])
+def test_the_check_warns_of_welds_exactly_when_the_generator_announced_them(material, size, welded):
+    """One test, asked by both: the template's `panelled` notice and the check's split warning.
+    Until 2026-09-30 they disagreed — a 4 x 4 m banner was announced as panelled and then checked
+    without a word, because the check wanted over 5 m on BOTH sides."""
+    resolved = item.resolve(material, *size)
+    announced = "panelled" in [n["code"] for n in resolved["notices"]]
+    expected = identify.stamped_geometry(generate.stamp_payload(resolved))
+    warned = _one(rules.run({"page_mm": item.page_size_mm(resolved)}, expected, material), "split")
+    assert announced is welded
+    assert (warned is not None) is welded, warned
+    if warned:
+        assert warned["values"]["panels"] == resolved["panels"]
 
 
 def test_the_name_size_is_read_and_reconciled():
@@ -619,16 +650,16 @@ def test_every_default_message_renders_with_the_values_its_rule_supplies():
 
 # ── The whole loop, on a file that looks like a real return ─────────────────
 
-def _designer_export(netto_mm, dpi, material=BANNER):
+def _designer_export(netto_mm, dpi, material=BANNER, scale=None):
     """What a competent designer sends back: our page size, full-bleed CMYK artwork at a chosen
-    resolution, our guides gone, our stamp still on the page."""
+    resolution ON THE PAGE, our guides gone, our stamp still on the page."""
     import json
 
     import pikepdf
     from PIL import Image
     from reportlab.lib.utils import ImageReader
 
-    resolved = item.resolve(material, *netto_mm)
+    resolved = item.resolve(material, *netto_mm, scale=scale)
     page_w, page_h = item.page_size_mm(resolved)
     pixels_wide = int(page_w / 25.4 * dpi)
     pixels_high = int(pixels_wide * page_h / page_w)
@@ -683,6 +714,27 @@ def test_the_same_file_at_a_quarter_of_the_resolution_is_a_hard_error():
     assert failed == [("resolution", "red")], failed
 
 
+def test_a_pdf_drawn_at_one_to_ten_is_judged_at_full_size():
+    """300 DPI on a 1:10 page is 30 DPI on the job. The raster path always divided by the scale;
+    the PDF path did not, and passed such a file at ten times its real resolution (2026-09-30)."""
+    from prepress import measure
+
+    pdf_bytes = _designer_export((1000, 500), dpi=300, scale=10)
+    # The placement walk reads the PAGE and nothing below `measure` knows the scale — which is
+    # why the division belongs there, once, for rasters and PDFs alike.
+    assert structure.min_significant_dpi(structure.placed_images(pdf_bytes)) == 300
+    expected = identify.stamped_geometry(identify.read_stamp(pdf_bytes)["stamp"])
+    assert expected["scale"] == 10
+    facts = measure.measure(pdf_bytes, expected)
+    assert facts["min_dpi"] == 30
+    assert [p["dpi"] for p in facts["image_placements"]] == [30]
+    finding = _one(_verdict(pdf_bytes), "resolution")
+    assert finding["level"] == "red" and finding["values"] == {"dpi": "30", "floor": "100"}
+    # Still pointed at, in the page's own millimetres — the frame the overlay draws in.
+    assert finding["regions"] == [facts["image_placements"][0]["rect_mm"]]
+    assert facts["image_placements"][0]["rect_mm"][2] == pytest.approx(104, abs=0.2)
+
+
 # ── The store keeps all three blocks ────────────────────────────────────────
 
 def test_cut_path_survives_the_form_as_a_real_boolean(tmp_path):
@@ -705,6 +757,20 @@ def test_rule_severities_round_trip_and_survive_a_material_save(tmp_path):
     assert materials.load_rule_levels(store) == {"fonts": "off", "colour_mode": "red"}
     assert materials.load_messages(store) == {"check.fonts.present": "Na krzywe."}
     assert len(materials.load(store)) == 2
+
+
+def test_a_stored_split_threshold_from_before_the_roll_rule_is_ignored_and_dropped(tmp_path):
+    """`split_over_mm` meant "over this on BOTH sides". The roll width decides now, and a store
+    written before 2026-09-30 still carries the old number on every roll material."""
+    import json
+
+    store = tmp_path / "materials.json"
+    store.write_text(json.dumps({"version": 1, "materials": [dict(BANNER, split_over_mm=5000)]}),
+                     encoding="utf-8")
+    loaded = materials.load(str(store), force=True)
+    assert "split_over_mm" not in loaded[0]
+    materials.save_all(loaded, str(store))
+    assert "split_over_mm" not in store.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("level", ["off", "info", "amber", "red"])

@@ -280,7 +280,8 @@ code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; 
             <div><label for="safe_mm">Obszar bezpieczny (mm)</label><input id="safe_mm" type="number" step="0.5" value="30"></div>
             <div><label for="min_dpi">Min. DPI <span class="note">(puste = nie sprawdzamy)</span></label>
                  <input id="min_dpi" type="number" step="1" placeholder=""></div>
-            <div><label for="max_width_mm">Szerokość roli (mm) <span class="note">(puste = arkusz)</span></label>
+            <div><label for="max_width_mm">Szerokość roli (mm) <span class="note">(puste = arkusz;
+                 krótszy bok ze spadem szerszy od roli = bryt)</span></label>
                  <input id="max_width_mm" type="number" step="1" placeholder=""></div>
             <div><label for="panel_max_long_mm">Maks. bryt — dłuższy bok (mm)
                  <span class="note">(puste = 25000)</span></label>
@@ -294,9 +295,6 @@ code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; 
             <div><label for="min_text_mm">Min. wysokość tekstu (mm)
                  <span class="note">(puste = 10)</span></label>
                  <input id="min_text_mm" type="number" step="0.5" placeholder="10"></div>
-            <div><label for="split_over_mm">Dzielenie powyżej (mm)
-                 <span class="note">(puste = 5000; oba boki)</span></label>
-                 <input id="split_over_mm" type="number" step="100" placeholder="5000"></div>
             <div><label for="colour">Kolory</label>
                  <select id="colour"><option value="cmyk">CMYK</option><option value="any">dowolne</option></select></div>
             <div><label for="spec_position">Opis na szablonie
@@ -381,7 +379,7 @@ code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; 
 const el = (id) => document.getElementById(id);
 const FIELDS = ['id', 'name', 'bleed_mm', 'safe_mm', 'min_dpi', 'max_width_mm',
                 'panel_max_long_mm', 'panel_max_short_mm', 'finishing_mm', 'min_text_mm',
-                'split_over_mm', 'colour', 'spec_position', 'cut_path', 'notes'];
+                'colour', 'spec_position', 'cut_path', 'notes'];
 // A select needs a real default — an empty value shows a blank option instead of the shipped choice.
 const FIELD_DEFAULTS = { colour: 'cmyk', spec_position: 'panel', cut_path: '' };
 let DEFAULT_MESSAGES = {}, INFO_CODES = [];

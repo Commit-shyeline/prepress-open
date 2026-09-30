@@ -21,7 +21,7 @@ Three things are deliberately NOT in this file:
 A finding always carries its `id`, so a shop's severity choices survive a rewording, and the `values`
 behind the text, so a UI can show the numbers without parsing a sentence.
 """
-from . import messages, structure
+from . import item, messages, structure
 
 LEVELS = ("red", "amber", "green", "info")
 LEVEL_ORDER = {"red": 0, "amber": 1, "info": 2, "green": 3}
@@ -45,12 +45,11 @@ def _size_tolerance_mm(dimension_mm):
 # How many names to list before a report turns into a wall of text.
 MAX_NAMES_LISTED = 4
 
-# Shop defaults for the two rules whose threshold a material may override (`min_text_mm`,
-# `split_over_mm`). The numbers are the in-house engine's: 10 mm is the smallest lettering that
-# survives a large-format RIP and reads from where a banner is seen; over 5 m on BOTH sides no
-# roll exists, so the graphic has to be split before printing.
+# The shop default for the text rule, whose threshold a material may override (`min_text_mm`). The
+# number is the in-house engine's: 10 mm is the smallest lettering that survives a large-format RIP
+# and reads from where a banner is seen. The split rule has no threshold of its own — it asks the
+# material's roll width, through `item.panel_count`.
 DEFAULT_MIN_TEXT_MM = 10.0
-DEFAULT_SPLIT_OVER_MM = 5000.0
 # How much bigger than the finished size a NON-cut file may be and still be finishing (a tunnel, a
 # sleeve, a hem, a pocket) rather than a wrong size (`finishing_mm` on the material overrides).
 DEFAULT_FINISHING_MM = 500.0
@@ -95,36 +94,31 @@ def check_page_size(facts, expected, material=None):
     candidates = {(width, art_height + strip), (width, art_height)}
     actual_w, actual_h = facts["page_mm"]
 
-    def close(a, b):
-        return (abs(a[0] - b[0]) <= _size_tolerance_mm(b[0])
-                and abs(a[1] - b[1]) <= _size_tolerance_mm(b[1]))
-
     for candidate in candidates:
-        if close((actual_w, actual_h), candidate):
+        if _close((actual_w, actual_h), candidate):
             return _finding("page_size", "green", "ok",
                             page_w=_mm(actual_w), page_h=_mm(actual_h))
     for candidate in candidates:
-        if close((actual_h, actual_w), candidate):
+        if _close((actual_h, actual_w), candidate):
             return _finding("page_size", "amber", "rotated",
                             expected_w=_mm(candidate[0]), expected_h=_mm(candidate[1]),
                             page_w=_mm(actual_w), page_h=_mm(actual_h))
     # A page that is the artwork at 1:N is not a wrong size, it is a scaled file — common for
     # large format, where a 1:1 PDF of a 10 m banner cannot exist. Said as information; the
-    # resolution and text rules already judge at full size because `expected` carries the scale.
-    if expected["scale"] == 1:
-        for divisor in SCALES_RECOGNISED:
-            if (close((actual_w, actual_h), (width / divisor, art_height / divisor))
-                    or close((actual_h, actual_w), (width / divisor, art_height / divisor))):
-                return _finding("page_size", "info", "scaled", scale=divisor,
-                                expected_w=_mm(width), expected_h=_mm(art_height),
-                                page_w=_mm(actual_w), page_h=_mm(actual_h))
+    # resolution, text and safe-area numbers are already at full size, because the check measures
+    # such a file at the scale it was drawn at (`drawn_scale`).
+    divisor = drawn_scale(facts["page_mm"], expected)
+    if divisor > 1:
+        return _finding("page_size", "info", "scaled", scale=divisor,
+                        expected_w=_mm(width), expected_h=_mm(art_height),
+                        page_w=_mm(actual_w), page_h=_mm(actual_h))
     actual, brutto = (actual_w, actual_h), (width, art_height)
     values = {"expected_w": _mm(width), "expected_h": _mm(art_height + strip),
               "page_w": _mm(actual_w), "page_h": _mm(actual_h)}
     # The finished size exactly, on a material that wants bleed: the commonest real mistake, and
     # a different one from a wrong size — the artwork is right, the bleed was never added.
     netto = tuple(v / expected["scale"] for v in expected["netto_mm"])
-    if expected["bleed_mm"] > 0 and (close(actual, netto) or close((actual_h, actual_w), netto)):
+    if expected["bleed_mm"] > 0 and (_close(actual, netto) or _close((actual_h, actual_w), netto)):
         return _finding("page_size", "amber", "no_bleed", bleed=_mm(expected["bleed_mm"]), **values)
     # Cut work: "3 mm spadu" is added per edge by some and per dimension by others, so anything
     # from the finished size up to twice the bleed per side is a correctly prepared plate (the
@@ -151,6 +145,33 @@ def check_page_size(facts, expected, material=None):
         if _oversize(actual, brutto):
             return _finding("page_size", "amber", "oversize", allowance=_mm(allowance), **values)
     return _finding("page_size", "red", "wrong", **values)
+
+
+def _close(actual, wanted):
+    """Two (w, h) sizes the same within the size tolerance, in this orientation."""
+    return (abs(actual[0] - wanted[0]) <= _size_tolerance_mm(wanted[0])
+            and abs(actual[1] - wanted[1]) <= _size_tolerance_mm(wanted[1]))
+
+
+def drawn_scale(page_mm, expected):
+    """N when this page is the expected artwork drawn at 1:N instead of full size, else 1.
+
+    Only asked of a 1:1 expectation — a template issued at 1:N already says so in its stamp. The
+    material-and-size check always expects 1:1, while a big banner can only arrive at 1:N, so this
+    answer is needed twice: here, for the page-size finding, and before measuring, so that
+    resolution, text height and the safe ring are judged at full size as that finding tells the
+    customer they were. Until 2026-09-30 only the finding asked, and a 1:10 PDF passed 300 DPI
+    that prints at 30.
+    """
+    if expected["scale"] != 1 or not page_mm:
+        return 1
+    width, art_height = expected["brutto_mm"]
+    actual = tuple(page_mm)
+    for divisor in SCALES_RECOGNISED:
+        drawn = (width / divisor, art_height / divisor)
+        if _close(actual, drawn) or _close(actual[::-1], drawn):
+            return divisor
+    return 1
 
 
 # Below this much growth over the finished size a cut file has no bleed worth the name.
@@ -498,13 +519,18 @@ def check_text_height(facts, expected, material=None):
 
 
 def check_split_required(facts, expected, material=None):
-    """Over the split threshold on BOTH sides, the job cannot come off one roll in one piece."""
-    over = float((material or {}).get("split_over_mm") or DEFAULT_SPLIT_OVER_MM)
+    """Too wide for the roll both ways round, the job is panelled: printed in strips and welded.
+
+    Asked of `item.panel_count`, the same test the generator's `panelled` notice uses, so a template
+    and the check of what comes back cannot disagree about which job is welded. Fitting the roll one
+    way round says nothing, here as there.
+    """
     width, height = expected["netto_mm"]
-    if width <= over or height <= over:
+    panels = item.panel_count(material, width, height)
+    if panels <= 1:
         return None
     return _finding("split", "amber", "required", netto_w=_mm(width), netto_h=_mm(height),
-                    over=_mm(over))
+                    panels=panels, roll=_mm(material["max_width_mm"]))
 
 
 def check_named_size(facts, expected, material=None):
