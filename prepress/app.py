@@ -944,6 +944,9 @@ def _judge(data, filename, form, token=None):
     measured_at = dict(expected, scale=drawn) if drawn > 1 else expected
     facts = dict(measure.measure(data, measured_at, page_index, cut_spot=cut_spot))
     facts["cut_spot"] = cut_spot
+    # The scale the page's own millimetres are at, for the rules that weigh page geometry — the
+    # die, a declared TrimBox — against the template's full-size numbers (`rules._page_scale`).
+    facts["measured_scale"] = measured_at["scale"]
     # A raster without a plausible DPI tag has no size of its own: the declared size IS its page.
     if page_mm is None:
         page_mm = [expected["brutto_mm"][0] / expected["scale"],

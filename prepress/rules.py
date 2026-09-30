@@ -174,6 +174,17 @@ def drawn_scale(page_mm, expected):
     return 1
 
 
+def _page_scale(facts, expected):
+    """The scale the returned PAGE is drawn at, for a rule weighing page geometry — a die, a
+    declared box — against the template's full-size numbers: the scale the check measured the page
+    at (`measured_scale`, N for a 1:N file on the 1:1 material-and-size road), else the stamp's.
+
+    Until 2026-09-30 the die margins ignored the scale and the TrimBox took the stamp's, so a
+    correctly bled 1:10 file read as cut too tight, and on the material road as a wrong trim.
+    """
+    return facts.get("measured_scale") or expected.get("scale") or 1
+
+
 # Below this much growth over the finished size a cut file has no bleed worth the name.
 MIN_DETECTABLE_BLEED_MM = 1.0
 
@@ -236,9 +247,14 @@ def check_declared_trim(facts, expected, material=None):
     media = boxes.get("mediabox")
     if media and abs(trim[0] - media[0]) <= 0.2 and abs(trim[1] - media[1]) <= 0.2:
         return None
-    expected_w, expected_h = (v / expected["scale"] for v in expected["netto_mm"])
-    values = {"trim_w": _mm(trim[0]), "trim_h": _mm(trim[1]),
-              "expected_w": _mm(expected_w), "expected_h": _mm(expected_h)}
+    # Compared on the page, with the page's own tolerance, as the page size is — and SAID at full
+    # size, because "rozmiar gotowy" is what the job is ordered and cut at: a 1:10 file read
+    # "zgodna z rozmiarem gotowym: 100×50 mm" for a 1000 x 500 banner.
+    scale = _page_scale(facts, expected)
+    expected_w, expected_h = (v / scale for v in expected["netto_mm"])
+    values = {"trim_w": _mm(trim[0] * scale), "trim_h": _mm(trim[1] * scale),
+              "expected_w": _mm(expected["netto_mm"][0]),
+              "expected_h": _mm(expected["netto_mm"][1])}
     if (abs(trim[0] - expected_w) <= _size_tolerance_mm(expected_w)
             and abs(trim[1] - expected_h) <= _size_tolerance_mm(expected_h)):
         return _finding("declared_trim", "green", "ok", **values)
@@ -417,6 +433,10 @@ def check_cut_margins(facts, expected, material=None):
 
     Measured against the DIE, not the page — that is the point of finding it. The bounding box says
     nothing about a shaped die, so the outline itself was sampled (`die.bare_perimeter`).
+
+    The die is page geometry and the bleed is the material's full-size number, so the gaps are
+    taken to full size before they are weighed against it and printed beside it — at 1:10 a
+    correctly bled file used to read "za mało pliku … z lewej 2.5 mm" against a 20 mm bleed.
     """
     found = facts.get("die")
     if not found or not facts.get("page_mm"):
@@ -425,7 +445,9 @@ def check_cut_margins(facts, expected, material=None):
     ox, oy = found["origin_mm"]
     w, h = found["size_mm"]
     bleed = float((material or {}).get("bleed_mm") or expected.get("bleed_mm") or 0) or 3.0
-    outside = {"left": ox, "top": oy, "right": page_w - ox - w, "bottom": page_h - oy - h}
+    scale = _page_scale(facts, expected)
+    outside = {"left": ox * scale, "top": oy * scale, "right": (page_w - ox - w) * scale,
+               "bottom": (page_h - oy - h) * scale}
     off_sheet = [side for side, gap in outside.items() if gap < -0.5]
     values = {"cut": found["colorant"], "bleed": _mm(bleed)}
     if off_sheet:

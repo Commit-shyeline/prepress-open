@@ -616,6 +616,78 @@ def test_a_bleed_shortfall_is_weighed_and_said_at_full_size(client, scale, road)
     assert "brakuje 15.0 mm" in bleed["title"]
 
 
+def _with_trimbox(pdf_bytes, width_mm, height_mm):
+    """The file with a TrimBox of this many PAGE millimetres declared, centred on the page."""
+    import pikepdf
+
+    source = pikepdf.open(io.BytesIO(pdf_bytes))
+    page = source.pages[0]
+    page_w, page_h = float(page.mediabox[2]), float(page.mediabox[3])
+    w, h = width_mm * 72 / 25.4, height_mm * 72 / 25.4
+    page.obj[pikepdf.Name("/TrimBox")] = pikepdf.Array(
+        [(page_w - w) / 2, (page_h - h) / 2, (page_w + w) / 2, (page_h + h) / 2])
+    out = io.BytesIO()
+    source.save(out)
+    return out.getvalue()
+
+
+@pytest.mark.parametrize("road", ["stamp", "material"])
+@pytest.mark.parametrize("scale", [1, 10])
+def test_a_declared_trimbox_is_judged_at_the_scale_the_page_is_drawn(client, scale, road):
+    """A TrimBox on the finished size is right at any scale and is said at full size; one 10 %
+    narrow is wrong at any scale. The material road expects 1:1 and divided by that, so every
+    correct 1:10 TrimBox read red, and the stamped road told a 1000 x 500 banner its finished
+    size was 100×50 mm (2026-09-30)."""
+    design = _painted_over(_banner_template(client, scale))
+
+    def declared_trim(width_mm, height_mm):
+        pdf = _with_trimbox(design, width_mm / scale, height_mm / scale)
+        form = {"file": (io.BytesIO(pdf), "projekt.pdf"),
+                **(BY_MATERIAL if road == "material" else {})}
+        body = client.post("/api/check", data=form, content_type="multipart/form-data").get_json()
+        assert body["expected"]["scale"] == (scale if road == "stamp" else 1)
+        return next(c for c in body["checks"] if c["id"] == "declared_trim")
+
+    right = declared_trim(1000, 500)
+    assert right["level"] == "green", right["title"]
+    assert right["values"] == {"trim_w": "1000", "trim_h": "500",
+                               "expected_w": "1000", "expected_h": "500"}
+    assert "1000×500 mm" in right["title"]
+    assert declared_trim(900, 500)["level"] == "red"
+
+
+CUT_BANNER = dict(BANNER, id="baner-ciety", name="Baner cięty", cut_path=True)
+
+
+@pytest.mark.parametrize("road", ["stamp", "material"])
+@pytest.mark.parametrize("scale", [1, 10])
+def test_the_file_beyond_the_knife_is_weighed_at_full_size(client, scale, road):
+    """25 mm of artwork beyond the knife is a good cut file at any scale; 5 mm is too little
+    against a 20 mm bleed, and the customer reads 5 mm. The die margins ignored the scale: at 1:10
+    the good file read as too tight ("z lewej 2.5 mm") and the tight one said 0.5 mm (2026-09-30)."""
+    client.post("/api/admin/materials", headers={"X-Admin-Token": TOKEN},
+                json={"material": CUT_BANNER})
+    template = client.post("/api/template", json={"items": [
+        {"material": CUT_BANNER["id"], "width": "1000", "height": "500", "scale": scale}]}).data
+    by_material = {"material": CUT_BANNER["id"], "width": "1000", "height": "500"}
+
+    def cut_margins(gap_mm):
+        pdf = _painted_over(template, die_gap_mm=gap_mm / scale)
+        form = {"file": (io.BytesIO(pdf), "wykrojnik.pdf"),
+                **(by_material if road == "material" else {})}
+        body = client.post("/api/check", data=form, content_type="multipart/form-data").get_json()
+        assert body["expected"]["scale"] == (scale if road == "stamp" else 1)
+        assert body["die"]["contours"] == 1
+        return next(c for c in body["checks"] if c["id"] == "cut_margins")
+
+    good = cut_margins(25)
+    assert good["level"] == "green", good["title"]
+    tight = cut_margins(5)
+    assert tight["code"] == "check.cut_margins.tight"
+    assert tight["values"]["sides"] == ("z lewej 5.0 mm, u góry 5.0 mm, "
+                                        "z prawej 5.0 mm, u dołu 5.0 mm")
+
+
 # ── The admin surface is gated ──────────────────────────────────────────────
 
 def test_admin_writes_are_refused_without_the_token(client):
@@ -764,11 +836,13 @@ def test_severities_round_trip_and_an_unknown_level_is_dropped(client):
                       headers=headers).get_json()["overrides"] == {"fonts": "off"}
 
 
-def _painted_over(template_pdf, left_mm=0.0):
+def _painted_over(template_pdf, left_mm=0.0, die_gap_mm=None):
     """The template with a full-page rectangle of "artwork" inked over it — so the checker sees a
     design (not the bare template) while the template's own fonts and stamp stay in the file.
-    `left_mm` of PAGE is left unpainted on the left, for artwork that stops short of the edge."""
+    `left_mm` of PAGE is left unpainted on the left, for artwork that stops short of the edge;
+    `die_gap_mm` strokes a knife in a `Cut` separation that far in from every page edge."""
     import pikepdf
+    from reportlab.lib.colors import CMYKColorSep
     from reportlab.pdfgen import canvas as rl_canvas
 
     source = pikepdf.open(io.BytesIO(template_pdf))
@@ -779,6 +853,11 @@ def _painted_over(template_pdf, left_mm=0.0):
     painter.setFillColorRGB(0.2, 0.4, 0.8)
     left = left_mm * 72 / 25.4
     painter.rect(left, 0, width - left, height, fill=1, stroke=0)
+    if die_gap_mm is not None:
+        gap = die_gap_mm * 72 / 25.4
+        painter.setStrokeColor(CMYKColorSep(0, 1, 0, 0, spotName="Cut"))
+        painter.setLineWidth(0.5)
+        painter.rect(gap, gap, width - 2 * gap, height - 2 * gap, stroke=1, fill=0)
     painter.save()
     overlay = pikepdf.open(ink)                  # kept alive: add_overlay borrows the page
     page.add_overlay(overlay.pages[0])

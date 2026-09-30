@@ -849,3 +849,27 @@ def test_a_die_hugging_the_page_edge_is_too_tight_not_unmeasured():
     roomy = {**die, "origin_mm": (10, 10), "page_mm": (170, 120)}
     assert _one(rules.run({"page_mm": (170, 120), "die": roomy}, expected, material),
                 "cut_margins")["code"] == "check.cut_margins.unmeasured"
+
+
+def test_page_geometry_is_weighed_at_the_scale_the_page_is_drawn():
+    """A 1000 x 500 cut banner at 1:10: knife 2.5 page-mm in (25 mm, past the 20 mm bleed) and a
+    TrimBox on the finished size. The page's scale is the one the check measured it at
+    (`measured_scale`), else the stamp's — and taken as 1:1, the same page is too tight a cut and
+    a wrong trim, which is what the material-and-size road used to say (2026-09-30)."""
+    at_ten = identify.stamped_geometry(generate.stamp_payload(item.resolve(STICKER, 1000, 500,
+                                                                           scale=10)))
+    at_one = identify.stamped_geometry(generate.stamp_payload(item.resolve(STICKER, 1000, 500)))
+    die = {"colorant": "Cut", "origin_mm": (2.5, 2.5), "size_mm": (99.0, 49.0),
+           "page_mm": (104.0, 54.0), "length_mm": 296, "contours": 1, "closed": True,
+           "filled": False, "bare_perimeter": 0.0}
+    facts = {"page_mm": (104.0, 54.0), "die": die,
+             "declared_boxes_mm": {"mediabox": (104.0, 54.0), "trimbox": (100.0, 50.0)}}
+    for expected, measured in ((at_ten, {}), (at_one, {"measured_scale": 10})):
+        findings = rules.run({**facts, **measured}, expected, STICKER)
+        assert _one(findings, "cut_margins")["level"] == "green"
+        trim = _one(findings, "declared_trim")
+        assert trim["level"] == "green" and (trim["values"]["trim_w"], trim["values"]["trim_h"]) == (
+            "1000", "500")
+    as_one_to_one = rules.run(facts, at_one, STICKER)
+    assert _one(as_one_to_one, "cut_margins")["code"] == "check.cut_margins.tight"
+    assert _one(as_one_to_one, "declared_trim")["level"] == "red"
