@@ -66,7 +66,7 @@ REGION_TILE_MM = 10.0
 REGION_TILE_DETAIL_SHARE = 0.06
 
 
-def _render(pdf_bytes, page_index, artwork_height_mm=None):
+def _render(pdf_bytes, page_index, artwork_height_mm=None, target_px_per_mm=TARGET_PX_PER_MM):
     """(numpy RGB array, pixels-per-mm). The spec strip is cropped off before anything is measured,
     because page furniture is not artwork and would read as ink at the bottom edge."""
     import numpy
@@ -77,7 +77,7 @@ def _render(pdf_bytes, page_index, artwork_height_mm=None):
         page = document[page_index]
         width_pt, height_pt = page.get_size()
         width_mm = width_pt * 25.4 / 72
-        scale_px_per_mm = min(TARGET_PX_PER_MM, MAX_RENDER_PX / max(width_mm, 1))
+        scale_px_per_mm = min(target_px_per_mm, MAX_RENDER_PX / max(width_mm, 1))
         image = page.render(scale=scale_px_per_mm * 25.4 / 72).to_pil().convert("RGB")
     finally:
         document.close()
@@ -178,17 +178,44 @@ def measure(pdf_bytes, expected, page_index=0, cut_spot=None):
         for p in structure.significant_placements(placements) if p.get("rect_mm")]
     facts["text_min_height_mm"] = _text_min_height_mm(data, page_index, scale)
     # The die, when the file draws one in a cut colorant: its geometry, and the share of its
-    # perimeter with bare paper a bleed's width outside — sampled on the same render.
+    # perimeter with bare paper a bleed's width outside — sampled on the same render, or on a finer
+    # one when the bleed is too few of its pixels (`_sampling_render`).
     facts["die"] = die.geometry(data, page_index, cut_spot)
     if facts["die"]:
+        # A bleed's width outside the knife, on the page: floored at 1 mm of the JOB (a bleed of 0
+        # would sample the knife itself), not 1 mm of page — at 1:10 that was 10 mm, past a 5 mm
+        # bleed and off the sheet, and a correctly bled file came back unmeasured (2026-09-30).
+        sample_mm = max(expected["bleed_mm"], 1.0) / scale
+        sample_array, sample_px_per_mm = _sampling_render(
+            data, page_index, artwork_height_mm, array, px_per_mm, sample_mm)
         facts["die"]["bare_perimeter"] = die.bare_perimeter(
-            array, px_per_mm, facts["die"]["polylines"],
-            max(expected["bleed_mm"] / scale, 1.0), PAPER_MIN_CHANNEL)
+            sample_array, sample_px_per_mm, facts["die"]["polylines"], sample_mm,
+            PAPER_MIN_CHANNEL)
         # The outline itself goes to the page (the overlay draws the knife, not a rectangle);
         # thinned so a curvy die does not ship thousands of points.
         facts["die"]["outline_mm"] = [_thin(line) for line in facts["die"]["polylines"]]
         del facts["die"]["polylines"]                # full geometry was for the rules
     return facts
+
+
+def _sampling_render(data, page_index, artwork_height_mm, array, px_per_mm, sample_mm):
+    """The render to sample the die's surroundings on: the one in hand, or a finer one when a
+    bleed's width outside the knife is under `die.MIN_SAMPLE_STEP_PX` pixels on it.
+
+    Nearer than that the sample reads the stroke's own antialiasing, so the die pushes it out to
+    that many pixels — and a small bleed at 1:N (5 mm at 1:10 is one pixel at 2 px/mm) was pushed
+    past the page edge. Finer, within the main render's pixel budget on the page's longest side;
+    past that budget the coarse render stands, and an unmeasured die says so honestly.
+    """
+    height_px, width_px = array.shape[:2]
+    longest_mm = max(width_px, height_px) / px_per_mm
+    finer = min(die.MIN_SAMPLE_STEP_PX / sample_mm, MAX_RENDER_PX / max(longest_mm, 1))
+    if finer <= px_per_mm:
+        return array, px_per_mm
+    try:
+        return _render(data, page_index, artwork_height_mm, target_px_per_mm=finer)
+    except Exception:                                # noqa: BLE001 — the coarse render still answers
+        return array, px_per_mm
 
 
 OUTLINE_POINTS_MAX = 400

@@ -877,3 +877,43 @@ def test_page_geometry_is_weighed_at_the_scale_the_page_is_drawn():
     assert _one(as_one_to_one, "declared_trim")["level"] == "red"
     knife = _one(as_one_to_one, "cut_geometry")["values"]
     assert (knife["cut_w"], knife["cut_h"], knife["length"]) == ("99", "49", "296 mm")
+
+
+BOARD = dict(STICKER, id="plansza-cieta", name="Plansza cięta", bleed_mm=5, safe_mm=10)
+
+
+def _cut_board(scale, stops_on_the_knife):
+    """A 1000 x 500 mm board with a 5 mm bleed, drawn at 1:`scale`: the knife on the finished size,
+    the artwork out to every page edge — or stopping ON the knife along the right side."""
+    pt = 72 / 25.4
+    bleed, width, height = 5 / scale, 1010 / scale, 510 / scale
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=(width * pt, height * pt))
+    pdf.setFillColorRGB(0.2, 0.4, 0.8)
+    pdf.rect(0, 0, (width - bleed if stops_on_the_knife else width) * pt, height * pt,
+             stroke=0, fill=1)
+    pdf.setStrokeColor(CMYKColorSep(0, 1, 0, 0, spotName="Cut"))
+    pdf.setLineWidth(0.5)
+    pdf.rect(bleed * pt, bleed * pt, (width - 2 * bleed) * pt, (height - 2 * bleed) * pt,
+             stroke=1, fill=0)
+    pdf.showPage()
+    pdf.save()
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize("scale", [1, 10])
+def test_a_small_bleed_around_the_knife_is_sampled_at_any_scale(scale):
+    """5 mm of bleed is half a page-millimetre at 1:10 — one pixel of the render — and the sample
+    outside the knife was floored at 1 page-mm, 10 mm of job: past the page edge, so a good file
+    and one whose artwork stops on the knife both came back "unmeasured" (2026-09-30)."""
+    from prepress import measure
+
+    expected = identify.stamped_geometry(generate.stamp_payload(item.resolve(BOARD, 1000, 500,
+                                                                             scale=scale)))
+    page = {"page_mm": (1010 / scale, 510 / scale)}
+    good = rules.run({**page, **measure.measure(_cut_board(scale, False), expected)},
+                     expected, BOARD)
+    assert _one(good, "cut_margins")["code"] == "check.cut_margins.ok"
+    bare = rules.run({**page, **measure.measure(_cut_board(scale, True), expected)},
+                     expected, BOARD)
+    assert _one(bare, "cut_margins")["code"] == "check.cut_margins.bare"

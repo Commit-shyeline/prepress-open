@@ -694,6 +694,29 @@ def test_the_knife_is_measured_and_weighed_at_full_size(client, scale, road):
                                         "z prawej 5.0 mm, u dołu 5.0 mm")
 
 
+CUT_BOARD = dict(BANNER, id="plansza-cieta", name="Plansza cięta", bleed_mm=5, safe_mm=10,
+                 cut_path=True)
+
+
+@pytest.mark.parametrize("road", ["stamp", "material"])
+@pytest.mark.parametrize("scale", [1, 10])
+def test_a_knife_one_small_bleed_from_the_edge_is_measured_at_any_scale(client, scale, road):
+    """The correctly prepared cut file: its knife a 5 mm bleed from the page edge — half a
+    page-millimetre at 1:10. The sample outside the knife landed past the edge there, and the file
+    came back "Nie zmierzyliśmy grafiki wokół wykrojnika" (2026-09-30)."""
+    client.post("/api/admin/materials", headers={"X-Admin-Token": TOKEN},
+                json={"material": CUT_BOARD})
+    template = client.post("/api/template", json={"items": [
+        {"material": CUT_BOARD["id"], "width": "1000", "height": "500", "scale": scale}]}).data
+    form = {"file": (io.BytesIO(_painted_over(template, die_gap_mm=5 / scale)), "plansza.pdf"),
+            **({"material": CUT_BOARD["id"], "width": "1000", "height": "500"}
+               if road == "material" else {})}
+    body = client.post("/api/check", data=form, content_type="multipart/form-data").get_json()
+    assert body["expected"]["scale"] == (scale if road == "stamp" else 1)
+    margins = next(c for c in body["checks"] if c["id"] == "cut_margins")
+    assert margins["code"] == "check.cut_margins.ok", margins["title"]
+
+
 # ── The admin surface is gated ──────────────────────────────────────────────
 
 def test_admin_writes_are_refused_without_the_token(client):
