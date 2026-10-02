@@ -882,9 +882,10 @@ def test_page_geometry_is_weighed_at_the_scale_the_page_is_drawn():
 BOARD = dict(STICKER, id="plansza-cieta", name="Plansza cięta", bleed_mm=5, safe_mm=10)
 
 
-def _cut_board(scale, stops_on_the_knife):
+def _cut_board(scale, stops_on_the_knife=False, bare_side=None):
     """A 1000 x 500 mm board with a 5 mm bleed, drawn at 1:`scale`: the knife on the finished size,
-    the artwork out to every page edge — or stopping ON the knife along the right side."""
+    the artwork out to every page edge — or stopping ON the knife along the right side, or, on
+    `bare_side`, between the knife and the page edge from 10 % to 90 % of that side's length."""
     pt = 72 / 25.4
     bleed, width, height = 5 / scale, 1010 / scale, 510 / scale
     buffer = io.BytesIO()
@@ -892,6 +893,13 @@ def _cut_board(scale, stops_on_the_knife):
     pdf.setFillColorRGB(0.2, 0.4, 0.8)
     pdf.rect(0, 0, (width - bleed if stops_on_the_knife else width) * pt, height * pt,
              stroke=0, fill=1)
+    pdf.setFillColorRGB(1, 1, 1)
+    if bare_side == "top":
+        pdf.rect(0.1 * width * pt, (height - bleed) * pt, 0.8 * width * pt, bleed * pt,
+                 stroke=0, fill=1)
+    elif bare_side == "right":
+        pdf.rect((width - bleed) * pt, 0.1 * height * pt, bleed * pt, 0.8 * height * pt,
+                 stroke=0, fill=1)
     pdf.setStrokeColor(CMYKColorSep(0, 1, 0, 0, spotName="Cut"))
     pdf.setLineWidth(0.5)
     pdf.rect(bleed * pt, bleed * pt, (width - 2 * bleed) * pt, (height - 2 * bleed) * pt,
@@ -917,3 +925,21 @@ def test_a_small_bleed_around_the_knife_is_sampled_at_any_scale(scale):
     bare = rules.run({**page, **measure.measure(_cut_board(scale, True), expected)},
                      expected, BOARD)
     assert _one(bare, "cut_margins")["code"] == "check.cut_margins.bare"
+
+
+@pytest.mark.parametrize("side, share", [("top", 0.8 * 1000 / 3000), ("right", 0.8 * 500 / 3000)])
+@pytest.mark.parametrize("scale", [1, 10])
+def test_artwork_stopping_on_the_knife_along_a_side_is_caught(scale, side, share):
+    """Artwork stopping ON the knife along 80 % of a side but reaching past it at the corners. A
+    rectangle was sampled at its four corners only, so this passed green on every side; the right
+    and bottom sides of a knife exactly a bleed from the edge were not sampled at all (2026-10-01).
+    The share is now of the perimeter: 800 of 3000 mm on the top, 400 on the right."""
+    from prepress import measure
+
+    expected = identify.stamped_geometry(generate.stamp_payload(item.resolve(BOARD, 1000, 500,
+                                                                             scale=scale)))
+    facts = measure.measure(_cut_board(scale, bare_side=side), expected)
+    assert facts["die"]["bare_perimeter"] == pytest.approx(share, abs=0.02)
+    finding = _one(rules.run({"page_mm": (1010 / scale, 510 / scale), **facts}, expected, BOARD),
+                   "cut_margins")
+    assert finding["code"] == "check.cut_margins.bare"
