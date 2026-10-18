@@ -111,6 +111,50 @@ def test_a_sheet_with_its_production_file_is_issued_as_that_page(client, tmp_pat
     assert not os.path.isfile(materials.source_path(token))
 
 
+def _panel(x, y, width, height):
+    """A stored outline: one of a siatka's panels, marked as a cut."""
+    return {"type": "cut", "safe_base": False, "start": [x, y], "closed": True,
+            "segments": [["l", x + width, y], ["l", x + width, y + height], ["l", x, y + height]],
+            "width_mm": width, "height_mm": height, "origin_mm": [x, y]}
+
+
+def test_a_sheet_s_panels_marked_as_cuts_get_brutto_and_safe_lines_and_the_panel_moves_aside(client):
+    panels = [_panel(900, 1100, 725, 353), _panel(546, 1487, 353, 412)]
+    saved = _save_sheet(client, outlines=panels, bleed_mm=2, safe_mm=5)
+    assert saved.status_code == 200, saved.get_json()
+    template = saved.get_json()["template"]
+    assert len(template["outlines"]) == 2
+    assert template["trim_mm"] == [1079, 799]                   # the union of the panels, as a flag's hem + body
+    client.post(f"/api/admin/templates/{template['token']}/source", headers={"X-Admin-Token": TOKEN},
+                data={"file": (io.BytesIO(_production_sheet()), "szablon.pdf")}, content_type="multipart/form-data")
+    sheet = client.get(f"/api/templates/{template['token']}/pdf")
+    assert sheet.status_code == 200
+    stamp = identify.read_stamp(sheet.data)["stamp"]
+    assert any("brutto: dorobione" in note for note in stamp["notes"])
+    assert any("obszar bezpieczny: dorobiony" in note for note in stamp["notes"])
+    # the stamp's finished size is the panels' union at full size, the page as drawn
+    assert stamp["netto_mm"] == [10790, 7990] and stamp["page_mm"] == [2300, 2300]
+    # the spec panel's home is clear of both panels
+    from prepress import from_template
+    home = from_template._free_box_mm(2300, 2300, template["outlines"])
+    assert home is not None
+    for panel in panels:
+        left, bottom = panel["origin_mm"]
+        right, top = left + panel["width_mm"], bottom + panel["height_mm"]
+        assert home[2] <= left or home[0] >= right or home[3] <= bottom or home[1] >= top, (home, panel["origin_mm"])
+    assert (home[2] - home[0]) * (home[3] - home[1]) > 0.1 * 2300 * 2300
+
+
+def test_the_free_box_is_the_largest_empty_rectangle():
+    from prepress import from_template
+    # one panel in the top-left quarter: the free box is the bottom half or the right half, not the panel
+    home = from_template._free_box_mm(1000, 1000, [_panel(0, 500, 500, 500)])
+    assert home is not None
+    assert not (home[0] < 500 - 1 and home[3] > 500 + 1)     # never inside the panel's quarter
+    assert (home[2] - home[0]) * (home[3] - home[1]) >= 0.4 * 1000 * 1000
+    assert from_template._free_box_mm(1000, 1000, []) is None
+
+
 def test_a_bad_scale_is_refused(client):
     assert _save_sheet(client, scale=0).status_code == 400
     assert _save_sheet(client, scale="dziesięć").status_code == 400

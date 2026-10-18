@@ -173,6 +173,15 @@ def _sheet_from_source(template, source, title=None):
 
     from . import specblock
 
+    # The panels the admin marked as cuts get their brutto and safe lines derived like a flat
+    # template's; a sheet whose only cut is the page draws no lines of its own.
+    try:
+        drawing, notes = derive(template)
+    except TemplateError as problem:
+        cuts = [o for o in (template.get("outlines") or []) if lines.defines_trim(o.get("type"))]
+        drawing = {"netto": [shape.deserialise(o) for o in cuts], "brutto": [], "safe": [], "informational": []}
+        notes = [f"linie: tylko cięcie — {problem}"]
+    page_only = len(drawing["netto"]) == 1 and _union_box(drawing["netto"]) == (0.0, 0.0, *map(float, template["page_mm"]))
     with pikepdf.open(io.BytesIO(source)) as production:
         sheet = pikepdf.new()
         sheet.pages.append(production.pages[0])
@@ -184,9 +193,19 @@ def _sheet_from_source(template, source, title=None):
         overlay = canvas.Canvas(overlay_buffer, pagesize=(page_w * PT_PER_MM, page_h * PT_PER_MM))
         overlay.setTitle(title or template.get("name") or "Szablon")
         overlay.setCreator("prepress-open")
-        drawing = {"netto": [], "brutto": [], "safe": [], "informational": []}
-        specblock.draw(overlay, _spec_entry(template, drawing, "", mirrored=False), page_w, page_h,
-                       lambda e: e["label"])
+        if not page_only:
+            for entry in drawing["brutto"]:
+                _stroke(overlay, entry, BRUTTO_RGB)
+            for entry in drawing["netto"]:
+                _stroke(overlay, entry, NETTO_RGB)
+            for entry in drawing["safe"]:
+                _stroke(overlay, entry, SAFE_RGB)
+        # The spec panel goes where the drawing is not: the largest empty rectangle of the page, so it
+        # never covers a panel (it sat in the middle of the gate's arch, Shyeline 2026-10-18).
+        spec = _spec_entry(template, drawing, "", mirrored=False)
+        spec["safe_box_mm"] = _free_box_mm(page_w, page_h, template.get("outlines") or [])
+        spec["zone_watermark"] = False               # a sheet of panels has no one safe zone to name
+        specblock.draw(overlay, spec, page_w, page_h, lambda e: e["label"])
         _draw_printed_token(overlay, template)
         overlay.showPage()
         overlay.save()
@@ -194,8 +213,54 @@ def _sheet_from_source(template, source, title=None):
             page.add_overlay(overlay_pdf.pages[0])
         out = io.BytesIO()
         sheet.save(out)
-    notes = ["arkusz: strona produkcyjna z pliku (bryty, zagięcia i opisy bez zmian)"]
+    notes = ["arkusz: strona produkcyjna z pliku (bryty, zagięcia i opisy bez zmian)", *notes]
     return _stamp(out.getvalue(), template, notes)
+
+
+FREE_BOX_GRID = 64            # cells per side when looking for the empty rectangle
+FREE_BOX_CLEARANCE_MM = 15.0  # kept between the spec panel's home and any outline
+
+
+def _free_box_mm(page_w, page_h, outlines):
+    """The largest empty axis-aligned rectangle of the page, clear of every outline's box, or None
+    when nothing usable is free (the caller then centres the panel as on a flat sheet).
+
+    Coarse on purpose: the page is cut into a grid, cells touched by an outline's bounding box (plus a
+    clearance) are taken, and the biggest free rectangle of cells is read off with the histogram
+    method — a 64 × 64 grid on a 2.3 m sheet is 36 mm cells, plenty for placing a panel."""
+    boxes = [lines._box(o) for o in outlines]
+    boxes = [b for b in boxes if b]
+    if not boxes or page_w <= 0 or page_h <= 0:
+        return None
+    cell_w, cell_h = page_w / FREE_BOX_GRID, page_h / FREE_BOX_GRID
+    taken = [[False] * FREE_BOX_GRID for _ in range(FREE_BOX_GRID)]
+    for left, bottom, right, top in boxes:
+        col_from = max(0, int((left - FREE_BOX_CLEARANCE_MM) / cell_w))
+        col_to = min(FREE_BOX_GRID - 1, int((right + FREE_BOX_CLEARANCE_MM) / cell_w))
+        row_from = max(0, int((bottom - FREE_BOX_CLEARANCE_MM) / cell_h))
+        row_to = min(FREE_BOX_GRID - 1, int((top + FREE_BOX_CLEARANCE_MM) / cell_h))
+        for row in range(row_from, row_to + 1):
+            for col in range(col_from, col_to + 1):
+                taken[row][col] = True
+    best, best_area = None, 0
+    heights = [0] * FREE_BOX_GRID
+    for row in range(FREE_BOX_GRID):
+        heights = [0 if taken[row][col] else heights[col] + 1 for col in range(FREE_BOX_GRID)]
+        stack = []
+        for col in range(FREE_BOX_GRID + 1):
+            height = heights[col] if col < FREE_BOX_GRID else 0
+            start = col
+            while stack and stack[-1][1] >= height:
+                start, stacked = stack.pop()
+                area = stacked * (col - start)
+                if area > best_area:
+                    best_area = area
+                    best = (start, row - stacked + 1, col, row + 1)
+            stack.append((start, height))
+    if not best or best_area < (FREE_BOX_GRID * FREE_BOX_GRID) * 0.03:
+        return None
+    col_from, row_from, col_to, row_to = best
+    return (col_from * cell_w, row_from * cell_h, col_to * cell_w, row_to * cell_h)
 
 
 def scale_of(template):

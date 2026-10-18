@@ -1351,7 +1351,9 @@ def api_admin_save_template():
         return jsonify({"error": "Skala musi być liczbą całkowitą (1 = naturalna, 10 = 1:10)."}), 400
     if scale < 1:
         return jsonify({"error": "Skala musi być co najmniej 1."}), 400
-    if kind == "sheet":
+    # A sheet with its panels marked as cuts gets brutto and safe lines derived round each panel
+    # (Shyeline 2026-10-18); a sheet with nothing marked keeps the page as its one cut.
+    if kind == "sheet" and not payload.get("outlines"):
         chosen = [_page_outline(page)]
     else:
         chosen, problem = _typed_outlines(payload.get("outlines"))

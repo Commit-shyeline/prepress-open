@@ -180,7 +180,8 @@ def _draw_panel(pdf, entry, page_width_mm, page_height_mm):
     pdf.line(start_pt + label_pt + 4 * scale_up, baseline - 1.5 * scale_up,
              start_pt + label_pt + (rule_length_pt + 4) * scale_up, baseline - 1.5 * scale_up)
 
-    _draw_zone_watermark(pdf, entry, page_width_mm, strip_mm, art_height_mm, bottom, home)
+    if entry.get("zone_watermark", True):            # a sheet of panels has no one zone to name
+        _draw_zone_watermark(pdf, entry, page_width_mm, strip_mm, art_height_mm, bottom, home)
 
 
 def _draw_zone_watermark(pdf, entry, page_width_mm, strip_mm, art_height_mm, panel_bottom_mm,
