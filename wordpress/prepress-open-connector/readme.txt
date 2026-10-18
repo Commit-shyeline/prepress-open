@@ -2,7 +2,7 @@
 Contributors: prepress-open contributors
 Tags: print, prepress, design, templates
 Requires at least: 6.5
-Tested up to: 6.8
+Tested up to: 7.1
 Requires PHP: 8.0
 Stable tag: 0.1.0
 License: GPLv2 or later
@@ -23,8 +23,9 @@ token back when the customer returns.
 2. On the instance, list your site in `PREPRESS_RETURN_ORIGINS` (scheme and host, comma-separated),
    or the editor will show no way back.
 3. Put `[prepress_design template="TOKEN" label="Design it online"]` where the button belongs. The
-   token is shown under each template in the instance's admin panel. In PHP:
-   `prepress_open_design_url( $token )`.
+   token is shown under each template in the instance's admin panel. The customer comes back to the
+   page that carried the button, without its query string; a query-driven page (`/preview/?product=gate`)
+   passes itself whole with `return="…"`. In PHP: `prepress_open_design_url( $token, $return_to )`.
 4. When the customer returns, the page receives a `prepress-open:design` event on `document` with
    `{ held, template, png, pdf }` in `event.detail`, and the same object sits in
    `sessionStorage['prepress-open:design']`. `held` names the design on the instance for 30 minutes

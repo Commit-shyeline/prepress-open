@@ -82,8 +82,10 @@ function prepress_open_current_url(): string {
  */
 add_shortcode( 'prepress_design', 'prepress_open_design_shortcode' );
 function prepress_open_design_shortcode( $attributes ): string {
-	$attributes = shortcode_atts( array( 'template' => '', 'label' => __( 'Design it online', 'prepress-open-connector' ), 'class' => '' ), $attributes, 'prepress_design' );
-	$url        = prepress_open_design_url( (string) $attributes['template'] );
+	// `return`: the page to come back to when it is not this one, or when this one is query-driven
+	// (`/preview/?product=gate`): the default keeps the path and drops the query.
+	$attributes = shortcode_atts( array( 'template' => '', 'label' => __( 'Design it online', 'prepress-open-connector' ), 'class' => '', 'return' => '' ), $attributes, 'prepress_design' );
+	$url        = prepress_open_design_url( (string) $attributes['template'], (string) $attributes['return'] );
 	if ( ! $url ) {
 		return '';
 	}

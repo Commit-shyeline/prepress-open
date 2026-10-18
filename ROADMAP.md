@@ -357,6 +357,8 @@ A shop's templates, 3D models and brand are the instance's data, never this repo
       instance address as a setting, `[prepress_design template=…]` → `/projekt/<token>?return=<page>`, and
       `connector.js` reading `?design=&template=&png=` back into a `prepress-open:design` event. On this side
       `PREPRESS_RETURN_ORIGINS` allowlists the shops the editor may return to („Wróć do sklepu z projektem").
+      The script is tested under Node and the editor's side in a browser; **the PHP has not yet run in a
+      WordPress** (no PHP on the build machine), and `LICENSE` points at the GPLv2 text rather than carrying it.
 - [ ] **the design's resolution.** Checked end to end on 2026-10-18 (a text on the Play A flag → `/plik?held=` →
       verdict): the page is recognised and the template lines are gone, but the design is a raster of the sheet's
       2048 px, which on a 2.4 m flag is 22 DPI against the material's 100, and the white ground counts as no ink
