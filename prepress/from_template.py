@@ -260,7 +260,10 @@ def _draw_face_box(pdf, label, box_mm, page_w, page_h):
 
     left, bottom, right, top = (max(0.0, box_mm[0]), max(0.0, box_mm[1]), min(page_w, box_mm[2]), min(page_h, box_mm[3]))
     short = min(page_w, page_h)
-    size_pt = specblock._pick_size(label, specblock.BOLD, (right - left) * 0.5, short * 0.03 * PT_PER_MM, 6.0)
+    # The name fits its region: half the region's width, a quarter of its height, and never more than
+    # 2 % of the page — a 2300 mm sheet put a 60 mm PRZÓD across a 176 mm band (2026-10-18).
+    largest_pt = min(short * 0.02, (top - bottom) * 0.25) * PT_PER_MM
+    size_pt = specblock._pick_size(label, specblock.BOLD, (right - left) * 0.5, largest_pt, 4.0)
     pdf.saveState()
     pdf.setStrokeColorRGB(*FACE_BOX_RGB)
     pdf.setLineWidth(max(0.75, short * 0.0012))
