@@ -1,5 +1,5 @@
 /*
- * The design editor's geometry (docs/design-editor.md), pure so Node tests it (tests/designer_model.test.js);
+ * The design editor's geometry (ROADMAP „Step 3: the design editor"), pure so Node tests it (tests/designer_model.test.js);
  * designer.js draws it and handles the pointer. An element is a picture or a text placed on the template's page:
  * { id, type: 'image' | 'text', x, y, scale, rotation, width, height, … } where x, y is its centre in canvas pixels,
  * width × height its natural size at scale 1 (a picture's pixels, a text's measured box), rotation in radians.

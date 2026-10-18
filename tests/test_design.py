@@ -1,4 +1,4 @@
-"""The design editor's server side (docs/design-editor.md): the sheet as a picture, the design back as a
+"""The design editor's server side (ROADMAP „Step 3: the design editor"): the sheet as a picture, the design back as a
 stamped page, held for the check and for download.
 
 Runs through Flask's test client — no server is started. A template is made the way the admin makes

@@ -1,5 +1,5 @@
 /*
- * The design editor (docs/design-editor.md): the customer sheet of one template as a canvas, where the visitor
+ * The design editor (ROADMAP „Step 3: the design editor"): the customer sheet of one template as a canvas, where the visitor
  * places pictures and texts, drags, scales and turns them, and saves the result as the filled template page
  * (POST /api/designs/<token>, design.py). The canvas's pixel grid is the sheet's picture (sheet.png, the long edge
  * 2048 px), so a placement never depends on the screen. Geometry: designer-model.js. The sheet's lines show faint
