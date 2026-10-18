@@ -779,6 +779,75 @@ def _recall_upload(token):
         return held
 
 
+# ── The design editor: step 3 of the loop, in the browser (docs/design-editor.md) ─────────────────
+# The sheet rasterised at this long edge is the editor's canvas; the design comes back as that grid
+# painted, and design.compose_pdf makes it the filled template page, held like a re-check upload.
+DESIGN_SHEET_LONG_EDGE_PX = 2048
+DESIGN_ARTWORK_MAX_BYTES = 24 * 1024 * 1024
+
+
+@app.route("/projekt/<token>")
+def design_page(token):
+    """The editor on one template's sheet. Public, like the sheet itself: designing on the template
+    is what we want every customer to do; the login guards the check, as everywhere."""
+    template = materials.get_template(token)
+    if not template:
+        return jsonify({"error": "Nie znamy takiego szablonu — odśwież stronę."}), 404
+    return render_template("design.html", token=token, name=template.get("name") or token,
+                           page_mm=template.get("page_mm") or [0, 0])
+
+
+@app.route("/api/templates/<token>/sheet.png")
+def api_template_sheet(token):
+    """The customer sheet as a picture: the editor's background and its pixel grid."""
+    from . import design
+
+    template = materials.get_template(token)
+    if not template:
+        return jsonify({"error": "Nie znamy takiego szablonu — odśwież stronę."}), 404
+    try:
+        png = design.sheet_png(template, DESIGN_SHEET_LONG_EDGE_PX)
+    except from_template.TemplateError as error:
+        return jsonify({"error": str(error)}), 409
+    return send_file(io.BytesIO(png), mimetype="image/png", max_age=3600)
+
+
+@app.route("/api/designs/<token>", methods=["POST"])
+def api_design_save(token):
+    """The design back from the editor, as the filled template page: a stamped PDF held for the check
+    (and for download), under a token like a re-check upload's."""
+    from . import design
+
+    template = materials.get_template(token)
+    if not template:
+        return jsonify({"error": "Nie znamy takiego szablonu — odśwież stronę."}), 404
+    artwork = request.files.get("artwork")
+    if artwork is None:
+        return jsonify({"error": "Brak grafiki projektu."}), 400
+    data = artwork.read(DESIGN_ARTWORK_MAX_BYTES + 1)
+    if len(data) > DESIGN_ARTWORK_MAX_BYTES:
+        return jsonify({"error": "Projekt jest za duży — zmniejsz wgrane grafiki."}), 413
+    try:
+        pdf_bytes = design.compose_pdf(template, data)
+    except design.DesignError as error:
+        return jsonify({"error": str(error)}), 400
+    except from_template.TemplateError as error:
+        return jsonify({"error": str(error)}), 409
+    held = _remember_upload(pdf_bytes, f"projekt-{token}.pdf")
+    return jsonify({"held": held, "pdf": f"{base_path()}/api/designs/{held}/pdf",
+                    "check": f"{base_path()}/plik"})
+
+
+@app.route("/api/designs/<held>/pdf")
+def api_design_pdf(held):
+    """The saved design as the PDF the customer can keep, or drop on the check page."""
+    upload = _recall_upload(held)
+    if not upload:
+        return jsonify({"error": "Projekt wygasł — zapisz go jeszcze raz."}), 404
+    return send_file(io.BytesIO(upload["data"]), mimetype="application/pdf",
+                     as_attachment=True, download_name=upload["filename"])
+
+
 @app.route("/api/check", methods=["POST"])
 @require_session
 def api_check():

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Zaprojektuj: {{ name }} | prepress-open</title>
+{% include "_theme.html" %}
+{% include "_session.html" %}
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink);
+       font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; }
+header b { font-size: 16px; }
+/* Two columns: the tools, then the sheet. On a phone the tools come first and the sheet fills the width. */
+main { max-width: 1400px; margin: 0 auto; padding: 20px; display: grid; gap: 18px;
+       grid-template-columns: minmax(260px, 1fr) minmax(0, 2.6fr); align-items: start; }
+@media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 12px; }
+.note { font-size: 12.5px; color: var(--muted); }
+.tools { display: grid; gap: 12px; }
+.tools label.text { font-weight: 600; font-size: 13.5px; display: grid; gap: 4px; }
+input[type="text"] { min-height: 40px; padding: 0 10px; border: 1.5px solid var(--line); border-radius: 8px;
+                     background: var(--canvas); color: var(--ink); font: inherit; width: 100%; }
+input[type="text"]:focus-visible { outline: 3px solid var(--accent-text); outline-offset: 1px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 14px;
+       border: 1.5px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink);
+       font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
+.btn:hover { border-color: var(--accent-mid); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.main { background: var(--accent-mid); color: #fff; border-color: var(--accent-mid); }
+.btn:focus-visible { outline: 3px solid var(--accent-text); outline-offset: 2px; }
+.upload { position: relative; }
+.upload input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.upload:focus-within { outline: 3px solid var(--accent-text); outline-offset: 2px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.swatches { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border: 0; }
+.swatches legend { font-weight: 600; font-size: 13.5px; padding: 0; margin-bottom: 4px; width: 100%; }
+.swatch { position: relative; width: 30px; height: 30px; border-radius: 50%; background: var(--swatch);
+          border: 2px solid var(--line); cursor: pointer; }
+.swatch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.swatch:has(input:checked) { border-color: var(--ink); box-shadow: 0 0 0 2px var(--surface) inset; }
+.swatch:has(input:focus-visible) { outline: 3px solid var(--accent-text); outline-offset: 2px; }
+.size { display: grid; gap: 4px; font-weight: 600; font-size: 13.5px; }
+.size input { width: 100%; accent-color: var(--accent-mid); }
+.board { display: grid; gap: 10px; min-width: 0; }
+#design { display: block; width: 100%; height: auto; max-width: 100%; touch-action: none; cursor: grab;
+          border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+#design:focus-visible { outline: 3px solid var(--accent-text); outline-offset: 2px; }
+#status { margin: 0; min-height: 1.3em; font-size: 13px; color: var(--muted); }
+#status.alert { color: var(--alert); }
+.saved { display: none; gap: 8px; flex-wrap: wrap; }
+.saved.on { display: flex; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+{% with page_title = 'Zaprojektuj: ' ~ name,
+        page_sub = 'Ułóż grafiki i napisy na szablonie, a zapiszemy je jako plik do sprawdzenia',
+        extra_actions = '<a href="' ~ base ~ '/">← szablony</a>' %}
+{% include "_brand_header.html" %}{% endwith %}
+
+<main id="editor"
+      data-token="{{ token }}"
+      data-sheet="{{ base }}/api/templates/{{ token }}/sheet.png"
+      data-save="{{ base }}/api/designs/{{ token }}"
+      data-page-mm="{{ page_mm|tojson|forceescape }}"
+      data-strings="{{ {
+          'loading': 'Wczytuję szablon…',
+          'hint': 'Przeciągnij element, żeby go przesunąć; narożnik skaluje, uchwyt u góry obraca. Linie szablonu są tylko podpowiedzią: na pliku ich nie będzie.',
+          'empty': 'Najpierw dodaj grafikę albo napis.',
+          'saving': 'Zapisuję projekt…',
+          'saved': 'Projekt zapisany jako plik PDF na szablonie. Pobierz go albo sprawdź od razu.',
+          'failed': 'Nie udało się. Spróbuj jeszcze raz.',
+          'badFile': 'Nie udało się dodać pliku. Spróbuj PNG, JPG lub SVG.',
+          'images': ['grafika', 'grafiki', 'grafik'],
+          'texts': ['napis', 'napisy', 'napisów'],
+      }|tojson|forceescape }}">
+    <div class="tools card">
+        <h2>Narzędzia</h2>
+        <div class="row">
+            <label class="btn upload"><input id="file" type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp"> Dodaj grafikę</label>
+        </div>
+        <label class="text" for="text">Napis
+            <input id="text" type="text" maxlength="60" placeholder="np. nazwa firmy albo hasło">
+        </label>
+        <div class="row"><button class="btn" type="button" data-act="text">Dodaj napis</button></div>
+        <fieldset class="swatches">
+            <legend>Kolor napisu</legend>
+            {% for colour in ['#23262f', '#ffffff', '#3ea855', '#1f6b33', '#4d5062', '#d6267a', '#a5101e', '#f2c200', '#00a3d9', '#1d3557'] %}
+            <label class="swatch" style="--swatch: {{ colour }}">
+                <input type="radio" name="colour" value="{{ colour }}"{% if loop.first %} checked{% endif %}>
+                <span class="sr-only">{{ colour }}</span>
+            </label>
+            {% endfor %}
+        </fieldset>
+        <label class="size" for="size">Wielkość napisu
+            <input id="size" type="range" min="20" max="200" value="100">
+        </label>
+        <div class="row">
+            <button class="btn" type="button" data-act="undo" disabled>Cofnij</button>
+            <button class="btn" type="button" data-act="remove" disabled>Usuń zaznaczone</button>
+            <button class="btn" type="button" data-act="clear" disabled>Wyczyść</button>
+        </div>
+        <p class="note">Projekt zostaje w tej przeglądarce, dopóki go nie zapiszesz. Zapisany projekt to plik PDF na tym szablonie, taki sam jak z programu graficznego: sprawdzisz go na stronie „Sprawdź plik".</p>
+    </div>
+
+    <div class="board">
+        <canvas id="design" tabindex="0" aria-label="Powierzchnia szablonu: przeciągaj grafiki i napisy"></canvas>
+        <p id="status" role="status"></p>
+        <div class="row">
+            <button class="btn main" type="button" data-act="save" disabled>Zapisz projekt jako PDF</button>
+            <span class="saved" id="saved">
+                <a class="btn" id="pdfLink" href="#" download>Pobierz PDF projektu</a>
+                <a class="btn" id="checkLink" href="{{ base }}/plik">Sprawdź plik →</a>
+            </span>
+        </div>
+    </div>
+</main>
+
+<script src="{{ asset('designer-model.js') }}"></script>
+<script src="{{ asset('designer.js') }}"></script>
+</body>
+</html>

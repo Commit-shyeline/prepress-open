@@ -27,7 +27,7 @@ individual rule.
 |---|---|---|
 | 1. admin imports production templates | `scripts/build_flag_templates.py` → `state/flag_templates.json`, 75 templates measured. Entries already carry `finished_mm` (NETTO), `cut`, `safe`, `finishing`, `regmarks`. | admin UI, per-tenant library, import-time validation |
 | 2. app generates the customer template (brutto/netto/safe) | geometry is extracted; `flag_output._draw_polyline` / `_stroke_publish` already stroke and label outlines | **the generator** — plus deriving `safe` where the template has none (it is `null` on some) |
-| 3. customer designs on it | — | nothing |
+| 3. customer designs on it | — (their own software) | an editor on the issued sheet, in the browser: „Step 3: the design editor" below (started 2026-10-18) |
 | 4. upload back, preflight | `preflight_app.run_check` + 19 rules, already job-relative (ordered size, product, template outline) | nothing structural |
 | 5a. report against **admin-set** rules | 19 `_check_*` functions, `PRODUCT_SAFE_AREA_MM`, `REQUIRED_BLEED_MM` — hardcoded constants | rules as DATA (see below) |
 | 5b. "send it to us" | a `mailto:` link | a submission store |
@@ -301,3 +301,53 @@ no contributors right now, which is the cheapest this will ever be.
 Architecturally the embed needs three things the current build does not have, none of them hard yet:
 a JSON API as the real product surface (already the shape — the HTML pages are thin clients over it),
 per-seller tenancy with API keys, and a CORS origin allowlist per tenant.
+
+## Step 3: the design editor (started 2026-10-18)
+
+The one step of the loop that happened outside the tool: download the sheet, open Illustrator or
+Canva, place a logo somewhere near the middle, export a PDF, upload it back. For a logo and a line of
+text on a flag or a gate that is a lot of software for a small job, and the check then catches what an
+editor could have prevented. `/projekt/<token>` puts a small editor on the issued sheet itself.
+
+**What it is.** The customer sheet of one template as a canvas, its BRUTTO, NETTO and SAFE lines faint
+underneath, where the visitor adds pictures (PNG/JPG/SVG/WebP) and texts (colours, a size), drags,
+scales (corner handle), rotates (top handle), deletes, undoes; then **saves the design as the filled
+template page**: a PDF of the template's page size with the artwork edge to edge and the same per-page
+stamp the sheet carries, held in memory like a re-check upload. That PDF is what the customer would
+otherwise have exported, so everything after it is the existing loop: the check measures it, the report
+says what is wrong, and on submission the graphic team gets source, cut and print files. No new output
+path: the engine that exists does it.
+
+**What it is not.** Not a print-ready exporter of its own (bleed, cut lines and colour stay with the
+checker and the production files). Not a merchant-defined print-area system (the whole page is the
+canvas; the template's own lines say where the finished size and the safe area are, and the check
+enforces them). Not an upload to anywhere until the customer says so (`localStorage`, one design per
+template token, until „Zapisz projekt").
+
+| part | where | why there |
+|---|---|---|
+| geometry: bounds, hit test, handles, drags, plurals | `prepress/static/designer-model.js` | pure, no DOM; `tests/designer_model.test.js` runs it under Node, `tests/test_designer_model.py` wraps that for pytest and skips where Node is absent |
+| the editor | `prepress/static/designer.js` + `prepress/templates/design.html` | one page per template, the same shell and theme as the check page |
+| the sheet as a picture | `GET /api/templates/<token>/sheet.png` | `from_template.build_pdf` rasterised with pypdfium2 (`shape.render_preview`), long edge 2048 px: the canvas's background and the pixel grid designs are drawn on |
+| the filled page | `POST /api/designs/<token>` → `{held, pdf, check}`; `GET /api/designs/<held>/pdf` | `prepress/design.py` composes the artwork PNG onto a reportlab page of `page_mm` and stamps it with `from_template._stamp`, so `identify.read_stamp` names the template; held with the re-check uploads for 30 minutes |
+
+The canvas is drawn in the sheet's pixels and becomes millimetres only on the page, so a placement
+never depends on screen size. The texture the editor draws is also what the 3D scene can wear
+(`/model/<token>` already wears `demo-artwork.jpg` the same way): wiring a held design into that
+scene is the next step.
+
+**Embedding in a shop's website.** The editor is a page of this app, so a site links or iframes
+`/projekt/<token>` from its product page. A WordPress site cannot run this Python app inside PHP
+hosting; the pattern is a thin connector plugin (PHP + a little JS) that knows the instance's URL,
+links the editor and takes the saved design's `held` token into the shop's basket or inquiry. That
+connector is a separate component with a GPL-compatible licence of its own (WordPress plugins are
+GPLv2+, this repository is AGPL-3.0); it talks to the instance over HTTP and ships none of the engine.
+A shop's templates, 3D models and brand are the instance's data, never this repository's content.
+
+- [x] geometry module with tests (ported from an in-house draft, 2026-10-18)
+- [x] `design.py`: `sheet_png`, `compose_pdf`; tests read the stamp back and check the page size
+- [x] routes: the page, the sheet, the design (held) and its PDF
+- [x] `design.html` + `designer.js`: toolbar, canvas, save → the PDF link and the check page
+- [ ] the check page takes a held design straight from the editor (`/plik?held=…` → `/api/recheck`)
+- [ ] the 3D scene wears a held design (`/model/<token>?design=<held>`)
+- [ ] a connector for WordPress (`wordpress/`), with its own licence file
