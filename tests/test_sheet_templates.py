@@ -145,6 +145,25 @@ def test_a_sheet_s_panels_marked_as_cuts_get_brutto_and_safe_lines_and_the_panel
     assert (home[2] - home[0]) * (home[3] - home[1]) > 0.1 * 2300 * 2300
 
 
+def test_a_two_sided_sheet_has_a_mirrored_back_and_each_side_named_in_a_box(client):
+    panels = [_panel(900, 1100, 725, 353), _panel(546, 1487, 353, 412)]
+    token = _save_sheet(client, outlines=panels, bleed_mm=2, safe_mm=5, sides=2).get_json()["template"]["token"]
+    client.post(f"/api/admin/templates/{token}/source", headers={"X-Admin-Token": TOKEN},
+                data={"file": (io.BytesIO(_production_sheet()), "szablon.pdf")}, content_type="multipart/form-data")
+    sheet = client.get(f"/api/templates/{token}/pdf")
+    assert sheet.status_code == 200
+    import pypdfium2
+    document = pypdfium2.PdfDocument(io.BytesIO(sheet.data))
+    assert len(document) == 2
+    front = document[0].get_textpage().get_text_bounded()
+    back = document[1].get_textpage().get_text_bounded()
+    assert "PRZÓD" in front and "SIATKA BRYT 1" in front
+    assert "TYŁ (LUSTRO)" in back
+    stamps = [identify.read_stamp(sheet.data, index)["stamp"] for index in range(2)]
+    assert stamps[0]["side"] == "PRZÓD" and stamps[0]["mirrored"] is False
+    assert stamps[1]["side"] == "TYŁ" and stamps[1]["mirrored"] is True
+
+
 def test_the_free_box_is_the_largest_empty_rectangle():
     from prepress import from_template
     # one panel in the top-left quarter: the free box is the bottom half or the right half, not the panel

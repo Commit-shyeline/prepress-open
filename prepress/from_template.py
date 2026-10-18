@@ -182,39 +182,92 @@ def _sheet_from_source(template, source, title=None):
         drawing = {"netto": [shape.deserialise(o) for o in cuts], "brutto": [], "safe": [], "informational": []}
         notes = [f"linie: tylko cięcie — {problem}"]
     page_only = len(drawing["netto"]) == 1 and _union_box(drawing["netto"]) == (0.0, 0.0, *map(float, template["page_mm"]))
+    # A two-sided product gets two pages, as a flat template does: the front, then the back as a
+    # MIRROR of the production page (the shop rule of 2026-08-24), each named in a box of its own
+    # (Shyeline 2026-10-18: "we also have to mark front and back with a box").
+    side_labels = lines.SIDE_LABELS.get(sides_of(template), ("",))
+    free_box = _free_box_mm(float(template["page_mm"][0]), float(template["page_mm"][1]), template.get("outlines") or [])
     with pikepdf.open(io.BytesIO(source)) as production:
         sheet = pikepdf.new()
-        sheet.pages.append(production.pages[0])
-        page = sheet.pages[0]
-        box = page.mediabox
-        page_w = float(box[2] - box[0]) / PT_PER_MM
-        page_h = float(box[3] - box[1]) / PT_PER_MM
-        overlay_buffer = io.BytesIO()
-        overlay = canvas.Canvas(overlay_buffer, pagesize=(page_w * PT_PER_MM, page_h * PT_PER_MM))
-        overlay.setTitle(title or template.get("name") or "Szablon")
-        overlay.setCreator("prepress-open")
-        if not page_only:
-            for entry in drawing["brutto"]:
-                _stroke(overlay, entry, BRUTTO_RGB)
-            for entry in drawing["netto"]:
-                _stroke(overlay, entry, NETTO_RGB)
-            for entry in drawing["safe"]:
-                _stroke(overlay, entry, SAFE_RGB)
-        # The spec panel goes where the drawing is not: the largest empty rectangle of the page, so it
-        # never covers a panel (it sat in the middle of the gate's arch, Shyeline 2026-10-18).
-        spec = _spec_entry(template, drawing, "", mirrored=False)
-        spec["safe_box_mm"] = _free_box_mm(page_w, page_h, template.get("outlines") or [])
-        spec["zone_watermark"] = False               # a sheet of panels has no one safe zone to name
-        specblock.draw(overlay, spec, page_w, page_h, lambda e: e["label"])
-        _draw_printed_token(overlay, template)
-        overlay.showPage()
-        overlay.save()
-        with pikepdf.open(io.BytesIO(overlay_buffer.getvalue())) as overlay_pdf:
-            page.add_overlay(overlay_pdf.pages[0])
+        for index, side in enumerate(side_labels):
+            sheet.pages.append(production.pages[0])
+            page = sheet.pages[-1]
+            box = page.mediabox
+            page_w = float(box[2] - box[0]) / PT_PER_MM
+            page_h = float(box[3] - box[1]) / PT_PER_MM
+            mirror = page_w if index else None
+            if mirror:
+                _mirror_page(sheet, page)
+            overlay_buffer = io.BytesIO()
+            overlay = canvas.Canvas(overlay_buffer, pagesize=(page_w * PT_PER_MM, page_h * PT_PER_MM))
+            overlay.setTitle(title or template.get("name") or "Szablon")
+            overlay.setCreator("prepress-open")
+            if not page_only:
+                for entry in drawing["brutto"]:
+                    _stroke(overlay, entry, BRUTTO_RGB, mirror_x_mm=mirror)
+                for entry in drawing["netto"]:
+                    _stroke(overlay, entry, NETTO_RGB, mirror_x_mm=mirror)
+                for entry in drawing["safe"]:
+                    _stroke(overlay, entry, SAFE_RGB, mirror_x_mm=mirror)
+            # The spec panel goes where the drawing is not: the largest empty rectangle of the page,
+            # so it never covers a panel (it sat in the middle of the gate's arch, Shyeline 2026-10-18).
+            spec = _spec_entry(template, drawing, side, mirrored=bool(mirror))
+            home = free_box
+            if home and mirror:
+                home = (page_w - home[2], home[1], page_w - home[0], home[3])
+            spec["safe_box_mm"] = home
+            spec["zone_watermark"] = False           # a sheet of panels has no one safe zone to name
+            specblock.draw(overlay, spec, page_w, page_h, lambda e: e["label"])
+            if side:
+                _draw_side_box(overlay, side, bool(mirror), page_w, page_h, home)
+            _draw_printed_token(overlay, template)
+            overlay.showPage()
+            overlay.save()
+            with pikepdf.open(io.BytesIO(overlay_buffer.getvalue())) as overlay_pdf:
+                page.add_overlay(overlay_pdf.pages[0])
         out = io.BytesIO()
         sheet.save(out)
     notes = ["arkusz: strona produkcyjna z pliku (bryty, zagięcia i opisy bez zmian)", *notes]
-    return _stamp(out.getvalue(), template, notes)
+    if len(side_labels) > 1:
+        notes.append(f"strony: {len(side_labels)} — {', '.join(side_labels)}, tył lustrzany")
+    return _stamp(out.getvalue(), template, notes, side_labels)
+
+
+def _mirror_page(pdf, page):
+    """Reflect the page's drawing left to right, in place: its content becomes a form, drawn back
+    through a horizontal flip — the back of a two-sided product, seen from behind."""
+    import pikepdf
+
+    box = page.mediabox
+    width_pt = float(box[2] - box[0])
+    form = page.as_form_xobject()
+    page.Contents = pdf.make_stream(f"q -1 0 0 1 {width_pt:.4f} 0 cm /PrepressFront Do Q".encode())
+    page.Resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(PrepressFront=form))
+
+
+SIDE_BOX_RGB = (0.85, 0.10, 0.45)
+
+
+def _draw_side_box(pdf, side, mirrored, page_w, page_h, home):
+    """A labelled box naming the side — PRZÓD / TYŁ (LUSTRO) — beside the spec panel, big enough to
+    read with the whole sheet on screen (a tenth of the page's shorter side)."""
+    label = f"{side} (LUSTRO)" if mirrored else side
+    short = min(page_w, page_h)
+    box_w, box_h = short * 0.22, short * 0.07
+    area = home or (0.0, 0.0, page_w, page_h)
+    left = area[0] + 8.0
+    bottom = area[3] - box_h - 8.0 if area[3] - area[1] > box_h * 3 else area[1] + 8.0
+    pdf.saveState()
+    pdf.setStrokeColorRGB(*SIDE_BOX_RGB)
+    pdf.setLineWidth(max(0.75, short * 0.0012))
+    pdf.setDash((), 0)
+    pdf.rect(left * PT_PER_MM, bottom * PT_PER_MM, box_w * PT_PER_MM, box_h * PT_PER_MM, stroke=1, fill=0)
+    from . import specblock
+
+    pdf.setFillColorRGB(*SIDE_BOX_RGB)
+    pdf.setFont(specblock.BOLD, box_h * PT_PER_MM * 0.55)
+    pdf.drawCentredString((left + box_w / 2) * PT_PER_MM, (bottom + box_h * 0.28) * PT_PER_MM, label)
+    pdf.restoreState()
 
 
 FREE_BOX_GRID = 64            # cells per side when looking for the empty rectangle

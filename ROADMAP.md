@@ -364,6 +364,15 @@ A shop's templates, 3D models and brand are the instance's data, never this repo
       shop data) and `build_pdf` lays the spec panel and the printed token over its first page, then stamps it; the
       editor's canvas is that page. Without a source file a sheet is the bare page frame (Shyeline 2026-10-18: "so
       now we generate templates instead of using the ones we already have?" — no longer).
+- [x] **sheets, round two** (2026-10-18, after a real Affinity round trip): the siatka's panels are stored as cut
+      lines, so brutto and safe lines are derived round each panel; the spec panel moves to the page's largest empty
+      rectangle; a two-sided sheet issues PRZÓD and a mirrored TYŁ page, each named in a box; the spec block uses the
+      host's TrueType face (Helvetica had no Ł/Ó). The bare-template rule reads a sheet differently — artwork lives
+      inside the panels, not across the page — and `fingerprint.py` names the template a file was drawn on by the
+      SIZES of its die-lines, which survive an export that strips the stamp and the printed token: the checker ranks
+      its candidates by it (`best`), and `POST /api/identify` answers a shop's product page (CORS for the return
+      origins). Found and left: Affinity's export outlines the 2.2 pt printed token, so a flattened file is known
+      only by its lines or by the customer's pick; a file whose template layer was deleted carries no fingerprint.
 - [x] a connector for WordPress (`wordpress/prepress-open-connector`, GPLv2-or-later, its `LICENSE` says why): the
       instance address as a setting, `[prepress_design template=…]` → `/projekt/<token>?return=<page>`, and
       `connector.js` reading `?design=&template=&png=` back into a `prepress-open:design` event. On this side

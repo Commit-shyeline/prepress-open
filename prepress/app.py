@@ -26,7 +26,7 @@ from flask import (Flask, Response, jsonify, redirect, render_template, request,
 from urllib.parse import quote
 from werkzeug.utils import secure_filename
 
-from . import (demo_artwork, from_template, generate, identify, item, lines, materials, measure,
+from . import (demo_artwork, fingerprint, from_template, generate, identify, item, lines, materials, measure,
                messages, named_size, offset, outline, raster, rules, shape, structure)
 
 logger = logging.getLogger(__name__)
@@ -1045,20 +1045,29 @@ def _judge(data, filename, form, token=None):
                 # size still says `80x240` in its name, and that names the template family.
                 named, stated = named_size.parse_mm(filename)
                 named = named_size.reconcile(named, stated, page_mm)
-                candidates, seen = [], set()
+                # The file's own die-lines rank the templates on this page size (fingerprint.py):
+                # every gate's siatka is a 2300 × 2300 mm page, but only one has these panels.
+                try:
+                    uploaded = outline.candidates(data, page_index)
+                except Exception:                   # noqa: BLE001 — unreadable vectors = no fingerprint
+                    uploaded = []
+                ranked = fingerprint.rank(materials.load_templates(), page_mm, uploaded)
+                candidates = [{"token": entry["token"], "name": entry["name"],
+                               "matched": entry["matched"], "outlines": entry["outlines"]} for entry in ranked]
+                seen = {entry["token"] for entry in ranked}
                 for t in materials.load_templates():
-                    by_page = (abs(float(t["page_mm"][0]) - page_mm[0]) <= tolerance
-                               and abs(float(t["page_mm"][1]) - page_mm[1]) <= tolerance)
                     trim = t.get("trim_mm") or []
                     by_name = bool(named and len(trim) == 2
                                    and named_size.same_size(named, (float(trim[0]), float(trim[1]))))
-                    if (by_page or by_name) and t.get("token") not in seen:
+                    if by_name and t.get("token") not in seen:
                         seen.add(t.get("token"))
-                        candidates.append({"token": t.get("token"), "name": t.get("name")})
+                        candidates.append({"token": t.get("token"), "name": t.get("name"), "matched": 0, "outlines": 0})
+                decisive = fingerprint.best(ranked)
                 # page_mm and the name's size ride along so the page can pre-fill the picker and
-                # offer a choice when the two disagree.
+                # offer a choice when the two disagree; `best` is the die the file's own lines name.
                 return jsonify({"recognised": False, "reason": found["reason"],
-                                "candidates": candidates, "page_mm": page_mm,
+                                "candidates": candidates, "best": decisive["token"] if decisive else None,
+                                "page_mm": page_mm,
                                 "named_size_mm": list(named) if named else None,
                                 "token": token}), 200
         else:
@@ -1121,6 +1130,12 @@ def _judge(data, filename, form, token=None):
     declared = raster.facts(data, filename) if kind == "raster" else structure.facts(data, filename)
     facts.update({key: value for key, value in declared.items()
                   if key not in ("readable", "reason")})
+    # On a sheet of panels the artwork sits INSIDE the panels, never across the page, so the blank
+    # edges say nothing: a logo on the gate's arch read as a bare template (Affinity export,
+    # 2026-10-18). There, "bare" means our guides and nothing else: no placed picture, no fonts.
+    if template_record and template_record.get("kind") == "sheet":
+        bare_template = bool(facts.get("guides_present") and not facts.get("image_placements")
+                             and not facts.get("fonts"))
     material = materials.get(expected["material_id"] or "")
     wording = materials.load_messages()
     findings = rules.run(facts, expected, material,
@@ -1615,6 +1630,60 @@ def api_admin_template_source(token):
     if not materials.save_template_source(token, data):
         return jsonify({"error": "Zły token."}), 400
     return jsonify({"template": token, "bytes": len(data), "pages": pages})
+
+
+IDENTIFY_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _cors_origin():
+    """The requesting shop's origin when it is one the editor may return to (RETURN_ORIGINS_ENV),
+    else None: the same allowlist decides who may read `/api/identify` from a browser."""
+    origin = (request.headers.get("Origin") or "").strip()
+    return origin if origin and _return_url(origin + "/") else None
+
+
+def _with_cors(response):
+    origin = _cors_origin()
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+    return response
+
+
+@app.route("/api/identify", methods=["POST", "OPTIONS"])
+def api_identify():
+    """Which template a PDF belongs to, by its die-lines (fingerprint.py) — no login, no verdict.
+
+    A shop's product page asks this when a visitor uploads a filled template: "is this the siatka of
+    the product on screen, or another one's?" Public like the templates themselves; readable from a
+    browser only on the origins the editor may return to."""
+    if request.method == "OPTIONS":
+        response = Response(status=204)
+        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return _with_cors(response)
+    upload = request.files.get("file")
+    if upload is None:
+        return _with_cors(jsonify({"error": "Nie wybrano pliku."})), 400
+    data = upload.read(IDENTIFY_MAX_BYTES + 1)
+    if len(data) > IDENTIFY_MAX_BYTES:
+        return _with_cors(jsonify({"error": "Plik jest za duży do rozpoznania."})), 413
+    try:
+        page_index = max(int(request.form.get("page") or 0), 0)
+    except ValueError:
+        page_index = 0
+    try:
+        page_mm = identify.page_size_mm(data, page_index)
+        uploaded = outline.candidates(data, page_index)
+    except Exception:                               # noqa: BLE001 — not a readable PDF is the answer
+        return _with_cors(jsonify({"error": "To nie jest czytelny plik PDF.", "matches": [], "best": None})), 400
+    stamped = identify.read_stamp(data, page_index)
+    ranked = fingerprint.rank(materials.load_templates(), page_mm, uploaded)
+    decisive = fingerprint.best(ranked)
+    stamp_token = stamped["stamp"].get("template") if stamped else None
+    if stamp_token and materials.get_template(stamp_token):
+        decisive = {"token": stamp_token, "name": materials.get_template(stamp_token).get("name"), "matched": None, "outlines": None}
+    return _with_cors(jsonify({"page_mm": [round(v, 1) for v in page_mm], "matches": ranked, "best": decisive}))
 
 
 @app.route("/api/templates")

@@ -29,8 +29,12 @@ MUTED_TEXT = (0.97, 0.78, 0.78)
 RULE_RGB = (0.55, 0.55, 0.58)
 TEXT_RGB = (0.20, 0.21, 0.25)
 
-FONT = "Helvetica"
-BOLD = "Helvetica-Bold"
+# The report's TrueType faces (Arial / DejaVu, whichever the host has): Helvetica has no Polish glyphs,
+# so „TYŁ" and „PRZÓD" printed a box for the Ł and the Ó (seen on a two-sided sheet, 2026-10-18).
+from . import report as _report  # noqa: E402 — after the constants above, before the first use
+
+FONT = _report._font_name()
+BOLD = _report.bold_font_name()
 
 # The panel is sized as a SHARE of the page, not a fixed number of millimetres. Measured off the
 # reference, whose panel is about 180 mm on a 784 mm page, i.e. roughly 23 %. A fixed 190 mm looked
