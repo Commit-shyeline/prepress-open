@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The design editor's server side (docs/design-editor.md): the sheet as a picture, the design back as a page.
+"""The design editor's server side (ROADMAP „Step 3: the design editor"): the sheet as a picture, the design back as a page.
 
 The editor (static/designer.js) draws on the customer sheet rasterised at a fixed long edge, so its
 pixel grid is the sheet's; what comes back is that grid painted with the customer's pictures and texts,

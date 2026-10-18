@@ -779,7 +779,7 @@ def _recall_upload(token):
         return held
 
 
-# ── The design editor: step 3 of the loop, in the browser (docs/design-editor.md) ─────────────────
+# ── The design editor: step 3 of the loop, in the browser (ROADMAP „Step 3: the design editor") ────
 # The sheet rasterised at this long edge is the editor's canvas; the design comes back as that grid
 # painted, and design.compose_pdf makes it the filled template page, held like a re-check upload.
 DESIGN_SHEET_LONG_EDGE_PX = 2048
