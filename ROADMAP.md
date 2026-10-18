@@ -348,6 +348,14 @@ A shop's templates, 3D models and brand are the instance's data, never this repo
 - [x] `design.py`: `sheet_png`, `compose_pdf`; tests read the stamp back and check the page size
 - [x] routes: the page, the sheet, the design (held) and its PDF
 - [x] `design.html` + `designer.js`: toolbar, canvas, save → the PDF link and the check page
-- [ ] the check page takes a held design straight from the editor (`/plik?held=…` → `/api/recheck`)
-- [ ] the 3D scene wears a held design (`/model/<token>?design=<held>`)
+- [x] the check page takes a held design straight from the editor (`/plik?held=…&name=…` queues it as a
+      re-check; an expired token says so instead of asking for bytes the page never had). A held upload saved
+      with no session is the token holder's: the public editor saves anonymously, the check runs logged in.
+- [x] the 3D scene wears a held design (`/model/<token>?design=<held>` ← `GET /api/designs/<held>/png`, the
+      page at the demo artwork's resolution, outranking the demo); the editor's saved row links both.
 - [ ] a connector for WordPress (`wordpress/`), with its own licence file
+- [ ] **the design's resolution.** Checked end to end on 2026-10-18 (a text on the Play A flag → `/plik?held=` →
+      verdict): the page is recognised and the template lines are gone, but the design is a raster of the sheet's
+      2048 px, which on a 2.4 m flag is 22 DPI against the material's 100, and the white ground counts as no ink
+      in the bleed. Either compose the page from the elements themselves (texts as text, pictures at their own
+      pixels) or rasterise at the material's DPI; until then the editor's own output fails two of its rules.

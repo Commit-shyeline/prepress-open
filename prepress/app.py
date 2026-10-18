@@ -741,15 +741,20 @@ _held_lock = threading.Lock()
 
 
 def _caller():
-    """Who is asking: the session subject, or the door they came through. A held upload may only be
-    re-checked by the same caller — a leaked token must not hand one customer another's file."""
+    """Who is asking, for the access log: the session subject, or the door they came through."""
     return session_identity() or ("open-door" if _opened_by_proxy() else "anonymous")
 
 
 def _remember_upload(data, filename):
-    """Hold these bytes for a re-check; returns the token the page sends back."""
+    """Hold these bytes for a re-check; returns the token the page sends back.
+
+    The owner is the session subject, when there is one: a held upload may then be re-checked only by
+    the same subject, so a leaked token never hands one customer another's file. Saved with no
+    session — a design from the public editor, which the customer then checks logged in — the
+    16-byte token itself is the key, for the 30 minutes it lives. That opens nothing else: on a gated
+    instance an anonymous caller cannot reach the re-check at all."""
     now = time.time()
-    owner = _caller()
+    owner = session_identity()
     with _held_lock:
         for stale in [t for t, held in _held_uploads.items() if held["expires"] < now]:
             del _held_uploads[stale]
@@ -773,7 +778,7 @@ def _recall_upload(token):
         if held["expires"] < now:
             del _held_uploads[token]
             return None
-        if held["owner"] != _caller():
+        if held["owner"] and held["owner"] != session_identity():
             return None                              # somebody else's upload: as if it never existed
         held["expires"] = now + UPLOAD_HOLD_SECONDS
         return held
@@ -784,6 +789,7 @@ def _recall_upload(token):
 # painted, and design.compose_pdf makes it the filled template page, held like a re-check upload.
 DESIGN_SHEET_LONG_EDGE_PX = 2048
 DESIGN_ARTWORK_MAX_BYTES = 24 * 1024 * 1024
+DESIGN_TEXTURE_LONG_EDGE_PX = 2800              # as the demo artwork the 3D scene wears (api_demo_artwork)
 
 
 @app.route("/projekt/<token>")
@@ -833,9 +839,13 @@ def api_design_save(token):
         return jsonify({"error": str(error)}), 400
     except from_template.TemplateError as error:
         return jsonify({"error": str(error)}), 409
-    held = _remember_upload(pdf_bytes, f"projekt-{token}.pdf")
+    filename = f"projekt-{token}.pdf"
+    held = _remember_upload(pdf_bytes, filename)
+    # Where the design goes next, all by its held token: the PDF to keep, the check page with it
+    # already queued (sprawdz.html re-checks the held bytes), the 3D scene wearing it.
     return jsonify({"held": held, "pdf": f"{base_path()}/api/designs/{held}/pdf",
-                    "check": f"{base_path()}/plik"})
+                    "check": f"{base_path()}/plik?held={held}&name={filename}",
+                    "model": f"{base_path()}/model/{token}?design={held}"})
 
 
 @app.route("/api/designs/<held>/pdf")
@@ -846,6 +856,21 @@ def api_design_pdf(held):
         return jsonify({"error": "Projekt wygasł — zapisz go jeszcze raz."}), 404
     return send_file(io.BytesIO(upload["data"]), mimetype="application/pdf",
                      as_attachment=True, download_name=upload["filename"])
+
+
+@app.route("/api/designs/<held>/png")
+def api_design_png(held):
+    """The saved design's page as a picture, for the 3D scene to wear (model3d.html `?design=`):
+    the whole page at the demo artwork's resolution, so the scene's page-to-fabric mapping holds."""
+    upload = _recall_upload(held)
+    if not upload:
+        return jsonify({"error": "Projekt wygasł — zapisz go jeszcze raz."}), 404
+    try:
+        png = shape.render_preview(upload["data"], 0, max_pixels=DESIGN_TEXTURE_LONG_EDGE_PX)
+    except Exception as error:                      # noqa: BLE001 — the scene shows bare cloth instead
+        logger.warning("design %s not drawable as a texture: %s", held, error)
+        return jsonify({"error": "Nie udało się narysować projektu."}), 500
+    return send_file(io.BytesIO(png), mimetype="image/png")
 
 
 @app.route("/api/check", methods=["POST"])

@@ -51,6 +51,8 @@
 		const buttons = Object.fromEntries( [ ...main.querySelectorAll( '[data-act]' ) ].map( ( button ) => [ button.dataset.act, button ] ) );
 		const saved = main.querySelector( '#saved' );
 		const pdfLink = main.querySelector( '#pdfLink' );
+		const checkLink = main.querySelector( '#checkLink' );
+		const modelLink = main.querySelector( '#modelLink' );
 
 		let sheet = null; // the sheet's picture: the canvas's size and its faint background
 		let artwork = null; // offscreen canvas at the sheet's size: the design itself
@@ -339,7 +341,7 @@
 		} );
 		buttons.clear.addEventListener( 'click', () => commit( [], { select: null } ) );
 
-		/** The artwork to the server, which makes it the filled template page and holds it: then the PDF link and the check. */
+		/** The artwork to the server, which makes it the filled template page and holds it: then the PDF, the check and the 3D links. */
 		buttons.save.addEventListener( 'click', async () => {
 			if ( ! elements.length ) {
 				say( strings.empty, true );
@@ -358,7 +360,13 @@
 				if ( ! response.ok ) {
 					throw new Error( result.error || `HTTP ${ response.status }` );
 				}
+				// The server names where the held design goes next: the check page with it queued, the 3D scene wearing it.
+				// A static file is live before the Python that serves it is restarted, so an older answer may lack these.
 				pdfLink.href = result.pdf;
+				checkLink.href = result.check || checkLink.href;
+				if ( modelLink && result.model ) {
+					modelLink.href = result.model;
+				}
 				saved.classList.add( 'on' );
 				say( strings.saved );
 			} catch ( error ) {

@@ -123,6 +123,55 @@ def test_a_saved_design_is_a_stamped_page_of_the_template_size(client, template_
     assert stamp["stamp"]["notes"] == [design.DEFAULT_NOTE]
 
 
+def _save_design(client, template_token, headers=None):
+    saved = client.post(f"/api/designs/{template_token}",
+                        data={"artwork": (io.BytesIO(_artwork_png()), "projekt.png"), "elements": "[]"},
+                        content_type="multipart/form-data", headers=headers or {})
+    assert saved.status_code == 200, saved.get_json()
+    return saved.get_json()
+
+
+def test_a_saved_design_is_rechecked_as_the_template_it_was_drawn_on(client, template_token):
+    """The ROADMAP's claim: after the editor, everything is the existing loop."""
+    body = _save_design(client, template_token)
+    assert body["check"].endswith(f"/plik?held={body['held']}&name=projekt-{template_token}.pdf")
+    assert body["model"].endswith(f"/model/{template_token}?design={body['held']}")
+    judged = client.post(f"/api/recheck/{body['held']}", data={}, content_type="multipart/form-data")
+    assert judged.status_code == 200, judged.get_json()
+    verdict = judged.get_json()
+    assert verdict["recognised"] is True
+    assert verdict["template_token"] == template_token
+    assert verdict["token"] == body["held"]
+
+
+def test_a_design_saved_without_a_login_is_the_token_holder_s(client, template_token, monkeypatch):
+    """The public editor saves with no session; the check happens logged in. The token is the key."""
+    import jwt
+
+    secret = "session-secret-not-a-real-one"
+    monkeypatch.setenv(app_module.SESSION_SECRET_ENV, secret)
+    body = _save_design(client, template_token)
+    bearer = {"Authorization": "Bearer " + jwt.encode({"nip": "1111111111"}, secret, algorithm="HS256")}
+    judged = client.post(f"/api/recheck/{body['held']}", data={}, content_type="multipart/form-data",
+                         headers=bearer)
+    assert judged.status_code == 200, judged.get_json()
+    assert judged.get_json()["template_token"] == template_token
+
+
+def test_the_design_is_a_texture_the_3d_scene_wears(client, template_token):
+    body = _save_design(client, template_token)
+    texture = client.get(f"/api/designs/{body['held']}/png")
+    assert texture.status_code == 200
+    assert texture.mimetype == "image/png"
+    picture = Image.open(io.BytesIO(texture.data))
+    assert max(picture.size) == app_module.DESIGN_TEXTURE_LONG_EDGE_PX
+    assert abs(picture.size[0] / picture.size[1] - 500 / 800) < 0.01    # the whole page, as the scene maps it
+    assert client.get("/api/designs/nie-ma/png").status_code == 404
+    scene = client.get(f"/model/{template_token}?design={body['held']}")
+    assert scene.status_code == 200
+    assert "/api/designs/" in scene.get_data(as_text=True)
+
+
 def test_a_design_without_a_picture_is_refused(client, template_token):
     answer = client.post(f"/api/designs/{template_token}", data={"elements": "[]"},
                          content_type="multipart/form-data")

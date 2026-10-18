@@ -326,6 +326,19 @@ if (sharedBtn) {
     el('sharedPath').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
 }
 
+/* A design saved in the editor (design.py) arrives by its held token — `/plik?held=…&name=…`, the
+   link the editor shows after a save — so its first check is a re-check: the bytes are already on
+   the server and the entry carries none (`held` marks it for the expiry answer in checkOne). */
+const pageArgs = new URLSearchParams(location.search);
+const heldDesign = pageArgs.get('held');
+if (heldDesign) {
+    const entry = newEntry({ name: pageArgs.get('name') || 'projekt.pdf', size: 0, held: true }, null);
+    entry.tokens.front = heldDesign;
+    ENTRIES.push(entry);
+    select(entry);
+    runQueue([entry]);
+}
+
 function tooBigMessage(name, bytes) {
     const mb = bytes ? ` ma ${Math.round(bytes / 1048576)} MB, a` : ' jest za duży —';
     return `Plik ${escapeHtml(name)}${mb} maksimum to ${UPLOAD_LIMIT_MB} MB. `
@@ -369,6 +382,8 @@ async function checkOne(entry, file, template, side, page, free, slot = 'front',
         return { error: 'Zaloguj się, żeby sprawdzić plik.' };
     }
     if (resp.status === 410 && held) {
+        // A design from the editor has no bytes here to send again: it is saved again there.
+        if (file.held) return { error: 'Projekt wygasł — zapisz go jeszcze raz w edytorze.' };
         entry.tokens[slot] = null;
         return checkOne(entry, file, template, side, page, free, slot, cut);
     }

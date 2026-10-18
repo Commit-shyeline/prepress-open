@@ -1725,6 +1725,12 @@ function build(data, cutFrom) {
     }
     // THIS template's demo — laid out inside its own safe outline (demo_artwork.py).
     wearArtwork(`{{ base }}/api/demo-artwork.jpg?token=${encodeURIComponent(token)}`, 0);
+    // A design saved in the editor (design.py), named by its held token: the customer's own work,
+    // so it outranks the demo, which is still fetched and may land later.
+    const heldDesign = params.get('design');
+    if (heldDesign) {
+        wearArtwork(`{{ base }}/api/designs/${encodeURIComponent(heldDesign)}/png`, 1);
+    }
 
     /* The check page hands over the CUSTOMER's raster and the findings' regions. Same origin only:
        the message carries a data URI and rectangles, and nothing else is trusted. Regions join the
