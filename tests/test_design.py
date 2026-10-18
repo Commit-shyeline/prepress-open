@@ -168,6 +168,20 @@ def test_a_design_saved_through_the_lan_door_stays_behind_it(client, template_to
     assert client.get(f"/api/designs/{body['held']}/png", headers={"X-Prepress-Open": "1"}).status_code == 200
 
 
+def test_the_editor_returns_to_a_shop_only_on_a_listed_origin(client, template_token, monkeypatch):
+    """`?return=` is an allowlist, not a Referer: an unlisted page gets no return link at all."""
+    page = lambda url: client.get(f"/projekt/{template_token}?return={url}").get_data(as_text=True)  # noqa: E731
+    assert 'data-return=""' in page("https://shop.example/produkt/brama/")        # nothing listed yet
+    monkeypatch.setenv(app_module.RETURN_ORIGINS_ENV, "https://shop.example, http://127.0.0.1:9400")
+    allowed = page("https://shop.example/produkt/brama/?x=1")
+    assert 'data-return="https://shop.example/produkt/brama/?x=1"' in allowed
+    assert 'id="shopLink"' in allowed
+    assert 'data-return=""' in page("https://shop.example.evil/produkt/")
+    assert 'data-return=""' in page("javascript:alert(1)")
+    assert 'id="shopLink"' not in page("https://elsewhere.example/")
+    assert _save_design(client, template_token)["png"].endswith("/png")
+
+
 def test_the_design_is_a_texture_the_3d_scene_wears(client, template_token):
     body = _save_design(client, template_token)
     texture = client.get(f"/api/designs/{body['held']}/png")

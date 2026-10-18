@@ -93,6 +93,10 @@ than absorbed into a closed product.
 Because the choice is free, it can be revisited in the open if a different licence would serve those
 shops better.
 
+The one exception is `wordpress/prepress-open-connector`, the thin WordPress plugin that links a
+running instance: GPLv2 or later, as WordPress itself and its plugin directory ask, which it can
+carry because it ships none of the engine (its own `LICENSE` says so).
+
 ## Credits
 
 Built by [Commit](https://www.shyeline.work) out of a working in-house tool at a Polish large-format

@@ -58,6 +58,11 @@ BASE_PATH_ENV = "PREPRESS_BASE_PATH"
 SESSION_SECRET_ENV = "PREPRESS_SESSION_SECRET"
 # Where an unauthenticated visitor is sent. `{next}` is replaced with the page they wanted.
 LOGIN_URL_ENV = "PREPRESS_LOGIN_URL"
+# The shops whose pages the design editor may send a customer back to with a saved design
+# (`/projekt/<token>?return=<page>`, wordpress/ connector): origins, comma-separated, scheme and
+# host exactly. Unset = the editor never leaves this site. An allowlist, not the Referer, because a
+# `return` anyone can type is an open redirect wearing the shop's name.
+RETURN_ORIGINS_ENV = "PREPRESS_RETURN_ORIGINS"
 # Where the issuing app keeps the token in the browser. Its name, not ours — a shop bolting this
 # behind an existing login already has a key, and the page has to read the same one.
 SESSION_KEY_ENV = "PREPRESS_SESSION_STORAGE_KEY"
@@ -187,6 +192,20 @@ def _path_hint():
 def _path_roots():
     return [root.strip() for root in (os.environ.get(PATH_ROOTS_ENV) or "").split(";")
             if root.strip()]
+
+
+def _return_url(raw):
+    """The shop page the editor may send the customer back to, or '' when `raw` is not on a listed
+    origin (RETURN_ORIGINS_ENV). Only http(s), and the origin whole: `https://shop.example` does not
+    admit `https://shop.example.evil`."""
+    from urllib.parse import urlsplit
+
+    allowed = {origin.strip().rstrip("/").lower()
+               for origin in (os.environ.get(RETURN_ORIGINS_ENV) or "").split(",") if origin.strip()}
+    parts = urlsplit((raw or "").strip())
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return ""
+    return raw.strip() if f"{parts.scheme}://{parts.netloc}".lower() in allowed else ""
 
 
 class PathRefused(ValueError):
@@ -801,7 +820,8 @@ def design_page(token):
     if not template:
         return jsonify({"error": "Nie znamy takiego szablonu — odśwież stronę."}), 404
     return render_template("design.html", token=token, name=template.get("name") or token,
-                           page_mm=template.get("page_mm") or [0, 0])
+                           page_mm=template.get("page_mm") or [0, 0],
+                           return_url=_return_url(request.args.get("return")))
 
 
 @app.route("/api/templates/<token>/sheet.png")
@@ -845,6 +865,7 @@ def api_design_save(token):
     # Where the design goes next, all by its held token: the PDF to keep, the check page with it
     # already queued (sprawdz.html re-checks the held bytes), the 3D scene wearing it.
     return jsonify({"held": held, "pdf": f"{base_path()}/api/designs/{held}/pdf",
+                    "png": f"{base_path()}/api/designs/{held}/png",
                     "check": f"{base_path()}/plik?held={held}&name={filename}",
                     "model": f"{base_path()}/model/{token}?design={held}"})
 

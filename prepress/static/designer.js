@@ -53,6 +53,7 @@
 		const pdfLink = main.querySelector( '#pdfLink' );
 		const checkLink = main.querySelector( '#checkLink' );
 		const modelLink = main.querySelector( '#modelLink' );
+		const shopLink = main.querySelector( '#shopLink' ); // only when the server allowed the shop's return page
 
 		let sheet = null; // the sheet's picture: the canvas's size and its faint background
 		let artwork = null; // offscreen canvas at the sheet's size: the design itself
@@ -341,6 +342,16 @@
 		} );
 		buttons.clear.addEventListener( 'click', () => commit( [], { select: null } ) );
 
+		/** The shop's page with the saved design named on it (the wordpress/ connector reads these three): the held
+		 * token, the template, and the design's picture as an absolute address, since the shop is another origin. */
+		function shopReturnUrl( result ) {
+			const url = new URL( main.dataset.return );
+			url.searchParams.set( 'design', result.held );
+			url.searchParams.set( 'template', token );
+			url.searchParams.set( 'png', new URL( result.png, window.location.href ).href );
+			return url.href;
+		}
+
 		/** The artwork to the server, which makes it the filled template page and holds it: then the PDF, the check and the 3D links. */
 		buttons.save.addEventListener( 'click', async () => {
 			if ( ! elements.length ) {
@@ -366,6 +377,9 @@
 				checkLink.href = result.check || checkLink.href;
 				if ( modelLink && result.model ) {
 					modelLink.href = result.model;
+				}
+				if ( shopLink && result.png ) {
+					shopLink.href = shopReturnUrl( result );
 				}
 				saved.classList.add( 'on' );
 				say( strings.saved );

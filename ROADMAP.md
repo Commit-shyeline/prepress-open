@@ -353,7 +353,10 @@ A shop's templates, 3D models and brand are the instance's data, never this repo
       with no session is the token holder's: the public editor saves anonymously, the check runs logged in.
 - [x] the 3D scene wears a held design (`/model/<token>?design=<held>` ← `GET /api/designs/<held>/png`, the
       page at the demo artwork's resolution, outranking the demo); the editor's saved row links both.
-- [ ] a connector for WordPress (`wordpress/`), with its own licence file
+- [x] a connector for WordPress (`wordpress/prepress-open-connector`, GPLv2-or-later, its `LICENSE` says why): the
+      instance address as a setting, `[prepress_design template=…]` → `/projekt/<token>?return=<page>`, and
+      `connector.js` reading `?design=&template=&png=` back into a `prepress-open:design` event. On this side
+      `PREPRESS_RETURN_ORIGINS` allowlists the shops the editor may return to („Wróć do sklepu z projektem").
 - [ ] **the design's resolution.** Checked end to end on 2026-10-18 (a text on the Play A flag → `/plik?held=` →
       verdict): the page is recognised and the template lines are gone, but the design is a raster of the sheet's
       2048 px, which on a 2.4 m flag is 22 DPI against the material's 100, and the white ground counts as no ink

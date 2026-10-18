@@ -65,6 +65,7 @@ input[type="text"]:focus-visible { outline: 3px solid var(--accent-text); outlin
       data-token="{{ token }}"
       data-sheet="{{ base }}/api/templates/{{ token }}/sheet.png"
       data-save="{{ base }}/api/designs/{{ token }}"
+      data-return="{{ return_url }}"
       data-page-mm="{{ page_mm|tojson|forceescape }}"
       data-strings="{{ {
           'loading': 'Wczytuję szablon…',
@@ -115,6 +116,7 @@ input[type="text"]:focus-visible { outline: 3px solid var(--accent-text); outlin
                 <a class="btn" id="pdfLink" href="#" download>Pobierz PDF projektu</a>
                 <a class="btn" id="checkLink" href="{{ base }}/plik">Sprawdź plik →</a>
                 <a class="btn" id="modelLink" href="{{ base }}/model/{{ token }}">Zobacz w 3D →</a>
+                {% if return_url %}<a class="btn main" id="shopLink" href="{{ return_url }}">Wróć do sklepu z projektem →</a>{% endif %}
             </span>
         </div>
     </div>
