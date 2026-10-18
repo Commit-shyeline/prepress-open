@@ -359,7 +359,11 @@ A shop's templates, 3D models and brand are the instance's data, never this repo
       what a sheet millimetre is, the stamp states full-size geometry (`stamp_payload`, `identify.stamped_geometry`
       scales the declared page), and the check judges resolution at full size. The editor shows no 3D link on a
       sheet. The admin UI does not offer the kind yet — saved through `POST /api/admin/templates` with
-      `{"kind": "sheet", "scale": 10, "outlines": []}`.
+      `{"kind": "sheet", "scale": 10, "outlines": []}`. **A sheet is issued as its production page**, not redrawn:
+      `POST /api/admin/templates/<token>/source` keeps the PDF beside the store (`templates/<token>.pdf`, gitignored
+      shop data) and `build_pdf` lays the spec panel and the printed token over its first page, then stamps it; the
+      editor's canvas is that page. Without a source file a sheet is the bare page frame (Shyeline 2026-10-18: "so
+      now we generate templates instead of using the ones we already have?" — no longer).
 - [x] a connector for WordPress (`wordpress/prepress-open-connector`, GPLv2-or-later, its `LICENSE` says why): the
       instance address as a setting, `[prepress_design template=…]` → `/projekt/<token>?return=<page>`, and
       `connector.js` reading `?design=&template=&png=` back into a `prepress-open:design` event. On this side

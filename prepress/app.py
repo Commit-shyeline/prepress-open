@@ -1581,7 +1581,38 @@ def api_admin_edit_template(token):
 def api_admin_remove_template(token):
     if not materials.remove_template(token):
         return jsonify({"error": f"Nie ma szablonu o tokenie {token!r}."}), 404
+    materials.remove_template_source(token)
     return jsonify({"templates": materials.load_templates()})
+
+
+TEMPLATE_SOURCE_MAX_BYTES = 64 * 1024 * 1024
+
+
+@app.route("/api/admin/templates/<token>/source", methods=["POST"])
+@require_admin
+def api_admin_template_source(token):
+    """The production PDF of a sheet template, kept beside the store: from then on the customer sheet
+    IS that page (from_template.build_pdf), with the spec panel and the stamp laid over."""
+    template = materials.get_template(token)
+    if not template:
+        return jsonify({"error": f"Nie ma szablonu o tokenie {token!r}."}), 404
+    if template.get("kind") != "sheet":
+        return jsonify({"error": "Plik produkcyjny trzyma się tylko dla szablonu typu „sheet” — płaski szablon jest rysowany z obrysu."}), 400
+    upload = request.files.get("file")
+    if upload is None:
+        return jsonify({"error": "Nie wybrano pliku."}), 400
+    data = upload.read(TEMPLATE_SOURCE_MAX_BYTES + 1)
+    if len(data) > TEMPLATE_SOURCE_MAX_BYTES:
+        return jsonify({"error": "Plik produkcyjny jest za duży."}), 413
+    try:
+        import pikepdf as _pikepdf
+        with _pikepdf.open(io.BytesIO(data)) as pdf:
+            pages = len(pdf.pages)
+    except Exception:                               # noqa: BLE001 — not a PDF is the answer
+        return jsonify({"error": "To nie jest czytelny plik PDF."}), 400
+    if not materials.save_template_source(token, data):
+        return jsonify({"error": "Zły token."}), 400
+    return jsonify({"template": token, "bytes": len(data), "pages": pages})
 
 
 @app.route("/api/templates")

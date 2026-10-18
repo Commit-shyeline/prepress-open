@@ -119,7 +119,14 @@ def build_pdf(template, title=None):
 
     from reportlab.pdfgen import canvas
 
-    from . import specblock
+    from . import materials, specblock
+
+    # A sheet of panels is issued AS its production page: the die-lines, folds and labels the graphic
+    # team drew, with the spec panel and the printed token laid over, never redrawn from an outline.
+    if template.get("kind") == "sheet":
+        source = materials.load_template_source(template.get("token"))
+        if source:
+            return _sheet_from_source(template, source, title)
 
     drawing, notes = derive(template)
     page_w, page_h = (float(v) for v in template["page_mm"])
@@ -153,6 +160,42 @@ def build_pdf(template, title=None):
     if len(side_labels) > 1:
         notes.append(f"strony: {len(side_labels)} — {', '.join(side_labels)}, tył lustrzany")
     return _stamp(buffer.getvalue(), template, notes, side_labels)
+
+
+def _sheet_from_source(template, source, title=None):
+    """The production page itself as the customer sheet: its first page, the spec panel and the printed
+    token drawn over it, stamped. A spec panel needs the page's own size, taken from the file — the
+    stored page_mm came from the same file, but the file is the truth."""
+    import io
+
+    import pikepdf
+    from reportlab.pdfgen import canvas
+
+    from . import specblock
+
+    with pikepdf.open(io.BytesIO(source)) as production:
+        sheet = pikepdf.new()
+        sheet.pages.append(production.pages[0])
+        page = sheet.pages[0]
+        box = page.mediabox
+        page_w = float(box[2] - box[0]) / PT_PER_MM
+        page_h = float(box[3] - box[1]) / PT_PER_MM
+        overlay_buffer = io.BytesIO()
+        overlay = canvas.Canvas(overlay_buffer, pagesize=(page_w * PT_PER_MM, page_h * PT_PER_MM))
+        overlay.setTitle(title or template.get("name") or "Szablon")
+        overlay.setCreator("prepress-open")
+        drawing = {"netto": [], "brutto": [], "safe": [], "informational": []}
+        specblock.draw(overlay, _spec_entry(template, drawing, "", mirrored=False), page_w, page_h,
+                       lambda e: e["label"])
+        _draw_printed_token(overlay, template)
+        overlay.showPage()
+        overlay.save()
+        with pikepdf.open(io.BytesIO(overlay_buffer.getvalue())) as overlay_pdf:
+            page.add_overlay(overlay_pdf.pages[0])
+        out = io.BytesIO()
+        sheet.save(out)
+    notes = ["arkusz: strona produkcyjna z pliku (bryty, zagięcia i opisy bez zmian)"]
+    return _stamp(out.getvalue(), template, notes)
 
 
 def scale_of(template):

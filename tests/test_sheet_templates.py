@@ -60,6 +60,57 @@ def test_a_sheet_s_stamp_states_full_size_geometry(client):
     assert stamp["netto_mm"] == [23000, 23000]
 
 
+def _production_sheet():
+    """A siatka like the real ones: two panels and a label on a 2300 × 2300 mm page."""
+    from reportlab.pdfgen import canvas
+
+    pt = 72 / 25.4
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=(2300 * pt, 2300 * pt))
+    pdf.rect(900 * pt, 1100 * pt, 725 * pt, 353 * pt, stroke=1, fill=0)
+    pdf.rect(546 * pt, 1487 * pt, 353 * pt, 412 * pt, stroke=1, fill=0)
+    pdf.setFont("Helvetica", 40)
+    pdf.drawString(1000 * pt, 1200 * pt, "SIATKA BRYT 1")
+    pdf.showPage()
+    pdf.save()
+    return buffer.getvalue()
+
+
+def test_a_sheet_with_its_production_file_is_issued_as_that_page(client, tmp_path, monkeypatch):
+    token = _save_sheet(client).get_json()["template"]["token"]
+    uploaded = client.post(f"/api/admin/templates/{token}/source", headers={"X-Admin-Token": TOKEN},
+                           data={"file": (io.BytesIO(_production_sheet()), "szablon.pdf")},
+                           content_type="multipart/form-data")
+    assert uploaded.status_code == 200, uploaded.get_json()
+    assert uploaded.get_json()["pages"] == 1
+    assert os.path.isfile(materials.source_path(token))      # beside the store, one file per token
+
+    sheet = client.get(f"/api/templates/{token}/pdf")
+    assert sheet.status_code == 200
+    import pypdfium2
+    document = pypdfium2.PdfDocument(io.BytesIO(sheet.data))
+    assert len(document) == 1
+    text = document[0].get_textpage().get_text_bounded()
+    assert "SIATKA BRYT 1" in text                           # the production drawing, not a redrawn outline
+    assert f"prepress-open:{token}" in text                  # the printed token laid over it
+    stamp = identify.read_stamp(sheet.data)["stamp"]
+    assert stamp["template"] == token and stamp["scale"] == 10
+
+    picture = client.get(f"/api/templates/{token}/sheet.png")
+    image = Image.open(io.BytesIO(picture.data)).convert("L")
+    dark = sum(1 for value in image.getdata() if value < 128)
+    assert dark > 2000                                       # the editor's canvas shows the panels
+
+    # not a PDF, a flat template, an unknown token: refused
+    assert client.post(f"/api/admin/templates/{token}/source", headers={"X-Admin-Token": TOKEN},
+                       data={"file": (io.BytesIO(b"not a pdf"), "x.pdf")}, content_type="multipart/form-data").status_code == 400
+    assert client.post("/api/admin/templates/nie-ma/source", headers={"X-Admin-Token": TOKEN},
+                       data={"file": (io.BytesIO(_production_sheet()), "x.pdf")}, content_type="multipart/form-data").status_code == 404
+    # deleting the template removes its file
+    assert client.delete(f"/api/admin/templates/{token}", headers={"X-Admin-Token": TOKEN}).status_code == 200
+    assert not os.path.isfile(materials.source_path(token))
+
+
 def test_a_bad_scale_is_refused(client):
     assert _save_sheet(client, scale=0).status_code == 400
     assert _save_sheet(client, scale="dziesięć").status_code == 400

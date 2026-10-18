@@ -350,6 +350,48 @@ def _write(path, **changes):
     load(path, force=True)
 
 
+# ── A sheet template's own production file ──────────────────────────────────
+# A flat template is redrawn from its stored outline; a sheet of panels (an inflatable's siatka) is
+# not — the production page itself is what the customer should design on, so the PDF is kept beside
+# the store, one file per token, in the gitignored templates/ folder (a shop's dies are its data).
+_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def source_path(token, path=None):
+    """Where a template's production PDF lives, or None for a token that is not a token."""
+    if not _TOKEN_PATTERN.match(str(token or "")):
+        return None
+    return os.path.join(os.path.dirname(path or DEFAULT_STORE), "templates", f"{token}.pdf")
+
+
+def save_template_source(token, data, path=None):
+    """Keep `data` (PDF bytes) as the template's production file, atomically. False for a bad token."""
+    target = source_path(token, path)
+    if not target:
+        return False
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    temporary = f"{target}.tmp"
+    with open(temporary, "wb") as handle:
+        handle.write(data)
+    os.replace(temporary, target)
+    return True
+
+
+def load_template_source(token, path=None):
+    """The template's production PDF bytes, or None when it has none."""
+    target = source_path(token, path)
+    if not target or not os.path.isfile(target):
+        return None
+    with open(target, "rb") as handle:
+        return handle.read()
+
+
+def remove_template_source(token, path=None):
+    target = source_path(token, path)
+    if target and os.path.isfile(target):
+        os.remove(target)
+
+
 def get(material_id, path=None):
     """One material, or None. Callers that need a hard failure should say so themselves — a missing
     material is a normal outcome when a customer follows an old link."""
