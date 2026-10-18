@@ -353,14 +353,23 @@ A shop's templates, 3D models and brand are the instance's data, never this repo
       with no session is the token holder's: the public editor saves anonymously, the check runs logged in.
 - [x] the 3D scene wears a held design (`/model/<token>?design=<held>` ← `GET /api/designs/<held>/png`, the
       page at the demo artwork's resolution, outranking the demo); the editor's saved row links both.
+- [x] **sheet templates** (2026-10-18): a template `kind` — `flat` (one printed shape, its cut marked) or `sheet`
+      (a page of panels with no single cut: an inflatable's siatka, drawn at 1:N). A sheet's finished size is its
+      page, so the page rectangle stands in as the cut and nothing downstream needs a second model; `scale` says
+      what a sheet millimetre is, the stamp states full-size geometry (`stamp_payload`, `identify.stamped_geometry`
+      scales the declared page), and the check judges resolution at full size. The editor shows no 3D link on a
+      sheet. The admin UI does not offer the kind yet — saved through `POST /api/admin/templates` with
+      `{"kind": "sheet", "scale": 10, "outlines": []}`.
 - [x] a connector for WordPress (`wordpress/prepress-open-connector`, GPLv2-or-later, its `LICENSE` says why): the
       instance address as a setting, `[prepress_design template=…]` → `/projekt/<token>?return=<page>`, and
       `connector.js` reading `?design=&template=&png=` back into a `prepress-open:design` event. On this side
       `PREPRESS_RETURN_ORIGINS` allowlists the shops the editor may return to („Wróć do sklepu z projektem").
       The script is tested under Node and the editor's side in a browser; **the PHP has not yet run in a
       WordPress** (no PHP on the build machine), and `LICENSE` points at the GPLv2 text rather than carrying it.
-- [ ] **the design's resolution.** Checked end to end on 2026-10-18 (a text on the Play A flag → `/plik?held=` →
-      verdict): the page is recognised and the template lines are gone, but the design is a raster of the sheet's
-      2048 px, which on a 2.4 m flag is 22 DPI against the material's 100, and the white ground counts as no ink
-      in the bleed. Either compose the page from the elements themselves (texts as text, pictures at their own
-      pixels) or rasterise at the material's DPI; until then the editor's own output fails two of its rules.
+- [x] **the design's resolution** (2026-10-18, afternoon). The page is composed from the elements, not from the
+      sheet's 2048 px canvas: a picture goes in at the customer's own pixels (the uploaded file, kept for the session),
+      a text is rasterised at 150 dpi for its printed size with a transparent ground (`designer.js elementRasters`,
+      `design.compose_pdf` placements). Checked live on the Play A flag: a 1200 px logo and a text → 114 dpi, the
+      resolution rule green (it was 22 dpi). An element without its raster means the canvas is drawn whole rather
+      than a half-composed page. Still red by design: „grafika nie sięga spadu" — a white ground is no ink to the
+      checker; a background colour in the editor is the next step if customers want full-bleed designs.

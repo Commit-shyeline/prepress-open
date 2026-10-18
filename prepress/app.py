@@ -14,6 +14,7 @@ import base64
 import re
 import functools
 import io
+import json
 import logging
 import os
 import secrets
@@ -821,6 +822,8 @@ def design_page(token):
         return jsonify({"error": "Nie znamy takiego szablonu — odśwież stronę."}), 404
     return render_template("design.html", token=token, name=template.get("name") or token,
                            page_mm=template.get("page_mm") or [0, 0],
+                           # A sheet of panels has no 3D flag to wear it: the scene is for flat templates.
+                           show_model=template.get("kind") != "sheet",
                            return_url=_return_url(request.args.get("return")))
 
 
@@ -854,8 +857,21 @@ def api_design_save(token):
     data = artwork.read(DESIGN_ARTWORK_MAX_BYTES + 1)
     if len(data) > DESIGN_ARTWORK_MAX_BYTES:
         return jsonify({"error": "Projekt jest za duży — zmniejsz wgrane grafiki."}), 413
+    # The elements and their own pixels (designer.js elementRasters), so the page is composed at print
+    # resolution rather than from the canvas; a missing or oversized one means the canvas is used whole.
     try:
-        pdf_bytes = design.compose_pdf(template, data)
+        elements = json.loads(request.form.get("elements") or "[]")
+    except ValueError:
+        elements = []
+    rasters = {}
+    for element in elements if isinstance(elements, list) else []:
+        upload = request.files.get(f"element-{element.get('id')}") if isinstance(element, dict) else None
+        if upload is not None:
+            raster = upload.read(DESIGN_ARTWORK_MAX_BYTES + 1)
+            if len(raster) <= DESIGN_ARTWORK_MAX_BYTES:
+                rasters[element["id"]] = raster
+    try:
+        pdf_bytes = design.compose_pdf(template, data, elements=elements, rasters=rasters)
     except design.DesignError as error:
         return jsonify({"error": str(error)}), 400
     except from_template.TemplateError as error:
@@ -1321,9 +1337,26 @@ def _page_count(data):
 def api_admin_save_template():
     """Store the outline the admin pointed at, with the numbers they typed, under a fresh token."""
     payload = request.get_json(silent=True) or {}
-    chosen, problem = _typed_outlines(payload.get("outlines"))
-    if problem:
-        return jsonify({"error": problem}), 400
+    page = payload.get("page_mm")
+    if not (isinstance(page, list) and len(page) == 2):
+        return jsonify({"error": "Brak rozmiaru strony szablonu."}), 400
+    # Two kinds of template. "flat": one printed shape, its cut outline marked by the admin — a flag,
+    # a banner. "sheet": a page of PANELS with no single cut (an inflatable's siatka, drawn at 1:N),
+    # whose finished size IS the page: the page's rectangle stands in as the cut, so the generator,
+    # the stamp and the check need no second model, and `scale` says what 1 mm of the sheet is.
+    kind = "sheet" if payload.get("kind") == "sheet" else "flat"
+    try:
+        scale = 1 if payload.get("scale") in (None, "") else int(payload.get("scale"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Skala musi być liczbą całkowitą (1 = naturalna, 10 = 1:10)."}), 400
+    if scale < 1:
+        return jsonify({"error": "Skala musi być co najmniej 1."}), 400
+    if kind == "sheet":
+        chosen = [_page_outline(page)]
+    else:
+        chosen, problem = _typed_outlines(payload.get("outlines"))
+        if problem:
+            return jsonify({"error": problem}), 400
     name = str(payload.get("name") or "").strip()
     if not name:
         return jsonify({"error": "Podaj nazwę szablonu — klient wybiera po niej."}), 400
@@ -1334,9 +1367,6 @@ def api_admin_save_template():
         return jsonify({"error": "Spad i obszar bezpieczny muszą być liczbami."}), 400
     if bleed_mm < 0 or safe_mm < 0:
         return jsonify({"error": "Spad i obszar bezpieczny nie mogą być ujemne."}), 400
-    page = payload.get("page_mm")
-    if not (isinstance(page, list) and len(page) == 2):
-        return jsonify({"error": "Brak rozmiaru strony szablonu."}), 400
 
     trim = lines.trim_box_mm(chosen)
     try:
@@ -1351,6 +1381,8 @@ def api_admin_save_template():
         # an identifier, not a secret — the customer surface is open by design.
         "token": payload.get("token") or secrets.token_urlsafe(6),
         "name": name,
+        "kind": kind,
+        "scale": scale,
         "page_mm": [float(page[0]), float(page[1])],
         "outlines": chosen,
         # The finished size, as the UNION of everything marked as a cut — on a flag the hem reaches
@@ -1369,6 +1401,14 @@ def api_admin_save_template():
     except materials.MaterialError as error:
         return jsonify({"error": str(error)}), 400
     return jsonify({"template": stored, "templates": materials.load_templates()})
+
+
+def _page_outline(page_mm):
+    """The page's own rectangle as a stored cut outline: a sheet template's finished size is its page."""
+    width, height = float(page_mm[0]), float(page_mm[1])
+    return {"type": "cut", "safe_base": False, "start": [0.0, 0.0],
+            "segments": [["l", width, 0.0], ["l", width, height], ["l", 0.0, height]], "closed": True,
+            "width_mm": round(width, 2), "height_mm": round(height, 2), "origin_mm": [0.0, 0.0]}
 
 
 def _sewn_sides(raw):

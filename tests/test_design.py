@@ -7,9 +7,11 @@ one: a production PDF inspected, its cut line chosen, saved under a token.
 Run: python3.13 -m pytest tests/test_design.py -q
 """
 import io
+import json
 import os
 import sys
 
+import pikepdf
 import pytest
 from PIL import Image
 from reportlab.pdfgen import canvas
@@ -194,6 +196,52 @@ def test_the_design_is_a_texture_the_3d_scene_wears(client, template_token):
     scene = client.get(f"/model/{template_token}?design={body['held']}")
     assert scene.status_code == 200
     assert "/api/designs/" in scene.get_data(as_text=True)
+
+
+def _png(width, height, colour=(31, 107, 51), transparent=False):
+    image = Image.new("RGBA" if transparent else "RGB", (width, height), (0, 0, 0, 0) if transparent else "white")
+    image.paste(colour + ((255,) if transparent else ()), (0, 0, width, height // 2))
+    holder = io.BytesIO()
+    image.save(holder, format="PNG")
+    return holder.getvalue()
+
+
+def test_a_design_composed_from_its_elements_keeps_their_pixels(client, template_token):
+    """A 400 px canvas is 20 dpi on the 500 mm page; the elements' own rasters are what goes on the page."""
+    # On the 400 × 640 canvas (500 × 800 mm: 1.25 mm per canvas px): a logo 200 px wide at its 1000 own pixels
+    # (1000 px over 250 mm = 101.6 dpi) and a text 240 × 60 px rasterised at 1200 × 300 (300 mm: 101.6 dpi).
+    elements = [
+        {"id": "logo", "type": "image", "src": "data:,", "x": 200, "y": 200, "scale": 1, "rotation": 0, "width": 200, "height": 100},
+        {"id": "napis", "type": "text", "text": "LUXPOL", "colour": "#000", "size": 50, "x": 200, "y": 450, "scale": 1, "rotation": 0.3, "width": 240, "height": 60},
+    ]
+    saved = client.post(f"/api/designs/{template_token}", content_type="multipart/form-data", data={
+        "artwork": (io.BytesIO(_artwork_png()), "projekt.png"),
+        "elements": json.dumps(elements),
+        "element-logo": (io.BytesIO(_png(1000, 500)), "logo.png"),
+        "element-napis": (io.BytesIO(_png(1200, 300, transparent=True)), "napis.png"),
+    })
+    assert saved.status_code == 200, saved.get_json()
+    pdf = client.get(saved.get_json()["pdf"]).data
+    with pikepdf.open(io.BytesIO(pdf)) as document:
+        widths = sorted(int(image.Width) for image in document.pages[0].get_images().values())
+    assert widths == [1000, 1200]                   # the elements' pixels, not the 400 px canvas
+    judged = client.post(f"/api/recheck/{saved.get_json()['held']}", data={}, content_type="multipart/form-data").get_json()
+    assert judged["recognised"] is True
+    assert judged["measured"]["min_dpi"] >= 100, judged["measured"]
+
+
+def test_a_design_with_an_element_missing_its_raster_falls_back_to_the_canvas(client, template_token):
+    elements = [{"id": "a", "type": "image", "src": "data:,", "x": 200, "y": 200, "scale": 1, "rotation": 0, "width": 200, "height": 100},
+                {"id": "b", "type": "text", "text": "x", "colour": "#000", "size": 50, "x": 200, "y": 450, "scale": 1, "rotation": 0, "width": 240, "height": 60}]
+    saved = client.post(f"/api/designs/{template_token}", content_type="multipart/form-data", data={
+        "artwork": (io.BytesIO(_artwork_png()), "projekt.png"),
+        "elements": json.dumps(elements),
+        "element-a": (io.BytesIO(_png(1000, 500)), "a.png"),
+    })
+    assert saved.status_code == 200
+    with pikepdf.open(io.BytesIO(client.get(saved.get_json()["pdf"]).data)) as document:
+        widths = [int(image.Width) for image in document.pages[0].get_images().values()]
+    assert widths == [400]                          # the whole canvas, nothing half-placed
 
 
 def test_a_design_without_a_picture_is_refused(client, template_token):

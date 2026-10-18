@@ -11,7 +11,13 @@
 	const HISTORY_DEPTH = 30;
 	const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
 	const STORAGE_PREFIX = 'prepress-design:';
-	const PICTURE_MAX_EDGE = 1024; // what is kept of an uploaded picture: plenty for a 2048 px sheet
+	const PICTURE_MAX_EDGE = 1024; // the on-canvas copy of an uploaded picture: plenty for a 2048 px sheet, light to drag
+	// The saved page is composed from the elements, not from the 2048 px canvas (design.py): a picture goes in at the
+	// customer's own pixels, a text is rasterised at this resolution for its printed size. Kept per session only — a
+	// reloaded design falls back to the on-canvas copy, which the check then judges as it is.
+	const originals = new Map(); // src -> the uploaded File
+	const TEXT_RASTER_DPI = 150;
+	const RASTER_MAX_EDGE = 8192; // a 2.4 m text at 150 dpi is 14 000 px: capped, and the check says what that costs
 
 	const loadImage = ( src ) =>
 		new Promise( ( resolve, reject ) => {
@@ -31,7 +37,9 @@
 			const scale = Math.min( 1, PICTURE_MAX_EDGE / Math.max( width, height ) );
 			const canvas = Object.assign( document.createElement( 'canvas' ), { width: Math.round( width * scale ), height: Math.round( height * scale ) } );
 			canvas.getContext( '2d' ).drawImage( image, 0, 0, canvas.width, canvas.height );
-			return canvas.toDataURL( 'image/png' );
+			const src = canvas.toDataURL( 'image/png' );
+			originals.set( src, file );
+			return src;
 		} finally {
 			URL.revokeObjectURL( url );
 		}
@@ -352,6 +360,36 @@
 			return url.href;
 		}
 
+		const toBlob = ( canvas ) => new Promise( ( resolve ) => canvas.toBlob( resolve, 'image/png' ) );
+
+		/** A text element as a transparent PNG at TEXT_RASTER_DPI for its printed size: its box at scale 1 is `width` ×
+		 * `height` sheet pixels, and a sheet pixel is `mmPerPixel` of the page. */
+		async function textRaster( element, mmPerPixel ) {
+			const wanted = ( element.scale * mmPerPixel * TEXT_RASTER_DPI ) / 25.4; // raster px per sheet px at scale 1
+			const factor = Math.min( wanted, RASTER_MAX_EDGE / Math.max( element.width, element.height ) );
+			const canvas = Object.assign( document.createElement( 'canvas' ), { width: Math.ceil( element.width * factor ), height: Math.ceil( element.height * factor ) } );
+			const context = canvas.getContext( '2d' );
+			context.scale( factor, factor );
+			context.font = `700 ${ element.size }px ${ FONT }`;
+			context.fillStyle = element.colour;
+			context.textAlign = 'center';
+			context.textBaseline = 'middle';
+			context.fillText( element.text, element.width / 2, element.height / 2 );
+			return toBlob( canvas );
+		}
+
+		/** Each element's own pixels for the page: the uploaded file where this session still has it, else the on-canvas
+		 * copy; a text freshly rasterised. [ [ id, Blob ], … ] in drawing order. */
+		async function elementRasters() {
+			const mmPerPixel = JSON.parse( main.dataset.pageMm )[ 0 ] / artwork.width;
+			return Promise.all( elements.map( async ( element ) => [
+				element.id,
+				element.type === 'image'
+					? originals.get( element.src ) || ( await fetch( element.src ).then( ( response ) => response.blob() ) )
+					: await textRaster( element, mmPerPixel ),
+			] ) );
+		}
+
 		/** The artwork to the server, which makes it the filled template page and holds it: then the PDF, the check and the 3D links. */
 		buttons.save.addEventListener( 'click', async () => {
 			if ( ! elements.length ) {
@@ -362,10 +400,11 @@
 			say( strings.saving );
 			try {
 				drawArtwork();
-				const blob = await new Promise( ( resolve ) => artwork.toBlob( resolve, 'image/png' ) );
+				const blob = await toBlob( artwork );
 				const body = new FormData();
-				body.append( 'artwork', blob, 'projekt.png' );
+				body.append( 'artwork', blob, 'projekt.png' ); // the preview, and the pixel grid the elements are placed in
 				body.append( 'elements', JSON.stringify( elements ) );
+				( await elementRasters() ).forEach( ( [ id, raster ] ) => body.append( `element-${ id }`, raster, `${ id }.png` ) );
 				const response = await fetch( main.dataset.save, { method: 'POST', body } );
 				const result = await response.json().catch( () => ( {} ) );
 				if ( ! response.ok ) {

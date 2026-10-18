@@ -62,8 +62,11 @@ def stamped_geometry(stamp):
     # A template built from a SHAPED production file states its page outright, because that page is
     # not netto plus bleed on each side — a flag's sheet is bigger than its cut in ways no arithmetic
     # recovers. A checker that assumed otherwise would fail every correct return of such a template.
+    # The declared page is the sheet AS DRAWN; a sheet template drawn at 1:N (from_template `scale`)
+    # states full-size geometry everywhere else in the stamp, so its page is scaled up to match.
+    scale = int(stamp.get("scale", 1) or 1)
     declared_page = stamp.get("page_mm")
-    brutto = ((float(declared_page[0]), float(declared_page[1])) if declared_page
+    brutto = ((float(declared_page[0]) * scale, float(declared_page[1]) * scale) if declared_page
               else (width + 2 * bleed, height + 2 * bleed))
     return {
         "netto_mm": (width, height),
@@ -75,7 +78,7 @@ def stamped_geometry(stamp):
         # set them. The measurement layer still works from the smallest — see measure.measure.
         "sewn_sides_mm": stamp.get("sewn_sides_mm"),
         "safe_sides_mm": stamp.get("safe_total_sides_mm"),
-        "scale": int(stamp.get("scale", 1)),
+        "scale": scale,
         # Page furniture, not artwork. The template page is brutto/scale PLUS this, so the checker
         # has to know about it — otherwise a perfectly correct return fails its own size rule.
         "strip_mm": float(stamp.get("strip_mm", 0.0) or 0.0),

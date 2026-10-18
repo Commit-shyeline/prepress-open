@@ -155,6 +155,15 @@ def build_pdf(template, title=None):
     return _stamp(buffer.getvalue(), template, notes, side_labels)
 
 
+def scale_of(template):
+    """What one millimetre of the sheet is in the product: 1 for a flat template, N for a sheet drawn
+    at 1:N (an inflatable's siatka). Anything unexpected reads as natural size."""
+    try:
+        return max(1, int(template.get("scale") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 def sides_of(template):
     """How many printed sides this product has. Anything unexpected reads as one."""
     try:
@@ -219,14 +228,16 @@ def _spec_entry(template, drawing, side="", mirrored=False):
         # Said on the sheet, not only in the metadata: a designer has to know the guides they are
         # looking at are reflected before they place anything against them.
         side = f"{side} (LUSTRO)" if side else "LUSTRO"
+    # A sheet drawn at 1:N (template `scale`): the panel states full-size millimetres, as the stamp does.
+    scale = scale_of(template)
     return {"material_name": f"{name} — {side}" if side else name,
             "label": side,
             "safe_box_mm": home,
-            "scale": 1,
-            "brutto_mm": (float(brutto[0]), float(brutto[1])),
-            "safe_mm_box": (float(safe[0]), float(safe[1])),
-            "bleed_mm": float(template.get("bleed_mm") or 0.0),
-            "safe_mm": float(template.get("safe_mm") or 0.0),
+            "scale": scale,
+            "brutto_mm": (float(brutto[0]) * scale, float(brutto[1]) * scale),
+            "safe_mm_box": (float(safe[0]) * scale, float(safe[1]) * scale),
+            "bleed_mm": float(template.get("bleed_mm") or 0.0) * scale,
+            "safe_mm": float(template.get("safe_mm") or 0.0) * scale,
             "spec_position": template.get("spec_position") or "panel",
             "spec_strip_mm": 0.0}
 
@@ -256,22 +267,25 @@ def stamp_payload(template, notes=(), sides=1):
                              float(template.get("bleed_mm") or 0.0),
                              float(template.get("safe_mm") or 0.0),
                              template.get("page_mm"))
+    # The stamp's geometry is FULL size and its page is as drawn (the generator's convention, which
+    # the measuring and the rules divide by `scale`): a sheet template drawn at 1:N multiplies here.
+    scale = scale_of(template)
     return {
         "v": STAMP_VERSION,
         "template": template.get("token"),
         "material": template.get("material") or "",
         "page_mm": [round(float(v), 2) for v in template["page_mm"]],
-        "netto_mm": [round(v, 2) for v in (boxes["netto_mm"] or template["page_mm"])],
-        "bleed_mm": round(float(template.get("bleed_mm") or 0.0), 2),
-        "safe_mm": round(float(template.get("safe_mm") or 0.0), 2),
+        "netto_mm": [round(float(v) * scale, 2) for v in (boxes["netto_mm"] or template["page_mm"])],
+        "bleed_mm": round(float(template.get("bleed_mm") or 0.0) * scale, 2),
+        "safe_mm": round(float(template.get("safe_mm") or 0.0) * scale, 2),
         # Carried even though the checker still reads only `safe_mm`: the sides are what the shop
         # actually set, and a returning file that lost them cannot be judged against the template it
         # was issued from.
-        "sewn_sides_mm": {side: round(value, 2)
+        "sewn_sides_mm": {side: round(value * scale, 2)
                           for side, value in sewn_mm(template).items()},
-        "safe_total_sides_mm": {side: round(value, 2)
+        "safe_total_sides_mm": {side: round(value * scale, 2)
                                 for side, value in margins_mm(template).items()},
-        "scale": 1,
+        "scale": scale,
         "label": template.get("name") or "",
         "strip_mm": 0.0,
         "sides": sides,
