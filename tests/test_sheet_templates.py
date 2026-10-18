@@ -145,23 +145,30 @@ def test_a_sheet_s_panels_marked_as_cuts_get_brutto_and_safe_lines_and_the_panel
     assert (home[2] - home[0]) * (home[3] - home[1]) > 0.1 * 2300 * 2300
 
 
-def test_a_two_sided_sheet_has_a_mirrored_back_and_each_side_named_in_a_box(client):
+def test_a_sheet_s_faces_are_named_in_boxes_on_its_one_page(client):
+    """A siatka carries both faces on its one page, and a panel wraps round the product: the arch band's lower half
+    is the front, its upper half the back upside down. The template's `faces` draw those regions as labelled boxes."""
     panels = [_panel(900, 1100, 725, 353), _panel(546, 1487, 353, 412)]
-    token = _save_sheet(client, outlines=panels, bleed_mm=2, safe_mm=5, sides=2).get_json()["template"]["token"]
+    faces = [{"label": "PRZÓD", "box_mm": [900, 1100, 1625, 1276.5]},
+             {"label": "TYŁ (obrócony o 180°)", "box_mm": [900, 1276.5, 1625, 1453]}]
+    saved = _save_sheet(client, outlines=panels, bleed_mm=2, safe_mm=5, faces=faces)
+    assert saved.status_code == 200, saved.get_json()
+    token = saved.get_json()["template"]["token"]
+    assert saved.get_json()["template"]["faces"] == faces
     client.post(f"/api/admin/templates/{token}/source", headers={"X-Admin-Token": TOKEN},
                 data={"file": (io.BytesIO(_production_sheet()), "szablon.pdf")}, content_type="multipart/form-data")
     sheet = client.get(f"/api/templates/{token}/pdf")
     assert sheet.status_code == 200
     import pypdfium2
     document = pypdfium2.PdfDocument(io.BytesIO(sheet.data))
-    assert len(document) == 2
-    front = document[0].get_textpage().get_text_bounded()
-    back = document[1].get_textpage().get_text_bounded()
-    assert "PRZÓD" in front and "SIATKA BRYT 1" in front
-    assert "TYŁ (LUSTRO)" in back
-    stamps = [identify.read_stamp(sheet.data, index)["stamp"] for index in range(2)]
-    assert stamps[0]["side"] == "PRZÓD" and stamps[0]["mirrored"] is False
-    assert stamps[1]["side"] == "TYŁ" and stamps[1]["mirrored"] is True
+    assert len(document) == 1                                    # one page: both faces are on it
+    text = document[0].get_textpage().get_text_bounded()
+    assert "PRZÓD" in text and "TYŁ (obrócony o 180°)" in text and "SIATKA BRYT 1" in text
+    stamp = identify.read_stamp(sheet.data)["stamp"]
+    assert any("strony na arkuszu: PRZÓD, TYŁ" in note for note in stamp["notes"])
+    # a face without a usable rectangle is refused
+    assert _save_sheet(client, outlines=panels, faces=[{"label": "X", "box_mm": [1, 2, 3]}]).status_code == 400
+    assert _save_sheet(client, outlines=panels, faces=[{"label": "", "box_mm": [0, 0, 1, 1]}]).status_code == 400
 
 
 def test_the_free_box_is_the_largest_empty_rectangle():

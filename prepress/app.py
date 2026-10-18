@@ -1393,6 +1393,9 @@ def api_admin_save_template():
     sewn_mm, problem = _sewn_sides(payload.get("sewn_sides_mm"))
     if problem:
         return jsonify({"error": problem}), 400
+    faces, problem = _faces(payload.get("faces"))
+    if problem:
+        return jsonify({"error": problem}), 400
     template = {
         # Short and URL-safe: the customer picks a template by it, and it goes into the stamp. It is
         # an identifier, not a secret — the customer surface is open by design.
@@ -1400,6 +1403,9 @@ def api_admin_save_template():
         "name": name,
         "kind": kind,
         "scale": scale,
+        # Where the product's faces lie on a sheet of panels (from_template._face_boxes_mm): a panel
+        # wraps round the product, so its halves face different ways.
+        "faces": faces,
         "page_mm": [float(page[0]), float(page[1])],
         "outlines": chosen,
         # The finished size, as the UNION of everything marked as a cut — on a flag the hem reaches
@@ -1418,6 +1424,29 @@ def api_admin_save_template():
     except materials.MaterialError as error:
         return jsonify({"error": str(error)}), 400
     return jsonify({"template": stored, "templates": materials.load_templates()})
+
+
+def _faces(raw):
+    """The face regions of a sheet template: [{label, box_mm: [left, bottom, right, top]}, …] in page
+    millimetres, or []. Returns (faces, problem-or-None)."""
+    if raw in (None, ""):
+        return [], None
+    if not isinstance(raw, list):
+        return None, "Strony arkusza (faces) muszą być listą."
+    faces = []
+    for entry in raw:
+        box = entry.get("box_mm") if isinstance(entry, dict) else None
+        label = str(entry.get("label") or "").strip() if isinstance(entry, dict) else ""
+        if not label or not isinstance(box, list) or len(box) != 4:
+            return None, "Każda strona arkusza potrzebuje nazwy i prostokąta [lewo, dół, prawo, góra] w mm."
+        try:
+            box = [float(v) for v in box]
+        except (TypeError, ValueError):
+            return None, "Prostokąt strony arkusza musi składać się z liczb."
+        if box[2] <= box[0] or box[3] <= box[1]:
+            return None, f"Prostokąt strony „{label}” ma zerowy lub ujemny rozmiar."
+        faces.append({"label": label[:60], "box_mm": [round(v, 2) for v in box]})
+    return faces, None
 
 
 def _page_outline(page_mm):
