@@ -158,6 +158,16 @@ def test_a_design_saved_without_a_login_is_the_token_holder_s(client, template_t
     assert judged.get_json()["template_token"] == template_token
 
 
+def test_a_design_saved_through_the_lan_door_stays_behind_it(client, template_token, monkeypatch):
+    """Only a save with no session AND no door is token-keyed: what came through the open LAN door is
+    the door's, and a public caller holding its token gets nothing — the PDF and PNG routes are public."""
+    monkeypatch.setenv(app_module.OPEN_HEADER_ENV, "X-Prepress-Open")
+    body = _save_design(client, template_token, headers={"X-Prepress-Open": "1"})
+    assert client.get(f"/api/designs/{body['held']}/png").status_code == 404
+    assert client.get(f"/api/designs/{body['held']}/pdf").status_code == 404
+    assert client.get(f"/api/designs/{body['held']}/png", headers={"X-Prepress-Open": "1"}).status_code == 200
+
+
 def test_the_design_is_a_texture_the_3d_scene_wears(client, template_token):
     body = _save_design(client, template_token)
     texture = client.get(f"/api/designs/{body['held']}/png")

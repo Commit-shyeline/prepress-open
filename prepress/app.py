@@ -748,13 +748,14 @@ def _caller():
 def _remember_upload(data, filename):
     """Hold these bytes for a re-check; returns the token the page sends back.
 
-    The owner is the session subject, when there is one: a held upload may then be re-checked only by
-    the same subject, so a leaked token never hands one customer another's file. Saved with no
-    session — a design from the public editor, which the customer then checks logged in — the
-    16-byte token itself is the key, for the 30 minutes it lives. That opens nothing else: on a gated
-    instance an anonymous caller cannot reach the re-check at all."""
+    The owner is the session subject, or the LAN door the bytes came through: a held upload may then
+    be recalled only by the same caller, so a leaked token never hands one customer another's file
+    (the PDF and PNG of a held design are public routes, so this is what guards them). Saved with no
+    session and through no door — a design from the public editor, which the customer then checks
+    logged in — the 16-byte token itself is the key, for the 30 minutes it lives; nothing else is
+    saved that way, since on a gated instance an anonymous caller cannot reach the check."""
     now = time.time()
-    owner = session_identity()
+    owner = session_identity() or ("open-door" if _opened_by_proxy() else None)
     with _held_lock:
         for stale in [t for t, held in _held_uploads.items() if held["expires"] < now]:
             del _held_uploads[stale]
@@ -778,7 +779,7 @@ def _recall_upload(token):
         if held["expires"] < now:
             del _held_uploads[token]
             return None
-        if held["owner"] and held["owner"] != session_identity():
+        if held["owner"] and held["owner"] != _caller():
             return None                              # somebody else's upload: as if it never existed
         held["expires"] = now + UPLOAD_HOLD_SECONDS
         return held
