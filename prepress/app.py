@@ -1302,7 +1302,13 @@ def api_admin_inspect():
         page_mm = outline.page_size_mm(data, page_index)
     except Exception:                               # noqa: BLE001 — a bad upload is an answer
         return jsonify({"error": "Nie udało się otworzyć tego pliku jako PDF."}), 400
-    found = outline.mark_page_sized(outline.candidates(data, page_index), page_mm)
+    # `min_area_mm2` lowers the "big enough to be a cut" floor for a sheet drawn at 1:N, whose
+    # panels are small on the page; absent, the natural-size default applies.
+    try:
+        min_area = float(request.form.get("min_area_mm2") or outline.MIN_CANDIDATE_AREA_MM2)
+    except ValueError:
+        return jsonify({"error": "min_area_mm2 musi być liczbą."}), 400
+    found = outline.mark_page_sized(outline.candidates(data, page_index, min_area_mm2=max(1.0, min_area)), page_mm)
     if not found:
         return jsonify({"error": "Nie znaleźliśmy w tym pliku żadnego obrysu tej wielkości."}), 400
     try:
@@ -1427,16 +1433,32 @@ def api_admin_save_template():
 
 
 def _faces(raw):
-    """The face regions of a sheet template: [{label, box_mm: [left, bottom, right, top]}, …] in page
-    millimetres, or []. Returns (faces, problem-or-None)."""
+    """The face regions of a sheet template: [{label, box_mm: [left, bottom, right, top], polygon_mm?,
+    rotation?, graphic_mm?, safe_mm?}, …] in page millimetres, or []. `polygon_mm` is the face's
+    outline when it is no rectangle (a knee's diagonal strip), `rotation` the degrees the face's
+    text is turned counter-clockwise (180 on the back of an arch band, 45 along a knee), and
+    `graphic_mm` / `safe_mm` state the face's true full-size areas when its box does not. Returns
+    (faces, problem-or-None)."""
     if raw in (None, ""):
         return [], None
     if not isinstance(raw, list):
         return None, "Strony arkusza (faces) muszą być listą."
     faces = []
     for entry in raw:
-        box = entry.get("box_mm") if isinstance(entry, dict) else None
         label = str(entry.get("label") or "").strip() if isinstance(entry, dict) else ""
+        polygon = entry.get("polygon_mm") if isinstance(entry, dict) else None
+        box = entry.get("box_mm") if isinstance(entry, dict) else None
+        if polygon not in (None, ""):
+            # A face that is no rectangle on the sheet (a łamana gate's knee: a diagonal tube, its
+            # front and back strips run at 45°) is a polygon; its box is derived for the readers
+            # that only know boxes.
+            try:
+                polygon = [[float(x), float(y)] for x, y in polygon]
+            except (TypeError, ValueError):
+                polygon = None
+            if not polygon or len(polygon) < 3:
+                return None, f"Wielokąt strony „{label}” potrzebuje co najmniej trzech punktów [x, y] w mm."
+            box = [min(p[0] for p in polygon), min(p[1] for p in polygon), max(p[0] for p in polygon), max(p[1] for p in polygon)]
         if not label or not isinstance(box, list) or len(box) != 4:
             return None, "Każda strona arkusza potrzebuje nazwy i prostokąta [lewo, dół, prawo, góra] w mm."
         try:
@@ -1445,7 +1467,33 @@ def _faces(raw):
             return None, "Prostokąt strony arkusza musi składać się z liczb."
         if box[2] <= box[0] or box[3] <= box[1]:
             return None, f"Prostokąt strony „{label}” ma zerowy lub ujemny rozmiar."
-        faces.append({"label": label[:60], "box_mm": [round(v, 2) for v in box]})
+        face = {"label": label[:60], "box_mm": [round(v, 2) for v in box]}
+        if polygon:
+            face["polygon_mm"] = [[round(x, 2), round(y, 2)] for x, y in polygon]
+        rotation = entry.get("rotation")
+        if rotation not in (None, "", 0):
+            try:
+                rotation = float(rotation) % 360
+            except (TypeError, ValueError):
+                return None, f"Obrót strony „{label}” musi być liczbą stopni."
+            if rotation:
+                face["rotation"] = round(rotation, 2)
+        if entry.get("frame") is False:
+            # A face whose region is already drawn by its own cut lines (a tent leg's chain of
+            # squares) names and measures itself without a dashed frame round the lot.
+            face["frame"] = False
+        for key in ("graphic_mm", "safe_mm"):
+            pair = entry.get(key)
+            if pair in (None, ""):
+                continue
+            try:
+                pair = [float(v) for v in pair]
+            except (TypeError, ValueError):
+                pair = None
+            if not pair or len(pair) != 2 or min(pair) <= 0:
+                return None, f"Wymiary „{key}” strony „{label}” muszą być dwiema dodatnimi liczbami."
+            face[key] = [round(v, 2) for v in pair]
+        faces.append(face)
     return faces, None
 
 

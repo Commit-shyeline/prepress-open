@@ -55,6 +55,10 @@ MAX_PANEL_SHARE_OF_WIDTH = 0.70
 # through the guides.
 MAX_PANEL_SHARE_OF_SAFE = 0.80
 PANEL_ASPECT = 0.28          # height as a share of the panel's width, also from the reference
+# The block round the panel, in panel heights: the heading sits 0.2 above it and is ~0.35 tall, the
+# file-name line hangs ~0.35 below (8 mm per 46 mm of panel, plus its text).
+BLOCK_BELOW_IN_PANELS = 0.35
+BLOCK_HEIGHT_IN_PANELS = 1.9
 FILENAME_LABEL = "nazwa pliku / file name:"
 
 
@@ -83,6 +87,14 @@ def _cells(entry):
     """
     brutto_w, brutto_h = entry["brutto_mm"]
     safe_w, safe_h = entry["safe_mm_box"]
+    if entry.get("per_face"):
+        # A siatka with named faces states each face's areas IN that face; the page-wide union of
+        # its panels is not a size anyone designs to, so the panel points at the faces instead.
+        return [
+            ("SKALA / SCALE", f"1:{entry['scale']}", True),
+            ("OBSZAR GRAFICZNY / GRAPHIC AREA", "wg pól / per face", False),
+            ("OBSZAR BEZPIECZNY / SAFE AREA", "wg pól / per face", False),
+        ]
     return [
         ("SKALA / SCALE", f"1:{entry['scale']}", True),
         ("OBSZAR GRAFICZNY / GRAPHIC AREA", f"{brutto_w:.0f} (w) x {brutto_h:.0f} (h) mm", False),
@@ -117,11 +129,18 @@ def _draw_panel(pdf, entry, page_width_mm, page_height_mm):
     # fallback keeps that path unchanged; a shaped one hands us the real thing.
     home = entry.get("safe_box_mm") or (0.0, strip_mm, page_width_mm, strip_mm + art_height_mm)
     home_w = home[2] - home[0]
+    home_h = home[3] - home[1]
     panel_w, panel_h = panel_size_mm(page_width_mm, art_height_mm, home_w)
+    # The whole block — heading above, file-name line below — is about 1.9 panel heights tall, and
+    # the home can be a strip (the 100 mm above a balloon's gore grid, 2026-10-18): the panel shrinks
+    # so the block fits, and the block, not the panel alone, is centred in the home.
+    if panel_h * BLOCK_HEIGHT_IN_PANELS > home_h:
+        panel_h = home_h / BLOCK_HEIGHT_IN_PANELS
+        panel_w = min(panel_w, panel_h / PANEL_ASPECT)
     # Centred on the AREA, not on the page: on a flag the body sits 137 mm from one edge and 30 from
     # the other, so a page-centred panel walks out through the guides.
     left = home[0] + (home_w - panel_w) / 2
-    bottom = home[1] + ((home[3] - home[1]) - panel_h) / 2
+    bottom = home[1] + (home_h - panel_h * BLOCK_HEIGHT_IN_PANELS) / 2 + panel_h * BLOCK_BELOW_IN_PANELS
 
     # Heading above the panel: what this template IS. The label is only appended when it says
     # something the name does not — a heading reading "Flaga VENTO S — PRZÓD · Flaga VENTO S PRZÓD"

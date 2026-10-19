@@ -75,6 +75,21 @@ def test_an_upload_comes_back_as_a_list_of_outlines_with_a_picture(client):
     assert all(c["svg_path"].startswith("M ") for c in body["candidates"])
 
 
+def test_the_size_floor_can_be_lowered_for_a_sheet_drawn_at_scale(client):
+    """A 1:10 siatka's panels are small on the page — a SLIM gate's legs are 210 × 235 mm — and the
+    natural-size floor dropped them (2026-10-19). `min_area_mm2` lowers it for one inspection."""
+    answer = client.post("/api/admin/inspect", headers={"X-Admin-Token": TOKEN},
+                         data={"file": (io.BytesIO(_template_pdf()), "szablon.pdf"), "page": "0", "min_area_mm2": "10000"},
+                         content_type="multipart/form-data")
+    assert answer.status_code == 200
+    sizes = [(c["width_mm"], c["height_mm"]) for c in answer.get_json()["candidates"]]
+    assert (30.0, 400.0) in sizes                              # below the default floor, above this one
+    bad = client.post("/api/admin/inspect", headers={"X-Admin-Token": TOKEN},
+                      data={"file": (io.BytesIO(_template_pdf()), "szablon.pdf"), "min_area_mm2": "duży"},
+                      content_type="multipart/form-data")
+    assert bad.status_code == 400
+
+
 def test_inspecting_is_admin_only(client):
     answer = client.post("/api/admin/inspect",
                          data={"file": (io.BytesIO(_template_pdf()), "x.pdf")},

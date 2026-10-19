@@ -69,8 +69,12 @@ MAX_OPERATORS_WALKED = 2_000_000
 PT_TO_MM = 25.4 / 72
 
 
-def candidates(pdf_bytes, page_index=0):
+def candidates(pdf_bytes, page_index=0, min_area_mm2=MIN_CANDIDATE_AREA_MM2):
     """Every outline on the page big enough to be a cut line, biggest first.
+
+    `min_area_mm2` is the floor under "big enough": the default suits a flat template at natural
+    size; a sheet drawn at 1:10 needs it lower, or a 2 m leg (210 × 235 mm on the page) is dropped
+    as a mark (the SLIM gates lost their legs that way, 2026-10-19).
 
     Each entry is what a human needs to recognise it, plus what the generator needs to redraw it:
 
@@ -87,7 +91,7 @@ def candidates(pdf_bytes, page_index=0):
             continue
         width_mm, height_mm = box[2] - box[0], box[3] - box[1]
         area = width_mm * height_mm
-        if area < MIN_CANDIDATE_AREA_MM2:
+        if area < min_area_mm2:
             continue
         found.append({**subpath, "width_mm": round(width_mm, 2),
                       "height_mm": round(height_mm, 2), "area_mm2": round(area, 1),

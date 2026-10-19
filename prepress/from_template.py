@@ -185,8 +185,23 @@ def _sheet_from_source(template, source, title=None):
     outlines = template.get("outlines") or []
     # The page's own texts (a title across the top of a siatka) count as taken too — they are not
     # outlines, and the spec panel's heading was drawn across one (2026-10-18).
-    free_box = _free_box_mm(float(template["page_mm"][0]), float(template["page_mm"][1]),
-                            outlines, extra_boxes=_text_boxes_mm(source))
+    page_w_mm, page_h_mm = (float(v) for v in template["page_mm"])
+    # Every drawn path of the page counts as taken, not only the panels marked as cuts: a balloon's
+    # gore grid is a hundred small cells no inspector lists, and the panel sat across it (2026-10-18).
+    ink = _ink_cells(source, page_w_mm, page_h_mm)
+    # A title set as live text is no path: its boxes are taken too (the frame tents' „NAMIOT
+    # STELAŻOWY 3X3" had the spec panel laid across it, 2026-10-18).
+    _mark_boxes(ink, _text_boxes_mm(source), page_w_mm, page_h_mm)
+    # The spec panel belongs at the TOP of the sheet, above the shop's own drawing of the product
+    # (Shyeline 2026-10-18: "place the spec boxes above it"): the top band first, the whole page
+    # when the band has no room, the outline boxes when the page has no paths at all.
+    top_band = (0.0, page_h_mm * (1 - SPEC_TOP_BAND_SHARE), page_w_mm, page_h_mm)
+    free_box = (_free_rect_in(top_band, ink, page_w_mm, page_h_mm,
+                              clearance_cells=SPEC_CLEARANCE_CELLS, least_share=0.08)
+                or _free_rect_in((0.0, 0.0, page_w_mm, page_h_mm), ink, page_w_mm, page_h_mm,
+                                 clearance_cells=SPEC_CLEARANCE_CELLS, least_share=0.02)
+                or _free_box_mm(page_w_mm, page_h_mm, outlines, extra_boxes=_text_boxes_mm(source)))
+    faces = _face_boxes_mm(template)
     with pikepdf.open(io.BytesIO(source)) as production:
         sheet = pikepdf.new()
         sheet.pages.append(production.pages[0])
@@ -194,42 +209,107 @@ def _sheet_from_source(template, source, title=None):
         box = page.mediabox
         page_w = float(box[2] - box[0]) / PT_PER_MM
         page_h = float(box[3] - box[1]) / PT_PER_MM
-        overlay_buffer = io.BytesIO()
-        overlay = canvas.Canvas(overlay_buffer, pagesize=(page_w * PT_PER_MM, page_h * PT_PER_MM))
-        overlay.setTitle(title or template.get("name") or "Szablon")
-        overlay.setCreator("prepress-open")
+        page_pt = (page_w * PT_PER_MM, page_h * PT_PER_MM)
+        # Everything laid over the production page is GUIDANCE and goes into one optional content
+        # group — one layer in Affinity or Illustrator, removed with one click before the file goes
+        # to print. A designer who exported the sheet with the magenta PRZÓD boxes still on it saw
+        # them printed on the 3D gate (2026-10-18). The printed token is the one exception: it is
+        # identity, not guidance, so it rides outside the layer and survives its deletion.
+        guides_buffer = io.BytesIO()
+        guides = canvas.Canvas(guides_buffer, pagesize=page_pt)
+        guides.setTitle(title or template.get("name") or "Szablon")
+        guides.setCreator("prepress-open")
         if not page_only:
             for entry in drawing["brutto"]:
-                _stroke(overlay, entry, BRUTTO_RGB)
+                _stroke(guides, entry, BRUTTO_RGB)
             for entry in drawing["netto"]:
-                _stroke(overlay, entry, NETTO_RGB)
+                _stroke(guides, entry, NETTO_RGB)
             for entry in drawing["safe"]:
-                _stroke(overlay, entry, SAFE_RGB)
+                _stroke(guides, entry, SAFE_RGB)
         # The spec panel goes where the drawing is not: the largest empty rectangle of the page, so it
         # never covers a panel (it sat in the middle of the gate's arch, Shyeline 2026-10-18).
         spec = _spec_entry(template, drawing, "", mirrored=False)
         spec["safe_box_mm"] = free_box
         spec["zone_watermark"] = False               # a sheet of panels has no one safe zone to name
-        specblock.draw(overlay, spec, page_w, page_h, lambda e: e["label"])
+        spec["per_face"] = bool(faces)               # the areas are stated in each face, not for the page
+        specblock.draw(guides, spec, page_w, page_h, lambda e: e["label"])
         # A siatka carries BOTH faces of the product on its one page, and a panel wraps round the
         # product, so one panel's halves face different ways (the arch band: lower half front, upper
         # half the back, upside down — read off a real filled template, 2026-10-18). The template's
-        # `faces` name those regions; each is drawn as a labelled box so a customer knows where the
-        # PRZÓD and the TYŁ are before placing anything.
-        for label, region_box in _face_boxes_mm(template):
-            _draw_face_box(overlay, label, region_box, page_w, page_h)
-        _draw_printed_token(overlay, template)
-        overlay.showPage()
-        overlay.save()
-        with pikepdf.open(io.BytesIO(overlay_buffer.getvalue())) as overlay_pdf:
-            page.add_overlay(overlay_pdf.pages[0])
+        # `faces` name those regions; each is drawn as a labelled box with ITS OWN graphic and safe
+        # area, so a customer knows where the PRZÓD and the TYŁ are and how big each really is.
+        # Nothing drawn for a face may cover a line of the die (Shyeline 2026-10-18): the box sits
+        # just inside the face, and its name and areas go into the largest empty spot inside it.
+        for face, label, region_box in _face_entries(template):
+            areas = face_areas_mm(region_box, template, face)
+            if face.get("polygon_mm"):
+                # A diagonal strip (a knee): its own outline, dashed, and the text turned along it,
+                # centred — there is no axis-aligned empty rectangle to look for inside a 45° strip.
+                # `frame: false` keeps the text and drops the outline (a tent leg's label strip).
+                if face.get("frame", True):
+                    _draw_face_polygon(guides, face["polygon_mm"], page_w, page_h)
+                _draw_face_text_along(guides, label, face["polygon_mm"], float(face.get("rotation") or 0),
+                                      min(page_w, page_h), areas)
+                continue
+            if face.get("frame", True):
+                _draw_face_box(guides, region_box, page_w, page_h)
+            home = _free_rect_in(region_box, ink, page_w, page_h)
+            _draw_face_text(guides, label, region_box, template, home or region_box, min(page_w, page_h),
+                            rotation=int(float(face.get("rotation") or 0)), areas=areas)
+        guides.showPage()
+        guides.save()
+        token_buffer = io.BytesIO()
+        token_only = canvas.Canvas(token_buffer, pagesize=page_pt)
+        _draw_printed_token(token_only, template)
+        token_only.showPage()
+        token_only.save()
+        _lay_over(sheet, page, guides_buffer.getvalue(), layer=GUIDES_LAYER_NAME)
+        _lay_over(sheet, page, token_buffer.getvalue())
         out = io.BytesIO()
         sheet.save(out)
     notes = ["arkusz: strona produkcyjna z pliku (bryty, zagięcia i opisy bez zmian)", *notes]
-    faces = sorted({label for label, _box in _face_boxes_mm(template)})
-    if faces:
-        notes.append("strony na arkuszu: " + ", ".join(faces))
+    face_names = sorted({label for label, _box in faces})
+    if face_names:
+        notes.append("strony na arkuszu: " + ", ".join(face_names))
     return _stamp(out.getvalue(), template, notes)
+
+
+GUIDES_LAYER_NAME = "Szablon — linie pomocnicze (usuń przed drukiem)"
+
+
+def _lay_over(sheet, page, overlay_bytes, layer=None):
+    """Draw a one-page PDF over `page` as one form XObject; with `layer`, that XObject is marked as
+    optional content under a group of that name, which design apps show as a layer."""
+    import io
+
+    import pikepdf
+
+    with pikepdf.open(io.BytesIO(overlay_bytes)) as overlay_pdf:
+        name = page.add_overlay(overlay_pdf.pages[0])
+    if layer:
+        page.Resources.XObject[name].OC = _optional_content_group(sheet, layer)
+
+
+def _optional_content_group(sheet, name):
+    """The document's one optional content group of this name — created on first use, listed in the
+    catalog's /OCProperties (and its default configuration), so viewers offer it as a layer."""
+    import pikepdf
+
+    properties = sheet.Root.get("/OCProperties")
+    if properties is not None:
+        for group in properties.OCGs:
+            if str(group.get("/Name", "")) == name:
+                return group
+    group = sheet.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name.OCG, Name=pikepdf.String(name)))
+    if properties is None:
+        sheet.Root.OCProperties = pikepdf.Dictionary(
+            OCGs=pikepdf.Array([group]),
+            D=pikepdf.Dictionary(Order=pikepdf.Array([group]), ON=pikepdf.Array([group])))
+    else:
+        properties.OCGs.append(group)
+        properties.D.Order.append(group)
+        properties.D.ON.append(group)
+    return group
 
 
 FACE_BOX_RGB = (0.85, 0.10, 0.45)
@@ -253,33 +333,281 @@ def _face_boxes_mm(template):
     return boxes
 
 
-def _draw_face_box(pdf, label, box_mm, page_w, page_h):
-    """A dashed box round one face's panels with its name on the top edge, sized to the page so it
-    reads with the whole sheet on screen."""
-    from . import specblock
+def _face_entries(template):
+    """The faces as stored, paired with their validated (label, box) — so the drawing can read a
+    face's rotation and explicit areas next to its box."""
+    valid = dict(_face_boxes_mm(template))
+    for face in template.get("faces") or []:
+        if isinstance(face, dict) and str(face.get("label") or "").strip() in valid:
+            label = str(face.get("label")).strip()
+            yield face, label, tuple(float(v) for v in face["box_mm"])
 
-    left, bottom, right, top = (max(0.0, box_mm[0]), max(0.0, box_mm[1]), min(page_w, box_mm[2]), min(page_h, box_mm[3]))
+
+FACE_BOX_INSET_MM = 3.0
+
+
+def _draw_face_box(pdf, box_mm, page_w, page_h):
+    """A dashed box just INSIDE one face's region, sized to the page so it reads with the whole sheet
+    on screen. Inset, because the region's edge usually IS a cut line, and a guide drawn on top of a
+    cut line hides the one line the designer must see."""
+    inset = FACE_BOX_INSET_MM
+    left, bottom = max(0.0, box_mm[0]) + inset, max(0.0, box_mm[1]) + inset
+    right, top = min(page_w, box_mm[2]) - inset, min(page_h, box_mm[3]) - inset
+    if right <= left or top <= bottom:
+        return
     short = min(page_w, page_h)
-    # The name fits its region: half the region's width, a quarter of its height, and never more than
-    # 2 % of the page — a 2300 mm sheet put a 60 mm PRZÓD across a 176 mm band (2026-10-18).
-    largest_pt = min(short * 0.02, (top - bottom) * 0.25) * PT_PER_MM
-    size_pt = specblock._pick_size(label, specblock.BOLD, (right - left) * 0.5, largest_pt, 4.0)
     pdf.saveState()
     pdf.setStrokeColorRGB(*FACE_BOX_RGB)
     pdf.setLineWidth(max(0.75, short * 0.0012))
     pdf.setDash((short * 0.01, short * 0.005), 0)
     pdf.rect(left * PT_PER_MM, bottom * PT_PER_MM, (right - left) * PT_PER_MM, (top - bottom) * PT_PER_MM, stroke=1, fill=0)
-    pdf.setDash((), 0)
-    # The name sits on the top edge, in a white tab so the dashed line does not run through it.
-    text_w_pt = pdfmetrics_string_width(label, specblock.BOLD, size_pt)
-    tab_left_pt = (left + 4.0) * PT_PER_MM
-    tab_bottom_pt = top * PT_PER_MM - size_pt * 0.5
-    pdf.setFillColorRGB(1, 1, 1)
-    pdf.rect(tab_left_pt - size_pt * 0.3, tab_bottom_pt - size_pt * 0.3, text_w_pt + size_pt * 0.6, size_pt * 1.3, stroke=0, fill=1)
-    pdf.setFillColorRGB(*FACE_BOX_RGB)
-    pdf.setFont(specblock.BOLD, size_pt)
-    pdf.drawString(tab_left_pt, tab_bottom_pt, label)
     pdf.restoreState()
+
+
+def _draw_face_text(pdf, label, box_mm, template, home_mm, page_short_mm, rotation=0, areas=None):
+    """The face's name and its two area lines, top-left in `home_mm` — the empty rectangle found
+    inside the face — with no background, so even a tight fit never paints over a drawn line. Sizes
+    follow the home: the name takes up to a third of its height, the lines share the rest. With a
+    `rotation` the block is turned so its top points where the face's top does (a tent wall drawn
+    on its side reads the right way up), the home's width and height swapping roles."""
+    from . import specblock
+
+    (graphic_w, graphic_h), (safe_w, safe_h) = areas or face_areas_mm(box_mm, template)
+    # Short captions: the home can be one gore cell of a balloon, and a long caption there shrinks
+    # the numbers below reading size.
+    lines_of_text = [f"grafika / graphic: {graphic_w:.0f} x {graphic_h:.0f} mm",
+                     f"bezpieczny / safe: {safe_w:.0f} x {safe_h:.0f} mm"]
+    home_w, home_h = home_mm[2] - home_mm[0], home_mm[3] - home_mm[1]
+    if home_w <= 0 or home_h <= 0:
+        return
+    rotation = rotation if rotation in (90, 180, 270) else 0
+    along, across = (home_h, home_w) if rotation in (90, 270) else (home_w, home_h)
+    # The name: never more than 2 % of the page (a 60 mm PRZÓD across a 176 mm band, 2026-10-18),
+    # never more than a third of the home's height, and it must fit the home's width.
+    label_pt = specblock._pick_size(label, specblock.BOLD, along * 0.95,
+                                    min(page_short_mm * 0.02, across * 0.33) * PT_PER_MM, 4.0)
+    # The lines: half the name, and never taller than what the remaining height holds.
+    spec_pt = min(specblock._pick_size(line, specblock.FONT, along * 0.95,
+                                       min(label_pt * 0.5, page_short_mm * 0.006 * PT_PER_MM), 3.0)
+                  for line in lines_of_text)
+    spec_pt = min(spec_pt, (across * PT_PER_MM - label_pt * 1.2) / (len(lines_of_text) * 1.3))
+    pdf.saveState()
+    # The block is written unrotated in a frame whose origin is the home's corner that is its
+    # top-left once turned, so the same code serves every rotation.
+    corner = {0: (home_mm[0], home_mm[3]), 90: (home_mm[2], home_mm[3]),
+              180: (home_mm[2], home_mm[1]), 270: (home_mm[0], home_mm[1])}[rotation]
+    pdf.translate(corner[0] * PT_PER_MM, corner[1] * PT_PER_MM)
+    pdf.rotate(rotation)
+    pdf.setFillColorRGB(*FACE_BOX_RGB)
+    pdf.setFont(specblock.BOLD, label_pt)
+    baseline_pt = -label_pt
+    pdf.drawString(0, baseline_pt, label)
+    if spec_pt >= 3.0:
+        pdf.setFillColorRGB(*specblock.PANEL_TEXT)
+        pdf.setFont(specblock.FONT, spec_pt)
+        for line in lines_of_text:
+            baseline_pt -= spec_pt * 1.3
+            pdf.drawString(0, baseline_pt, line)
+    pdf.restoreState()
+
+
+INK_CELL_MM = 4.0           # the grid the page's paths are walked on when looking for empty space
+INK_CLEARANCE_CELLS = 1     # cells kept between a face's text and any drawn line
+SPEC_CLEARANCE_CELLS = 4    # ~15 mm kept round the spec panel, as the outline-box placement kept
+SPEC_TOP_BAND_SHARE = 0.3   # the spec panel looks for room in the top 30 % of the sheet first
+
+
+def _ink_cells(pdf_bytes, page_w, page_h, page_index=0):
+    """Which cells of a page grid a drawn path runs through: every painted subpath of the page — the
+    reader behind the admin inspector, no size floor, so a cut, a fold, a centre line and the shop's
+    outlined captions all count — flattened and walked cell by cell. A fill's inside stays free (a
+    balloon's yellow band is room, its edges are not). Rows bottom-first; None when the page holds
+    no paths."""
+    from . import offset, outline
+
+    columns, rows = max(1, int(page_w / INK_CELL_MM)), max(1, int(page_h / INK_CELL_MM))
+    cell_w, cell_h = page_w / columns, page_h / rows
+    taken = [[False] * columns for _ in range(rows)]
+    seen = False
+    for subpath in outline._subpaths(pdf_bytes, page_index):
+        points = offset.flatten(subpath)
+        if subpath.get("closed") and len(points) > 1:
+            points.append(points[0])
+        for (x0, y0), (x1, y1) in zip(points, points[1:]):
+            seen = True
+            steps = max(1, int(max(abs(x1 - x0) / cell_w, abs(y1 - y0) / cell_h) * 2))
+            for step in range(steps + 1):
+                x, y = x0 + (x1 - x0) * step / steps, y0 + (y1 - y0) * step / steps
+                column, row = int(x / cell_w), int(y / cell_h)
+                if 0 <= column < columns and 0 <= row < rows:
+                    taken[row][column] = True
+    return taken if seen else None
+
+
+def _mark_boxes(ink, boxes, page_w, page_h):
+    """Take the cells under these (left, bottom, right, top) mm boxes — text blocks, which the path
+    walk never sees. A None grid (a page without paths) is left as it is."""
+    if not ink:
+        return
+    rows, columns = len(ink), len(ink[0])
+    cell_w, cell_h = page_w / columns, page_h / rows
+    for left, bottom, right, top in boxes:
+        for row in range(max(0, int(bottom / cell_h)), min(rows, int(top / cell_h) + 1)):
+            for column in range(max(0, int(left / cell_w)), min(columns, int(right / cell_w) + 1)):
+                ink[row][column] = True
+
+
+def _free_rect_in(box_mm, ink, page_w, page_h, clearance_cells=INK_CLEARANCE_CELLS, least_share=0.0):
+    """The largest empty rectangle inside `box_mm` (page mm, y up), clear of every inked cell plus a
+    clearance, or None when there is no room (less than `least_share` of the box) or no paths."""
+    if not ink:
+        return None
+    rows, columns = len(ink), len(ink[0])
+    cell_w, cell_h = page_w / columns, page_h / rows
+    col_from, col_to = max(0, int(box_mm[0] / cell_w) + 1), min(columns, int(box_mm[2] / cell_w))
+    row_from, row_to = max(0, int(box_mm[1] / cell_h) + 1), min(rows, int(box_mm[3] / cell_h))
+    if col_to - col_from < 3 or row_to - row_from < 3:
+        return None
+    clearance = clearance_cells
+    taken = [[any(ink[r][c] for r in range(max(0, row - clearance), min(rows, row + clearance + 1))
+                  for c in range(max(0, column - clearance), min(columns, column + clearance + 1)))
+              for column in range(col_from, col_to)] for row in range(row_from, row_to)]
+    best = _largest_free_rectangle(taken)
+    if not best or (best[2] - best[0]) * (best[3] - best[1]) < least_share * (col_to - col_from) * (row_to - row_from):
+        return None
+    c0, r0, c1, r1 = best
+    return ((col_from + c0) * cell_w, (row_from + r0) * cell_h, (col_from + c1) * cell_w, (row_from + r1) * cell_h)
+
+
+def _largest_free_rectangle(taken):
+    """(col_from, row_from, col_to, row_to) of the biggest all-free rectangle in a grid of booleans
+    (histogram method), or None when every cell is taken."""
+    if not taken or not taken[0]:
+        return None
+    rows, columns = len(taken), len(taken[0])
+    best, best_area = None, 0
+    heights = [0] * columns
+    for row in range(rows):
+        heights = [0 if taken[row][col] else heights[col] + 1 for col in range(columns)]
+        stack = []
+        for col in range(columns + 1):
+            height = heights[col] if col < columns else 0
+            start = col
+            while stack and stack[-1][1] >= height:
+                start, stacked = stack.pop()
+                area = stacked * (col - start)
+                if area > best_area:
+                    best_area = area
+                    best = (start, row - stacked + 1, col, row + 1)
+            stack.append((start, height))
+    return best
+
+
+def _draw_face_polygon(pdf, polygon_mm, page_w, page_h):
+    """A dashed outline of a polygon face, pulled FACE_BOX_INSET_MM towards its centroid so it does
+    not sit on the knee's own cut line."""
+    import math
+
+    cx = sum(p[0] for p in polygon_mm) / len(polygon_mm)
+    cy = sum(p[1] for p in polygon_mm) / len(polygon_mm)
+    points = []
+    for x, y in polygon_mm:
+        distance = math.hypot(x - cx, y - cy) or 1.0
+        pull = min(FACE_BOX_INSET_MM, distance * 0.5)
+        points.append(((x - (x - cx) / distance * pull) * PT_PER_MM, (y - (y - cy) / distance * pull) * PT_PER_MM))
+    short = min(page_w, page_h)
+    pdf.saveState()
+    pdf.setStrokeColorRGB(*FACE_BOX_RGB)
+    pdf.setLineWidth(max(0.75, short * 0.0012))
+    pdf.setDash((short * 0.01, short * 0.005), 0)
+    path = pdf.beginPath()
+    path.moveTo(*points[0])
+    for point in points[1:]:
+        path.lineTo(*point)
+    path.close()
+    pdf.drawPath(path, stroke=1, fill=0)
+    pdf.restoreState()
+
+
+def _draw_face_text_along(pdf, label, polygon_mm, rotation, page_short_mm, areas):
+    """The face's name and two area lines turned by `rotation` degrees and centred on the polygon:
+    the text runs along a diagonal strip, sized to the strip's length along and width across."""
+    import math
+
+    from . import specblock
+
+    (graphic_w, graphic_h), (safe_w, safe_h) = areas
+    lines_of_text = [f"grafika / graphic: {graphic_w:.0f} x {graphic_h:.0f} mm",
+                     f"bezpieczny / safe: {safe_w:.0f} x {safe_h:.0f} mm"]
+    cx = sum(p[0] for p in polygon_mm) / len(polygon_mm)
+    cy = sum(p[1] for p in polygon_mm) / len(polygon_mm)
+    # The strip's extents in the text's own frame: along the baseline and across it.
+    angle = math.radians(rotation)
+    along = [(p[0] - cx) * math.cos(angle) + (p[1] - cy) * math.sin(angle) for p in polygon_mm]
+    across = [-(p[0] - cx) * math.sin(angle) + (p[1] - cy) * math.cos(angle) for p in polygon_mm]
+    along_mm, across_mm = max(along) - min(along), max(across) - min(across)
+    if along_mm <= 0 or across_mm <= 0:
+        return
+    label_cap_pt = min(page_short_mm * 0.02, across_mm * 0.3) * PT_PER_MM
+    label_lines = _label_lines(label, along_mm * 0.8, label_cap_pt)
+    label_pt = min(specblock._pick_size(line, specblock.BOLD, along_mm * 0.8, label_cap_pt, 4.0) for line in label_lines)
+    spec_pt = min(specblock._pick_size(line, specblock.FONT, along_mm * 0.8,
+                                       min(label_pt * 0.5, page_short_mm * 0.006 * PT_PER_MM), 3.0)
+                  for line in lines_of_text)
+    block_pt = label_pt * 1.2 * len(label_lines) + spec_pt * 1.3 * len(lines_of_text)
+    pdf.saveState()
+    pdf.translate(cx * PT_PER_MM, cy * PT_PER_MM)
+    pdf.rotate(rotation)
+    pdf.setFillColorRGB(*FACE_BOX_RGB)
+    pdf.setFont(specblock.BOLD, label_pt)
+    baseline_pt = block_pt / 2 - label_pt
+    for index, line in enumerate(label_lines):
+        if index:
+            baseline_pt -= label_pt * 1.2
+        pdf.drawCentredString(0, baseline_pt, line)
+    if spec_pt >= 3.0:
+        pdf.setFillColorRGB(*specblock.PANEL_TEXT)
+        pdf.setFont(specblock.FONT, spec_pt)
+        for line in lines_of_text:
+            baseline_pt -= spec_pt * 1.3
+            pdf.drawCentredString(0, baseline_pt, line)
+    pdf.restoreState()
+
+
+LABEL_WRAP_BELOW_PT = 8.0
+
+
+def _label_lines(label, width_mm, largest_pt):
+    """The label as one line — or split at a comma into two when one line would have to shrink below
+    LABEL_WRAP_BELOW_PT to fit `width_mm` (a tent leg's 56-character label beside a two-square blank
+    came out at 4.5 pt, 2026-10-19). The split falls at the last comma before the label's middle."""
+    from . import specblock
+
+    if ", " not in label or specblock._pick_size(label, specblock.BOLD, width_mm, largest_pt, 4.0) >= LABEL_WRAP_BELOW_PT:
+        return [label]
+    cut = label.rfind(", ", 0, len(label) // 2 + 8)
+    if cut < 0:
+        cut = label.find(", ")
+    return [label[:cut + 1], label[cut + 2:]]
+
+
+def face_areas_mm(box_mm, template, face=None):
+    """One face's TRUE sizes: its graphic area is the stored box at full size, its safe area that box
+    taken in by the template's safe margin on every side — unless the face states them itself
+    (`graphic_mm` / `safe_mm`: a tent leg's squares lie at 45°, so their box says nothing true). The
+    page-level numbers lie on a siatka — the union of a gate's panels is not a thing anyone designs to
+    (Shyeline 2026-10-18)."""
+    scale = scale_of(template)
+    safe = float(template.get("safe_mm") or 0.0)
+    width, height = box_mm[2] - box_mm[0], box_mm[3] - box_mm[1]
+    graphic = (width * scale, height * scale)
+    safe_area = (max(0.0, width - 2 * safe) * scale, max(0.0, height - 2 * safe) * scale)
+    if face:
+        if face.get("graphic_mm"):
+            graphic = tuple(float(v) for v in face["graphic_mm"])
+        if face.get("safe_mm"):
+            safe_area = tuple(float(v) for v in face["safe_mm"])
+    return graphic, safe_area
 
 
 def pdfmetrics_string_width(text, font, size_pt):
@@ -331,22 +659,8 @@ def _free_box_mm(page_w, page_h, outlines, extra_boxes=()):
         for row in range(row_from, row_to + 1):
             for col in range(col_from, col_to + 1):
                 taken[row][col] = True
-    best, best_area = None, 0
-    heights = [0] * FREE_BOX_GRID
-    for row in range(FREE_BOX_GRID):
-        heights = [0 if taken[row][col] else heights[col] + 1 for col in range(FREE_BOX_GRID)]
-        stack = []
-        for col in range(FREE_BOX_GRID + 1):
-            height = heights[col] if col < FREE_BOX_GRID else 0
-            start = col
-            while stack and stack[-1][1] >= height:
-                start, stacked = stack.pop()
-                area = stacked * (col - start)
-                if area > best_area:
-                    best_area = area
-                    best = (start, row - stacked + 1, col, row + 1)
-            stack.append((start, height))
-    if not best or best_area < (FREE_BOX_GRID * FREE_BOX_GRID) * 0.03:
+    best = _largest_free_rectangle(taken)
+    if not best or (best[2] - best[0]) * (best[3] - best[1]) < (FREE_BOX_GRID * FREE_BOX_GRID) * 0.03:
         return None
     col_from, row_from, col_to, row_to = best
     return (col_from * cell_w, row_from * cell_h, col_to * cell_w, row_to * cell_h)

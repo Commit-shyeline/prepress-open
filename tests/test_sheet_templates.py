@@ -171,6 +171,37 @@ def test_a_sheet_s_faces_are_named_in_boxes_on_its_one_page(client):
     assert _save_sheet(client, outlines=panels, faces=[{"label": "", "box_mm": [0, 0, 1, 1]}]).status_code == 400
 
 
+def test_a_face_may_state_its_rotation_and_its_own_true_areas(client):
+    """A tent wall drawn on its side names where its top points, and a leg whose squares lie at 45°
+    states its sizes itself; the sheet prints those, not the box's."""
+    panels = [_panel(900, 1100, 725, 353)]
+    faces = [{"label": "ŚCIANA", "box_mm": [900, 1100, 1625, 1453], "rotation": 180},
+             {"label": "NOGA", "box_mm": [100, 100, 500, 500], "graphic_mm": [1170, 1170], "safe_mm": [1070, 1070], "frame": False}]
+    saved = _save_sheet(client, outlines=panels, bleed_mm=2, safe_mm=5, faces=faces)
+    assert saved.status_code == 200, saved.get_json()
+    stored = saved.get_json()["template"]["faces"]
+    assert stored[0]["rotation"] == 180 and stored[1]["graphic_mm"] == [1170, 1170] and stored[1]["safe_mm"] == [1070, 1070]
+    assert stored[1]["frame"] is False and "frame" not in stored[0]          # no dashed frame round the leg chain
+    token = saved.get_json()["template"]["token"]
+    client.post(f"/api/admin/templates/{token}/source", headers={"X-Admin-Token": TOKEN},
+                data={"file": (io.BytesIO(_production_sheet()), "szablon.pdf")}, content_type="multipart/form-data")
+    sheet = client.get(f"/api/templates/{token}/pdf")
+    assert sheet.status_code == 200
+    import pypdfium2
+    text = pypdfium2.PdfDocument(io.BytesIO(sheet.data))[0].get_textpage().get_text_bounded()
+    assert "1170 x 1170" in text and "1070 x 1070" in text           # the leg's own sizes, not 4000 x 4000
+    assert "7250 x 3530" in text                                      # the wall's, from its box
+    # a rotation that is no number, a bad pair, a polygon of two points: refused
+    assert _save_sheet(client, outlines=panels, faces=[{"label": "X", "box_mm": [0, 0, 1, 1], "rotation": "bok"}]).status_code == 400
+    assert _save_sheet(client, outlines=panels, faces=[{"label": "X", "polygon_mm": [[0, 0], [1, 1]]}]).status_code == 400
+    # a polygon face (a knee's diagonal strip) is stored with its derived box and any angle
+    knee = _save_sheet(client, outlines=panels, faces=[{"label": "PRZÓD", "polygon_mm": [[100, 100], [300, 300], [280, 320], [80, 120]], "rotation": 45}])
+    assert knee.status_code == 200, knee.get_json()
+    assert knee.get_json()["template"]["faces"][0]["box_mm"] == [80, 100, 300, 320]
+    assert knee.get_json()["template"]["faces"][0]["rotation"] == 45
+    assert _save_sheet(client, outlines=panels, faces=[{"label": "X", "box_mm": [0, 0, 1, 1], "graphic_mm": [1]}]).status_code == 400
+
+
 def test_the_free_box_is_the_largest_empty_rectangle():
     from prepress import from_template
     # one panel in the top-left quarter: the free box is the bottom half or the right half, not the panel
@@ -205,3 +236,15 @@ def test_the_editor_on_a_sheet_has_no_3d_link_and_the_check_judges_at_full_size(
     judged = client.post(f"/api/recheck/{saved.get_json()['held']}", data={}, content_type="multipart/form-data").get_json()
     assert judged["recognised"] is True and judged["template_token"] == token
     assert judged["measured"]["min_dpi"] == pytest.approx(2.5, abs=0.1)
+
+
+def test_a_long_face_label_wraps_at_its_comma_only_when_one_line_would_be_unreadable():
+    from prepress.from_template import LABEL_WRAP_BELOW_PT, _label_lines
+    from prepress.specblock import BOLD, _pick_size
+
+    label = "NOGA — 5 kwadratów 833 mm zewnątrz, 1 × 548 mm wewnątrz"
+    assert _label_lines(label, 400.0, 40.0) == [label]                               # room enough: one line
+    narrow = _label_lines(label, 60.0, 40.0)
+    assert narrow == ["NOGA — 5 kwadratów 833 mm zewnątrz,", "1 × 548 mm wewnątrz"]   # split at the comma
+    assert _pick_size(label, BOLD, 60.0, 40.0, 4.0) < LABEL_WRAP_BELOW_PT <= _pick_size(narrow[0], BOLD, 60.0, 40.0, 4.0)
+    assert _label_lines("PRZÓD", 10.0, 40.0) == ["PRZÓD"]                            # no comma: never split
