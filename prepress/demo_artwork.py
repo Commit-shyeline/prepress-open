@@ -61,12 +61,13 @@ def safe_box_mm(template):
     return box
 
 
-def layout_mm(template):
+def layout_mm(template, wordmark=WORDMARK, credit=CREDIT):
     """Every element that counts as detail, placed inside the safe box: {name: (x0, y0, x1, y1)}.
 
     A tall flag reads bottom-up, so the wordmark climbs the box along its left third and the sun
     sits in the calm upper field; on a wide box the same rules just spread out. Sizes are fractions
-    of the box, never of the page, so the box's shape decides the composition.
+    of the box, never of the page, so the box's shape decides the composition. `wordmark` and
+    `credit` replace the default words (a shop's catalogue shot names the variant; "" drops the credit).
     """
     from reportlab.pdfbase.pdfmetrics import stringWidth
 
@@ -80,12 +81,12 @@ def layout_mm(template):
     # fit the run available, capped so a huge template does not get a huge word.
     run = (height if tall else width) * 0.8
     wordmark_size = min(width * 0.28 if tall else height * 0.35,
-                        run / (stringWidth(WORDMARK, _bold(), 1.0) or 1.0))
+                        run / (stringWidth(wordmark,_bold(), 1.0) or 1.0))
     # Readable from where a flag is seen — but never longer than the run the wordmark fits in.
     credit_size = min(wordmark_size * 0.55,
-                      run / (stringWidth(CREDIT, _bold(), 1.0) or 1.0))
-    word_len = stringWidth(WORDMARK, _bold(), wordmark_size)
-    credit_len = stringWidth(CREDIT, _bold(), credit_size)
+                      run / (stringWidth(credit,_bold(), 1.0) or 1.0))
+    word_len = stringWidth(wordmark,_bold(), wordmark_size)
+    credit_len = stringWidth(credit,_bold(), credit_size)
     ascent, descent = 0.72, 0.21                      # Helvetica, as fractions of the size
     if tall:
         # rotate(90): local +y (ascenders) → page −x; the advance climbs the page.
@@ -114,26 +115,26 @@ def layout_mm(template):
                         "sun_c": sun_c, "sun_r": sun_r, "box": (bx0, by0, bx1, by1)}}
 
 
-def elements_mm(template):
+def elements_mm(template, wordmark=WORDMARK, credit=CREDIT):
     """Only the detail elements of the layout, without the drawing parameters."""
-    return {name: box for name, box in layout_mm(template).items() if not name.startswith("_")}
+    return {name: box for name, box in layout_mm(template, wordmark, credit).items() if not name.startswith("_")}
 
 
-def intrusions_mm(template):
+def intrusions_mm(template, wordmark=WORDMARK, credit=CREDIT):
     """[(element, mm outside the safe BOX)], empty when every element sits inside."""
     x0, y0, x1, y1 = safe_box_mm(template)
     out = []
-    for name, (ex0, ey0, ex1, ey1) in elements_mm(template).items():
+    for name, (ex0, ey0, ex1, ey1) in elements_mm(template, wordmark, credit).items():
         over = max(x0 - ex0, y0 - ey0, ex1 - x1, ey1 - y1)
         if over > 0.01:
             out.append((name, round(over, 2)))
     return out
 
 
-def build_pdf(template):
+def build_pdf(template, wordmark=WORDMARK, credit=CREDIT):
     """The demo composition on the template's own page, as PDF bytes."""
     page_w, page_h = (float(v) for v in template["page_mm"])
-    layout = layout_mm(template)
+    layout = layout_mm(template, wordmark, credit)
     p = layout["_params"]
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=(page_w * PT_PER_MM, page_h * PT_PER_MM))
@@ -172,19 +173,21 @@ def build_pdf(template):
         pdf.rotate(90)
         pdf.setFillColor(PAPER)
         pdf.setFont(_bold(), p["wordmark_size"])
-        pdf.drawString(0, 0, _report._text(WORDMARK))
-        pdf.setFillColor(PAPER)
-        pdf.setFont(_bold(), p["credit_size"])
-        pdf.drawString(0, -(p["wordmark_size"] * 0.75), _report._text(CREDIT))
+        pdf.drawString(0, 0, _report._text(wordmark))
+        if credit:
+            pdf.setFillColor(PAPER)
+            pdf.setFont(_bold(), p["credit_size"])
+            pdf.drawString(0, -(p["wordmark_size"] * 0.75), _report._text(credit))
     else:
         wx0, wy0, _wx1, _wy1 = layout["wordmark"]
         baseline_y = wy0 + p["wordmark_size"] * 0.21
         pdf.setFillColor(PAPER)
         pdf.setFont(_bold(), p["wordmark_size"])
-        pdf.drawString(wx0, baseline_y, _report._text(WORDMARK))
-        pdf.setFillColor(PAPER)
-        pdf.setFont(_bold(), p["credit_size"])
-        pdf.drawString(wx0, baseline_y - p["wordmark_size"] * 0.75, _report._text(CREDIT))
+        pdf.drawString(wx0, baseline_y, _report._text(wordmark))
+        if credit:
+            pdf.setFillColor(PAPER)
+            pdf.setFont(_bold(), p["credit_size"])
+            pdf.drawString(wx0, baseline_y - p["wordmark_size"] * 0.75, _report._text(credit))
     pdf.restoreState()
     pdf.showPage()
     pdf.save()

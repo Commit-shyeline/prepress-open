@@ -1702,6 +1702,7 @@ function build(data, cutFrom) {
             clothMaterial.map = texture;
             clothMaterial.color.set(0xffffff);      // stop tinting the artwork with the cloth grey
             clothMaterial.needsUpdate = true;
+            document.body.dataset.art = 'on';       // for a caller that waits for the print (`?shot=1`)
             // The sleeves wear THEIR strip of the same page, wrapped around the
             // circumference. A page-mapped sleeve (the winder's) carries page fractions in its
             // own UVs, so its texture stays untransformed.
@@ -1724,7 +1725,9 @@ function build(data, cutFrom) {
         }, undefined, () => { /* no artwork — bare cloth is the correct fallback */ });
     }
     // THIS template's demo — laid out inside its own safe outline (demo_artwork.py).
-    wearArtwork(`{{ base }}/api/demo-artwork.jpg?token=${encodeURIComponent(token)}`, 0);
+    // `?label=`: the demo names the variant instead of its wordmark (a catalogue shot, `?shot=1`).
+    wearArtwork(`{{ base }}/api/demo-artwork.jpg?token=${encodeURIComponent(token)}`
+                + (params.get('label') ? `&label=${encodeURIComponent(params.get('label'))}` : ''), 0);
     // A design saved in the editor (design.py), named by its held token: the customer's own work,
     // so it outranks the demo, which is still fetched and may land later.
     const heldDesign = params.get('design');
@@ -2740,6 +2743,27 @@ function build(data, cutFrom) {
     const SPIN_RATE = Math.PI * 2 / SPIN_SECONDS;
     // Awers square to the camera, framed whole: the one shot a cut is allowed to happen in.
     const SQUARE_ON = { dist: 1.0, yaw: 0, aim: 0.5 };
+
+    /* `?shot=1` (with `?bare=1`, and reduced motion so nothing blows or turns): a still catalogue
+       picture of the template — no guide lines, the whole product at one fixed angle, and `data-shot`
+       on the body: the ground line under the product, its left edge, and how many pixels a metre is
+       there, for a caller that stands a person beside it at true scale. */
+    if (params.get('shot') === '1') {
+        for (const g of guides) g.line.visible = false;
+        placeCamera({ dist: 1.0, yaw: -12, aim: 0.5 });
+        camera.updateMatrixWorld();             // project() reads the matrix, which only a render would refresh
+        const toPx = (v) => {
+            const p = v.clone().project(camera);
+            return [(p.x + 1) / 2 * stage.clientWidth, (1 - p.y) / 2 * bandHeight()];
+        };
+        const foot = new THREE.Vector3(bounds.min.x, bounds.min.y, centre.z);
+        const [left, ground] = toPx(foot);
+        const [, metre] = toPx(foot.clone().setY(bounds.min.y + 1000 * S));
+        document.body.dataset.shot = JSON.stringify({
+            left: Math.round(left), ground: Math.round(ground), pxPerMetre: +(ground - metre).toFixed(2),
+            heightM: +(size.y / (1000 * S)).toFixed(3),
+        });
+    }
 
     /* ── Movement, and where it must stop ──
        THE BACK LAYER MOVES LIKE THE HERO, because that is what it is: the tour's own zoom and

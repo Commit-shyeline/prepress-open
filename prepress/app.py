@@ -675,14 +675,18 @@ def api_demo_artwork():
     # template and per store version; falls through to the bundled file when the template is gone.
     token = (request.args.get("token") or "").strip()
     template = materials.get_template(token) if token else None
+    # `label`: the variant's name in place of the wordmark, without the credit — a shop's catalogue
+    # shot of each template (model3d `?shot=1&label=`). Short, so it fits the run the layout gives it.
+    label = (request.args.get("label") or "").strip().upper()[:24]
     if template:
-        stamp = f"{token}:{os.path.getmtime(materials.DEFAULT_STORE) if os.path.exists(materials.DEFAULT_STORE) else 0}"
+        stamp = f"{token}:{label}:{os.path.getmtime(materials.DEFAULT_STORE) if os.path.exists(materials.DEFAULT_STORE) else 0}"
         etag = f'"demo-{abs(hash(stamp))}"'
         if request.headers.get("If-None-Match") == etag:
             return Response(status=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
         if _demo_artwork_cache.get("stamp") != stamp or _demo_artwork_cache.get("token") != token:
             try:
-                png = shape.render_preview(demo_artwork.build_pdf(template), 0, max_pixels=2800)
+                pdf = demo_artwork.build_pdf(template, label, "") if label else demo_artwork.build_pdf(template)
+                png = shape.render_preview(pdf, 0, max_pixels=2800)
             except (demo_artwork.DemoError, from_template.TemplateError) as error:
                 logger.info("demo artwork for %s not drawable: %s", token, error)
                 template = None                     # bare cloth beats a wrong picture

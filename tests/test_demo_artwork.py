@@ -68,6 +68,22 @@ def test_the_per_template_demo_stays_inside_that_templates_safe_area(template):
         assert abs(h * 25.4 / 72 - float(template["page_mm"][1])) < 0.05
 
 
+@pytest.mark.parametrize("template", [t for t in _shop_templates() if " Play " in (t.get("name") or "")],
+                         ids=lambda t: t.get("name") or t.get("token"))
+def test_a_labelled_demo_drops_the_credit_and_stays_inside_the_safe_area(template):
+    """A catalogue shot names the variant („PLAY B") instead of the wordmark (/api/demo-artwork.jpg?label=)."""
+    from prepress import demo_artwork, from_template
+
+    try:
+        demo_artwork.safe_box_mm(template)
+    except (demo_artwork.DemoError, from_template.TemplateError):
+        pytest.skip("no drawable safe area on this template")
+    assert demo_artwork.intrusions_mm(template, "PLAY B", "") == []
+    x0, y0, x1, y1 = demo_artwork.elements_mm(template, "PLAY B", "")["credit"]
+    assert min(x1 - x0, y1 - y0) == 0              # no credit along the run: nothing is drawn there
+    assert demo_artwork.build_pdf(template, "PLAY B", "").startswith(b"%PDF")
+
+
 @pytest.mark.parametrize("name", ["wordmark", "credit", "sun"])
 def test_every_element_is_accounted_for(name):
     """A safe-area check that silently skips an element is worse than none — it reads as a pass."""
