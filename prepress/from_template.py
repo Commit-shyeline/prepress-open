@@ -152,8 +152,9 @@ def build_pdf(template, title=None):
             style = lines.get(kind) or {}
             _stroke(pdf, entry, style.get("colour") or (0.5, 0.5, 0.5), style.get("dash"),
                     mirror_x_mm=mirror)
-        specblock.draw(pdf, _spec_entry(template, drawing, side, mirrored=bool(mirror)),
-                       page_w, page_h, lambda e: e["label"])
+        spec = _spec_entry(template, drawing, side, mirrored=bool(mirror))
+        spec["legend"] = _legend(per_face=False)
+        specblock.draw(pdf, spec, page_w, page_h, lambda e: e["label"])
         _draw_printed_token(pdf, template)
         pdf.showPage()
     pdf.save()
@@ -232,6 +233,7 @@ def _sheet_from_source(template, source, title=None):
         spec["safe_box_mm"] = free_box
         spec["zone_watermark"] = False               # a sheet of panels has no one safe zone to name
         spec["per_face"] = bool(faces)               # the areas are stated in each face, not for the page
+        spec["legend"] = _legend(per_face=bool(faces))
         specblock.draw(guides, spec, page_w, page_h, lambda e: e["label"])
         # A siatka carries BOTH faces of the product on its one page, and a panel wraps round the
         # product, so one panel's halves face different ways (the arch band: lower half front, upper
@@ -253,9 +255,7 @@ def _sheet_from_source(template, source, title=None):
                 continue
             if face.get("frame", True):
                 _draw_face_box(guides, region_box, page_w, page_h)
-            home = _free_rect_in(region_box, ink, page_w, page_h)
-            _draw_face_text(guides, label, region_box, template, home or region_box, min(page_w, page_h),
-                            rotation=int(float(face.get("rotation") or 0)), areas=areas)
+            _place_face_text(guides, face, label, region_box, template, ink, page_w, page_h, areas)
         guides.showPage()
         guides.save()
         token_buffer = io.BytesIO()
@@ -409,6 +409,106 @@ def _draw_face_text(pdf, label, box_mm, template, home_mm, page_short_mm, rotati
             baseline_pt -= spec_pt * 1.3
             pdf.drawString(0, baseline_pt, line)
     pdf.restoreState()
+
+
+FACE_TEXT_READABLE_PT = 6.0     # a face's name smaller than this is unreadable on screen: it goes outside the face, with a leader
+FACE_TEXT_REACH_SHARE = 0.25    # how far round a face its text may sit, as a share of the page's short side
+
+
+def _place_face_text(pdf, face, label, region_box, template, ink, page_w, page_h, areas):
+    """The face's name and areas inside the face where there is room — inside its `within_mm` outline
+    when it has one, since a tent wall's box has empty corners OUTSIDE the wall and the name landed
+    there (2026-10-23) — turned by its rotation at any angle; and where the room inside would make the
+    name unreadable (a balloon's one gore cell), in the nearest empty spot outside the face, with a
+    leader line to it, so nothing is ever written over a line of the die."""
+    from . import specblock
+
+    rotation = float(face.get("rotation") or 0) % 360
+    page_short = min(page_w, page_h)
+    face_ink = _outside_taken(ink, face["within_mm"], page_w, page_h) if face.get("within_mm") else ink
+    home = _free_rect_in(region_box, face_ink, page_w, page_h) or region_box
+    along = (home[3] - home[1]) if rotation in (90, 270) else (home[2] - home[0])
+    label_pt = specblock._pick_size(label, specblock.BOLD, along * 0.95, page_short * 0.02 * PT_PER_MM, 1.0)
+    if label_pt < FACE_TEXT_READABLE_PT:
+        outside = _free_rect_near(region_box, ink, page_w, page_h)
+        if outside:
+            _draw_leader(pdf, outside, region_box, page_short)
+            _draw_face_text(pdf, label, region_box, template, outside, page_short, rotation=0, areas=areas)
+            _mark_boxes(ink, [outside], page_w, page_h)      # the next face looks for its own spot
+            return
+    # The spot is taken once written: two faces of one region (a chwiej's head band and its half) or
+    # two faces sent outside (the Flash balloon's) were written over each other (2026-10-23).
+    _mark_boxes(ink, [home], page_w, page_h)
+    if rotation % 90:
+        corners = [[home[0], home[1]], [home[2], home[1]], [home[2], home[3]], [home[0], home[3]]]
+        _draw_face_text_along(pdf, label, corners, rotation, page_short, areas)
+        return
+    _draw_face_text(pdf, label, region_box, template, home, page_short, rotation=int(rotation), areas=areas)
+
+
+def _outside_taken(ink, polygon_mm, page_w, page_h):
+    """A copy of the ink grid with every cell whose centre lies outside `polygon_mm` taken as well."""
+    if not ink:
+        return ink
+    rows, columns = len(ink), len(ink[0])
+    cell_w, cell_h = page_w / columns, page_h / rows
+    return [[ink[row][column] or not _inside_polygon(((column + 0.5) * cell_w, (row + 0.5) * cell_h), polygon_mm)
+             for column in range(columns)] for row in range(rows)]
+
+
+def _inside_polygon(point, polygon):
+    """Even-odd point-in-polygon (a ray cast to +x)."""
+    x, y = point
+    inside = False
+    for index in range(len(polygon)):
+        (x0, y0), (x1, y1) = polygon[index], polygon[(index + 1) % len(polygon)]
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            inside = not inside
+    return inside
+
+
+def _free_rect_near(box_mm, ink, page_w, page_h):
+    """The largest empty rectangle in the bands just outside `box_mm` — below, above, left, right, each
+    reaching FACE_TEXT_REACH_SHARE of the page's short side — or None."""
+    reach = min(page_w, page_h) * FACE_TEXT_REACH_SHARE
+    left, bottom, right, top = box_mm
+    bands = [(left - reach, bottom - reach, right + reach, bottom), (left - reach, top, right + reach, top + reach),
+             (left - reach, bottom, left, top), (right, bottom, right + reach, top)]
+    found = []
+    for band in bands:
+        clipped = (max(0.0, band[0]), max(0.0, band[1]), min(page_w, band[2]), min(page_h, band[3]))
+        if clipped[2] - clipped[0] <= 0 or clipped[3] - clipped[1] <= 0:
+            continue
+        rect = _free_rect_in(clipped, ink, page_w, page_h)
+        if rect:
+            found.append(rect)
+    return max(found, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]), default=None)
+
+
+def _draw_leader(pdf, text_rect, box_mm, page_short_mm):
+    """A thin line from the text's edge to the nearest point of the face it names."""
+    cx, cy = (text_rect[0] + text_rect[2]) / 2, (text_rect[1] + text_rect[3]) / 2
+    target = (min(max(cx, box_mm[0]), box_mm[2]), min(max(cy, box_mm[1]), box_mm[3]))
+    edges = [((text_rect[0] + text_rect[2]) / 2, text_rect[1]), ((text_rect[0] + text_rect[2]) / 2, text_rect[3]),
+             (text_rect[0], (text_rect[1] + text_rect[3]) / 2), (text_rect[2], (text_rect[1] + text_rect[3]) / 2)]
+    start = min(edges, key=lambda e: (e[0] - target[0]) ** 2 + (e[1] - target[1]) ** 2)
+    pdf.saveState()
+    pdf.setStrokeColorRGB(*FACE_BOX_RGB)
+    pdf.setLineWidth(max(0.5, page_short_mm * 0.0008))
+    pdf.setDash((), 0)
+    pdf.line(start[0] * PT_PER_MM, start[1] * PT_PER_MM, target[0] * PT_PER_MM, target[1] * PT_PER_MM)
+    pdf.restoreState()
+
+
+def _legend(per_face):
+    """What each guide line means, for the spec panel's legend — the colours as this module draws them
+    (every sheet left the shop without a key until 2026-10-23)."""
+    entries = [{"label": "cięcie / cut", "word": "różowa ciągła", "colour": NETTO_RGB, "dash": False},
+               {"label": "spad / bleed", "word": "szara", "colour": BRUTTO_RGB, "dash": False},
+               {"label": "bezpieczny / safe", "word": "zielona", "colour": SAFE_RGB, "dash": False}]
+    if per_face:
+        entries.append({"label": "pole / face", "word": "różowa kreskowana", "colour": FACE_BOX_RGB, "dash": True})
+    return entries
 
 
 INK_CELL_MM = 4.0           # the grid the page's paths are walked on when looking for empty space
@@ -750,7 +850,9 @@ def _spec_entry(template, drawing, side="", mirrored=False):
             "bleed_mm": float(template.get("bleed_mm") or 0.0) * scale,
             "safe_mm": float(template.get("safe_mm") or 0.0) * scale,
             "spec_position": template.get("spec_position") or "panel",
-            "spec_strip_mm": 0.0}
+            "spec_strip_mm": 0.0,
+            # What the customer writes in besides the file name (a constant-pressure tent's „kolor nóg").
+            "fill_in": list(template.get("fill_in") or [])}
 
 
 def _union_box(entries):

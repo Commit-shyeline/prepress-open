@@ -59,6 +59,7 @@ PANEL_ASPECT = 0.28          # height as a share of the panel's width, also from
 # file-name line hangs ~0.35 below (8 mm per 46 mm of panel, plus its text).
 BLOCK_BELOW_IN_PANELS = 0.35
 BLOCK_HEIGHT_IN_PANELS = 1.9
+ROW_IN_PANELS = 0.17        # a legend or fill-in row under the file-name line: 8 mm on the 46 mm reference panel
 FILENAME_LABEL = "nazwa pliku / file name:"
 
 
@@ -134,13 +135,17 @@ def _draw_panel(pdf, entry, page_width_mm, page_height_mm):
     # The whole block — heading above, file-name line below — is about 1.9 panel heights tall, and
     # the home can be a strip (the 100 mm above a balloon's gore grid, 2026-10-18): the panel shrinks
     # so the block fits, and the block, not the panel alone, is centred in the home.
-    if panel_h * BLOCK_HEIGHT_IN_PANELS > home_h:
-        panel_h = home_h / BLOCK_HEIGHT_IN_PANELS
+    # Under the file-name line come the legend and each fill-in line: a row of the panel's height each.
+    rows_below = (1 if entry.get("legend") else 0) + len(entry.get("fill_in") or [])
+    below_in_panels = BLOCK_BELOW_IN_PANELS + ROW_IN_PANELS * rows_below
+    block_in_panels = BLOCK_HEIGHT_IN_PANELS - BLOCK_BELOW_IN_PANELS + below_in_panels
+    if panel_h * block_in_panels > home_h:
+        panel_h = home_h / block_in_panels
         panel_w = min(panel_w, panel_h / PANEL_ASPECT)
     # Centred on the AREA, not on the page: on a flag the body sits 137 mm from one edge and 30 from
     # the other, so a page-centred panel walks out through the guides.
     left = home[0] + (home_w - panel_w) / 2
-    bottom = home[1] + (home_h - panel_h * BLOCK_HEIGHT_IN_PANELS) / 2 + panel_h * BLOCK_BELOW_IN_PANELS
+    bottom = home[1] + (home_h - panel_h * block_in_panels) / 2 + panel_h * below_in_panels
 
     # Heading above the panel: what this template IS. The label is only appended when it says
     # something the name does not — a heading reading "Flaga VENTO S — PRZÓD · Flaga VENTO S PRZÓD"
@@ -191,20 +196,57 @@ def _draw_panel(pdf, entry, page_width_mm, page_height_mm):
     # Raised from 7.0: on a 442 mm panel that was 6.6 mm of text under 19 mm digits, and the line
     # has room to spare — label plus rule came to 136 mm inside a 553 mm safe area.
     filename_size = 10.0 * scale_up
-    rule_length_pt = 70.0 * scale_up
-    pdf.setFont(FONT, filename_size)
-    pdf.setFillColorRGB(*PANEL_TEXT)
-    label_pt = stringWidth(FILENAME_LABEL, FONT, filename_size)
+    centre_pt = (home[0] + home_w / 2) * PT_PER_MM
     baseline = (bottom - 8 * scale_up) * PT_PER_MM
-    start_pt = (home[0] + home_w / 2) * PT_PER_MM - (label_pt + rule_length_pt) / 2
-    pdf.drawString(start_pt, baseline, FILENAME_LABEL)
-    pdf.setStrokeColorRGB(*PANEL_RULE)
-    pdf.setLineWidth(0.4 * scale_up)
-    pdf.line(start_pt + label_pt + 4 * scale_up, baseline - 1.5 * scale_up,
-             start_pt + label_pt + (rule_length_pt + 4) * scale_up, baseline - 1.5 * scale_up)
+    _rule_line(pdf, FILENAME_LABEL, centre_pt, baseline, filename_size, scale_up)
+    if entry.get("legend"):
+        baseline -= ROW_IN_PANELS * panel_h * PT_PER_MM
+        _legend_row(pdf, entry["legend"], centre_pt, baseline, filename_size * 0.85, scale_up)
+    for prompt in entry.get("fill_in") or []:
+        baseline -= ROW_IN_PANELS * panel_h * PT_PER_MM
+        _rule_line(pdf, f"{prompt}:", centre_pt, baseline, filename_size, scale_up)
 
     if entry.get("zone_watermark", True):            # a sheet of panels has no one zone to name
         _draw_zone_watermark(pdf, entry, page_width_mm, strip_mm, art_height_mm, bottom, home)
+
+
+def _rule_line(pdf, label, centre_pt, baseline, size, scale_up):
+    """A label and the rule the customer writes on, centred on `centre_pt`: the file-name line and
+    each fill-in line share this shape."""
+    rule_length_pt = 70.0 * scale_up
+    pdf.setFont(FONT, size)
+    pdf.setFillColorRGB(*PANEL_TEXT)
+    label_pt = stringWidth(label, FONT, size)
+    start_pt = centre_pt - (label_pt + rule_length_pt) / 2
+    pdf.drawString(start_pt, baseline, label)
+    pdf.setStrokeColorRGB(*PANEL_RULE)
+    pdf.setLineWidth(0.4 * scale_up)
+    pdf.setDash((), 0)
+    pdf.line(start_pt + label_pt + 4 * scale_up, baseline - 1.5 * scale_up,
+             start_pt + label_pt + (rule_length_pt + 4) * scale_up, baseline - 1.5 * scale_up)
+
+
+def _legend_row(pdf, legend, centre_pt, baseline, size, scale_up):
+    """One row under the panel: a sample of each guide line and what it means, centred."""
+    sample_pt, gap_pt, between_pt = 14.0 * scale_up, 3.0 * scale_up, 9.0 * scale_up
+    widths = [sample_pt + gap_pt + stringWidth(item["label"], FONT, size) for item in legend]
+    x = centre_pt - (sum(widths) + between_pt * (len(legend) - 1)) / 2
+    for item, width in zip(legend, widths):
+        pdf.setStrokeColorRGB(*item["colour"])
+        pdf.setLineWidth(1.0 * scale_up)
+        pdf.setDash((3 * scale_up, 2 * scale_up) if item.get("dash") else (), 0)
+        pdf.line(x, baseline + size * 0.3, x + sample_pt, baseline + size * 0.3)
+        pdf.setDash((), 0)
+        pdf.setFillColorRGB(*PANEL_TEXT)
+        pdf.setFont(FONT, size)
+        pdf.drawString(x + sample_pt + gap_pt, baseline, item["label"])
+        x += width + between_pt
+
+
+def legend_text(entry):
+    """The legend in words, for the layouts with no room for samples: „linie: cięcie różowa ciągła · …"."""
+    legend = entry.get("legend") or []
+    return "linie: " + " · ".join(f"{item['label'].split(' / ')[0]} {item['word']}" for item in legend) if legend else ""
 
 
 def _draw_zone_watermark(pdf, entry, page_width_mm, strip_mm, art_height_mm, panel_bottom_mm,
@@ -245,7 +287,8 @@ def _draw_strip(pdf, entry, page_width_mm, strip_mm, describe):
     brutto_w, brutto_h = entry["brutto_mm"]
     safe_w, safe_h = entry["safe_mm_box"]
     spec = (f"{describe(entry)}   ·   obszar graficzny {brutto_w:.0f}×{brutto_h:.0f} mm"
-            f"   ·   obszar bezpieczny {safe_w:.0f}×{safe_h:.0f} mm")
+            f"   ·   obszar bezpieczny {safe_w:.0f}×{safe_h:.0f} mm"
+            + (f"   ·   {legend_text(entry)}" if entry.get("legend") else ""))
     pdf.setFillColorRGB(*TEXT_RGB)
     pdf.setFont(BOLD, 8.5)
     pdf.drawString(margin_pt, strip_pt - (7.5 * PT_PER_MM),
@@ -283,7 +326,8 @@ def _draw_margin_box(pdf, entry, page_width_mm, page_height_mm, describe):
     pdf.setFillColorRGB(*TEXT_RGB)
     pdf.setFont(FONT, 7.0)
     available = (box_height_mm - 6) * PT_PER_MM
-    pdf.drawString(0, -7.0 / 3, _fit(f"{FILENAME_LABEL}  {describe(entry)}", FONT, 7.0, available))
+    key = f"   ·   {legend_text(entry)}" if entry.get("legend") else ""
+    pdf.drawString(0, -7.0 / 3, _fit(f"{FILENAME_LABEL}  {describe(entry)}{key}", FONT, 7.0, available))
     pdf.restoreState()
 
 

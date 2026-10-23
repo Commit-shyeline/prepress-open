@@ -202,6 +202,43 @@ def test_a_face_may_state_its_rotation_and_its_own_true_areas(client):
     assert _save_sheet(client, outlines=panels, faces=[{"label": "X", "box_mm": [0, 0, 1, 1], "graphic_mm": [1]}]).status_code == 400
 
 
+def test_a_sheet_carries_a_legend_its_fill_in_lines_and_a_name_without_a_size(client):
+    """Every sheet says what its lines mean; a template may ask the customer for more than the file name
+    (a constant-pressure tent's „kolor nóg"); a 1:10 sheet's download is not named with a size — „Balon
+    Flash 47x22 cm" named a 4 m balloon (2026-10-23)."""
+    panels = [_panel(900, 1100, 725, 353)]
+    faces = [{"label": "ŚCIANA", "box_mm": [900, 1100, 1625, 1453], "within_mm": [[900, 1100], [1625, 1100], [1262, 1453]]}]
+    saved = _save_sheet(client, outlines=panels, bleed_mm=2, safe_mm=5, faces=faces, fill_in=["kolor nóg w środku namiotu", " "])
+    assert saved.status_code == 200, saved.get_json()
+    template = saved.get_json()["template"]
+    assert template["fill_in"] == ["kolor nóg w środku namiotu"] and template["faces"][0]["within_mm"] == [[900, 1100], [1625, 1100], [1262, 1453]]
+    token = template["token"]
+    client.post(f"/api/admin/templates/{token}/source", headers={"X-Admin-Token": TOKEN},
+                data={"file": (io.BytesIO(_production_sheet()), "szablon.pdf")}, content_type="multipart/form-data")
+    sheet = client.get(f"/api/templates/{token}/pdf")
+    assert sheet.status_code == 200 and " cm" not in sheet.headers["Content-Disposition"]
+    import pypdfium2
+    text = pypdfium2.PdfDocument(io.BytesIO(sheet.data))[0].get_textpage().get_text_bounded()
+    assert "cięcie / cut" in text and "bezpieczny / safe" in text and "pole / face" in text
+    assert "kolor nóg w środku namiotu:" in text
+    assert _save_sheet(client, outlines=panels, faces=[{"label": "X", "box_mm": [0, 0, 1, 1], "within_mm": [[0, 0], [1, 1]]}]).status_code == 400
+
+
+def test_a_face_s_text_stays_inside_its_outline_and_moves_outside_a_cramped_face():
+    from prepress import from_template
+    free = [[False] * 100 for _ in range(100)]                   # a 400 × 400 mm page in 4 mm cells
+    # cells whose centre lies outside the left half are taken: the text can only go where the face really is
+    masked = from_template._outside_taken(free, [[0, 0], [200, 0], [200, 400], [0, 400]], 400, 400)
+    assert all(not masked[row][col] for row in range(100) for col in range(50))
+    assert all(masked[row][col] for row in range(100) for col in range(50, 100))
+    # a spot beside a cramped face, never inside it
+    near = from_template._free_rect_near((160, 160, 240, 240), free, 400, 400)
+    assert near is not None and (near[2] <= 160 or near[0] >= 240 or near[3] <= 160 or near[1] >= 240)
+    # the legend names every line that is drawn; a flat template has no faces to name
+    assert [item["label"] for item in from_template._legend(per_face=True)] == ["cięcie / cut", "spad / bleed", "bezpieczny / safe", "pole / face"]
+    assert len(from_template._legend(per_face=False)) == 3
+
+
 def test_the_free_box_is_the_largest_empty_rectangle():
     from prepress import from_template
     # one panel in the top-left quarter: the free box is the bottom half or the right half, not the panel

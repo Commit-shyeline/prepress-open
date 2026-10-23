@@ -746,7 +746,8 @@ def api_template_pdf(token):
     # finished size in centimetres, the unit flags are ordered in.
     name = (template.get("name") or token).replace("/", "-")
     finished = _finished_mm(template) or []
-    if len(finished) == 2:
+    # A sheet of panels at 1:N has no one finished size: „Balon Flash 47x22 cm" named a 4 m balloon (2026-10-23).
+    if len(finished) == 2 and template.get("kind") != "sheet":
         name += f" {round(finished[0] / 10)}x{round(finished[1] / 10)} cm"
     return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf",
                      as_attachment=True, download_name=f"{name}.pdf")
@@ -1428,6 +1429,8 @@ def api_admin_save_template():
         "material": str(payload.get("material") or "").strip() or None,
         "source_name": str(payload.get("source_name") or "").strip(),
         "note": str(payload.get("note") or "").strip(),
+        # Lines the customer fills in on the sheet besides the file name (a tent's „kolor nóg w środku namiotu").
+        "fill_in": [str(prompt).strip()[:60] for prompt in (payload.get("fill_in") or []) if str(prompt).strip()],
     }
     try:
         stored = materials.upsert_template(template)
@@ -1474,6 +1477,17 @@ def _faces(raw):
         face = {"label": label[:60], "box_mm": [round(v, 2) for v in box]}
         if polygon:
             face["polygon_mm"] = [[round(x, 2), round(y, 2)] for x, y in polygon]
+        # The region the face's text must stay inside when its box holds more than the face (a tent
+        # wall's outline: the box's corners lie outside the wall).
+        within = entry.get("within_mm")
+        if within not in (None, ""):
+            try:
+                within = [[round(float(x), 2), round(float(y), 2)] for x, y in within]
+            except (TypeError, ValueError):
+                within = None
+            if not within or len(within) < 3:
+                return None, f"Obrys strony „{label}” (within_mm) potrzebuje co najmniej trzech punktów [x, y] w mm."
+            face["within_mm"] = within
         rotation = entry.get("rotation")
         if rotation not in (None, "", 0):
             try:
