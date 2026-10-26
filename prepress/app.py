@@ -488,12 +488,67 @@ def model_page(token):
     template = materials.get_template(token)
     if not template:
         return jsonify({"error": "Nie znamy takiego szablonu — odśwież stronę."}), 404
-    return render_template("model3d.html", token=token,
+    # A template with a 3D model of its own (admin „Modele 3D") is shown as that model wearing the
+    # page; everything else is the flag scene built from the outline. Same URL, same `?bare`,
+    # `?embed`, `?design`, `?shot` and postMessage contract, so the pages that embed it need not know.
+    page = "model3d_glb.html" if _has_model(token) else "model3d.html"
+    return render_template(page, token=token,
                            name=template.get("name") or token,
                            # `bare` strips ALL chrome for the hero; `embed` keeps the legend
                            # and controls but drops the header — the check page's inspectable frame.
                            bare=request.args.get("bare") == "1",
                            embed=request.args.get("embed") == "1")
+
+
+def _has_model(token):
+    path = materials.source_path(token, suffix=materials.MODEL_SUFFIX)
+    return bool(path and os.path.isfile(path))
+
+
+@app.route("/api/templates/<token>/model.glb")
+def api_template_model_file(token):
+    """The template's 3D model. Revalidated on every load (ETag) rather than cached for a day: a
+    re-imported model replaces the file in place, under the same URL."""
+    path = materials.source_path(token, suffix=materials.MODEL_SUFFIX)
+    if not path or not os.path.isfile(path):
+        return jsonify({"error": "Ten szablon nie ma modelu 3D."}), 404
+    return send_file(path, mimetype="model/gltf-binary", max_age=0, conditional=True)
+
+
+@app.route("/api/templates/<token>/model")
+def api_template_model(token):
+    """How the model wears the page: the stored map, and the page's boxes the automatic fit lays the
+    model's faces on. Per token, like `/shape` — the boxes are the lines the PDF one click away draws."""
+    template = materials.get_template(token)
+    if not template or not _has_model(token):
+        return jsonify({"error": "Ten szablon nie ma modelu 3D."}), 404
+    return jsonify({"name": template.get("name") or token,
+                    "page_mm": template.get("page_mm"),
+                    "map": template.get("model_map") or {"faces": []},
+                    "boxes": _page_boxes(template),
+                    "glb": f"{base_path()}/api/templates/{token}/model.glb"})
+
+
+def _page_boxes(template):
+    """The page's printed regions as [left, top, right, bottom] in page FRACTIONS, top down (the glTF
+    texture frame model-map.js fits in): every cut outline's box and every named face's box, or the
+    whole page when the page is its own cut."""
+    page_w, page_h = (float(v) for v in template.get("page_mm") or (1, 1))
+    boxes = []
+    for entry in template.get("outlines") or []:
+        if lines.defines_trim(entry.get("type")) and entry.get("origin_mm"):
+            x, y = entry["origin_mm"]
+            boxes.append((x, y, x + float(entry["width_mm"]), y + float(entry["height_mm"])))
+    for face in template.get("faces") or []:
+        box = face.get("box_mm") or []
+        if len(box) == 4:
+            boxes.append(tuple(float(v) for v in box))
+    fractions = []
+    for x0, y0, x1, y1 in boxes:                 # PDF frame, y up → fractions, v down
+        box = [round(x0 / page_w, 5), round(1 - y1 / page_h, 5), round(x1 / page_w, 5), round(1 - y0 / page_h, 5)]
+        if box not in fractions:
+            fractions.append(box)
+    return fractions or [[0.0, 0.0, 1.0, 1.0]]
 
 
 @app.route("/podglad-hero")
@@ -827,8 +882,8 @@ def design_page(token):
         return jsonify({"error": "Nie znamy takiego szablonu — odśwież stronę."}), 404
     return render_template("design.html", token=token, name=template.get("name") or token,
                            page_mm=template.get("page_mm") or [0, 0],
-                           # A sheet of panels has no 3D flag to wear it: the scene is for flat templates.
-                           show_model=template.get("kind") != "sheet",
+                           # A sheet of panels has no 3D flag to wear it — unless it has a model of its own.
+                           show_model=template.get("kind") != "sheet" or _has_model(token),
                            return_url=_return_url(request.args.get("return")))
 
 
@@ -1362,10 +1417,22 @@ def _page_count(data):
 @require_admin
 def api_admin_save_template():
     """Store the outline the admin pointed at, with the numbers they typed, under a fresh token."""
-    payload = request.get_json(silent=True) or {}
+    template, problem = _template_from_payload(request.get_json(silent=True) or {})
+    if problem:
+        return jsonify({"error": problem}), 400
+    try:
+        stored = materials.upsert_template(template)
+    except materials.MaterialError as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify({"template": stored, "templates": materials.load_templates()})
+
+
+def _template_from_payload(payload):
+    """The template record a save request describes, validated: (template, None) or (None, problem).
+    Shared by the outline import and the 3D model import, so a model's page is a template like any other."""
     page = payload.get("page_mm")
     if not (isinstance(page, list) and len(page) == 2):
-        return jsonify({"error": "Brak rozmiaru strony szablonu."}), 400
+        return None, "Brak rozmiaru strony szablonu."
     # Two kinds of template. "flat": one printed shape, its cut outline marked by the admin — a flag,
     # a banner. "sheet": a page of PANELS with no single cut (an inflatable's siatka, drawn at 1:N),
     # whose finished size IS the page: the page's rectangle stands in as the cut, so the generator,
@@ -1374,9 +1441,9 @@ def api_admin_save_template():
     try:
         scale = 1 if payload.get("scale") in (None, "") else int(payload.get("scale"))
     except (TypeError, ValueError):
-        return jsonify({"error": "Skala musi być liczbą całkowitą (1 = naturalna, 10 = 1:10)."}), 400
+        return None, "Skala musi być liczbą całkowitą (1 = naturalna, 10 = 1:10)."
     if scale < 1:
-        return jsonify({"error": "Skala musi być co najmniej 1."}), 400
+        return None, "Skala musi być co najmniej 1."
     # A sheet with its panels marked as cuts gets brutto and safe lines derived round each panel
     # (Shyeline 2026-10-18); a sheet with nothing marked keeps the page as its one cut.
     if kind == "sheet" and not payload.get("outlines"):
@@ -1384,17 +1451,17 @@ def api_admin_save_template():
     else:
         chosen, problem = _typed_outlines(payload.get("outlines"))
         if problem:
-            return jsonify({"error": problem}), 400
+            return None, problem
     name = str(payload.get("name") or "").strip()
     if not name:
-        return jsonify({"error": "Podaj nazwę szablonu — klient wybiera po niej."}), 400
+        return None, "Podaj nazwę szablonu — klient wybiera po niej."
     try:
         bleed_mm = float(payload.get("bleed_mm"))
         safe_mm = float(payload.get("safe_mm"))
     except (TypeError, ValueError):
-        return jsonify({"error": "Spad i obszar bezpieczny muszą być liczbami."}), 400
+        return None, "Spad i obszar bezpieczny muszą być liczbami."
     if bleed_mm < 0 or safe_mm < 0:
-        return jsonify({"error": "Spad i obszar bezpieczny nie mogą być ujemne."}), 400
+        return None, "Spad i obszar bezpieczny nie mogą być ujemne."
 
     trim = lines.trim_box_mm(chosen)
     try:
@@ -1403,10 +1470,10 @@ def api_admin_save_template():
         sides = 1
     sewn_mm, problem = _sewn_sides(payload.get("sewn_sides_mm"))
     if problem:
-        return jsonify({"error": problem}), 400
+        return None, problem
     faces, problem = _faces(payload.get("faces"))
     if problem:
-        return jsonify({"error": problem}), 400
+        return None, problem
     template = {
         # Short and URL-safe: the customer picks a template by it, and it goes into the stamp. It is
         # an identifier, not a secret — the customer surface is open by design.
@@ -1434,11 +1501,7 @@ def api_admin_save_template():
         # Lines the customer fills in on the sheet besides the file name (a tent's „kolor nóg w środku namiotu").
         "fill_in": [str(prompt).strip()[:60] for prompt in (payload.get("fill_in") or []) if str(prompt).strip()],
     }
-    try:
-        stored = materials.upsert_template(template)
-    except materials.MaterialError as error:
-        return jsonify({"error": str(error)}), 400
-    return jsonify({"template": stored, "templates": materials.load_templates()})
+    return template, None
 
 
 def _faces(raw):
@@ -1729,6 +1792,158 @@ def api_admin_template_source(token):
     return jsonify({"template": token, "bytes": len(data), "pages": pages})
 
 
+# ── 3D products: a model and the page it wears (admin „Modele 3D") ──────────
+# The model is a glTF binary beside the template's page (templates/<token>.glb); how its faces wear
+# the page is `model_map` on the record, fitted in the browser (static/model-map.js) — automatically
+# from the model's UV islands and the page's boxes, corrected by clicked point pairs where needed.
+MODEL_MAX_BYTES = 64 * 1024 * 1024
+GLB_MAGIC = b"glTF"
+
+
+@app.route("/api/admin/models", methods=["POST"])
+@require_admin
+def api_admin_import_model():
+    """A 3D product in one upload: its `.glb` and, for a new template, the page it wears (`page`: a
+    PDF, whose `page` index is kept alone, or a PNG/JPG with `width_mm` × `height_mm`), stored as a
+    sheet template whose whole page is the print. With `token`, the model joins an existing template.
+
+    Only glTF 2.0 binaries: a `.blend` or `.obj` needs a converter this app does not ship — export
+    glTF from Blender (File → Export → glTF 2.0) instead.
+    """
+    upload = request.files.get("model")
+    if upload is None:
+        return jsonify({"error": "Wybierz plik .glb z modelem."}), 400
+    glb = upload.read(MODEL_MAX_BYTES + 1)
+    if len(glb) > MODEL_MAX_BYTES:
+        return jsonify({"error": f"Model jest za duży — limit to {MODEL_MAX_BYTES // (1024 * 1024)} MB."}), 413
+    if glb[:4] != GLB_MAGIC or int.from_bytes(glb[4:8], "little") != 2:
+        return jsonify({"error": "To nie jest plik glTF 2.0 (.glb). Z Blendera: File → Export → glTF 2.0, "
+                                 "format „glTF Binary”. Plików .blend i .obj nie czytamy."}), 400
+    token = (request.form.get("token") or "").strip()
+    if token:
+        if not materials.get_template(token):
+            return jsonify({"error": f"Nie ma szablonu o tokenie {token!r}."}), 404
+    else:
+        page = request.files.get("page")
+        if page is None:
+            return jsonify({"error": "Wgraj stronę szablonu — PDF z wykrojnikiem albo PNG."}), 400
+        page_bytes = page.read(TEMPLATE_SOURCE_MAX_BYTES + 1)
+        if len(page_bytes) > TEMPLATE_SOURCE_MAX_BYTES:
+            return jsonify({"error": "Strona szablonu jest za duża."}), 413
+        source_pdf, page_mm, problem = _page_as_pdf(page_bytes, request.form)
+        if problem:
+            return jsonify({"error": problem}), 400
+        template, problem = _template_from_payload({
+            "name": request.form.get("name"), "kind": "sheet", "scale": 1, "bleed_mm": 0, "safe_mm": 0,
+            "page_mm": page_mm, "outlines": [], "material": request.form.get("material"),
+            "source_name": page.filename or "", "note": request.form.get("note")})
+        if problem:
+            return jsonify({"error": problem}), 400
+        try:
+            stored = materials.upsert_template(template)
+        except materials.MaterialError as error:
+            return jsonify({"error": str(error)}), 400
+        token = stored["token"]
+        materials.save_template_source(token, source_pdf)
+    materials.save_template_source(token, glb, suffix=materials.MODEL_SUFFIX)
+    return jsonify({"template": materials.get_template(token), "templates": materials.load_templates()})
+
+
+def _page_as_pdf(data, form):
+    """The uploaded page as a one-page PDF the sheet machinery reads: (pdf_bytes, [w, h] mm, None) or
+    (None, None, problem). A PDF keeps the chosen page alone (`from_template` always draws page 1 of
+    the source); a picture is laid on a page of the typed size."""
+    if data[:5] == b"%PDF-":
+        import pikepdf as _pikepdf
+        try:
+            page_index = max(0, int(form.get("page_number") or 1) - 1)
+        except ValueError:
+            return None, None, "Numer strony musi być liczbą."
+        try:
+            with _pikepdf.open(io.BytesIO(data)) as source:
+                if page_index >= len(source.pages):
+                    return None, None, f"Ten PDF ma {len(source.pages)} stron."
+                single = _pikepdf.new()
+                single.pages.append(source.pages[page_index])
+                out = io.BytesIO()
+                single.save(out)
+            width_mm, height_mm = outline.page_size_mm(out.getvalue(), 0)
+        except Exception:                           # noqa: BLE001 — not a readable PDF is the answer
+            return None, None, "To nie jest czytelny plik PDF."
+        return out.getvalue(), [round(width_mm, 2), round(height_mm, 2)], None
+    try:
+        width_mm, height_mm = float(form.get("width_mm")), float(form.get("height_mm"))
+    except (TypeError, ValueError):
+        return None, None, "Dla obrazka podaj szerokość i wysokość strony w mm."
+    if width_mm <= 0 or height_mm <= 0:
+        return None, None, "Szerokość i wysokość strony muszą być dodatnie."
+    from PIL import Image
+    from reportlab.lib.units import mm
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+    try:
+        picture = Image.open(io.BytesIO(data))
+        picture.load()
+    except Exception:                               # noqa: BLE001 — not a picture is the answer
+        return None, None, "Strona szablonu musi być plikiem PDF, PNG albo JPG."
+    out = io.BytesIO()
+    pdf = canvas.Canvas(out, pagesize=(width_mm * mm, height_mm * mm))
+    pdf.drawImage(ImageReader(picture.convert("RGB")), 0, 0, width_mm * mm, height_mm * mm)
+    pdf.showPage()
+    pdf.save()
+    return out.getvalue(), [width_mm, height_mm], None
+
+
+@app.route("/api/admin/templates/<token>/model-map", methods=["PUT"])
+@require_admin
+def api_admin_model_map(token):
+    """How the model's faces wear the page, from the pairing view: {faces: [{mesh, island, affine, …}]}."""
+    if not _has_model(token):
+        return jsonify({"error": "Ten szablon nie ma modelu 3D."}), 404
+    cleaned, problem = _model_map(request.get_json(silent=True) or {})
+    if problem:
+        return jsonify({"error": problem}), 400
+    try:
+        updated = materials.update_template(token, {"model_map": cleaned})
+    except materials.MaterialError as error:
+        return jsonify({"error": str(error)}), 400
+    if not updated:
+        return jsonify({"error": f"Nie ma szablonu o tokenie {token!r}."}), 404
+    return jsonify({"template": updated})
+
+
+def _model_map(raw):
+    """(map, None) or (None, problem). Only what the viewer needs is checked — which island of which
+    mesh, and two affine rows of 3 (UV) or 4 (XYZ) finite numbers; the pairs and the fit's own notes
+    (source, residual, turn, mirror) ride along for the pairing view to reopen."""
+    import math
+
+    faces = raw.get("faces")
+    if not isinstance(faces, list):
+        return None, "Mapowanie musi mieć listę „faces”."
+    cleaned = []
+    for entry in faces:
+        if not isinstance(entry, dict):
+            return None, "Każda strona mapowania musi być obiektem."
+        try:
+            mesh, island = int(entry.get("mesh")), int(entry.get("island"))
+        except (TypeError, ValueError):
+            return None, "Strona mapowania potrzebuje numeru siatki i wyspy."
+        affine = entry.get("affine")
+        rows_ok = (isinstance(affine, list) and len(affine) == 2
+                   and all(isinstance(row, list) and len(row) in (3, 4) for row in affine)
+                   and len(affine[0]) == len(affine[1])
+                   and all(isinstance(v, (int, float)) and math.isfinite(v) for row in affine for v in row))
+        if not rows_ok or mesh < 0 or island < 0:
+            return None, f"Strona {mesh}:{island} ma niepoprawne mapowanie."
+        kept = {"mesh": mesh, "island": island, "affine": [[float(v) for v in row] for row in affine]}
+        for key in ("name", "source", "residual", "turn", "mirror", "pairs", "space"):
+            if key in entry:
+                kept[key] = entry[key]
+        cleaned.append(kept)
+    return {"faces": cleaned}, None
+
+
 IDENTIFY_MAX_BYTES = 64 * 1024 * 1024
 
 
@@ -1808,6 +2023,8 @@ def api_templates():
         "sewn_sides_mm": t.get("sewn_sides_mm"),
         "material": t.get("material"),
         "note": t.get("note"),
+        # A product with a model of its own (admin „Modele 3D"): /model/<token> shows that, not a flag.
+        "has_model": _has_model(t.get("token")),
     } for t in materials.load_templates()]})
 
 

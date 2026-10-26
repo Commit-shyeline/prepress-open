@@ -69,6 +69,35 @@ or moved between info, amber and red, because that is a business judgement rathe
 one. And every sentence a customer reads is editable there too; the engine only ever emits a code
 plus numbers.
 
+## 3D products without Blender work
+
+A product no flat outline describes — a tension-fabric wall, a tent, an inflatable figure — is
+shown on `/model/<token>` as its own 3D model wearing the template page, and the shop adds one
+**through the admin panel alone** („Modele 3D"): a `.glb` (glTF 2.0; from Blender it is
+File → Export → glTF 2.0 — `.blend` and `.obj` are not read, there is no converter here) together
+with the page it wears, a PDF die-line (one chosen page) or a PNG/JPG with its size in mm. The page
+becomes a sheet template, the model is kept beside it (`templates/<token>.glb`, never committed).
+
+The panel then fits the model's faces to the page. A **face is one UV island** of a mesh. First
+pass is automatic: every island's UV box is laid on the page box its shape fits best (four turns,
+each mirrored or not; the biggest islands pick first), so a model exported with the page as its
+texture needs no clicking at all — the fit is the identity. The model wears a lettered checker
+while you look, because a mirror or a turn shows in the letters and hides in a print. Where a face
+came out wrong you click the same point on the model and on the page, three pairs per face (four
+on a mesh without UVs, which is fitted as a flat projection), and the panel shows the fit's worst
+miss in millimetres. Faces you untick keep the modeller's own material — feet, poles, caps.
+
+The map is saved on the template (`model_map`); `/model/<token>` then shows the model in the demo
+print, a design saved in the editor (`?design=`) or the file the check page hands over, exactly as
+the flag scene does, and answers the same GLB export. What it cannot do: a curved panel on a mesh
+WITHOUT UVs (a tube needs an unwrap — the projection is affine), one printed piece split across
+several islands (each island needs its own fit), perspective or non-affine distortion.
+
+The maths lives in `prepress/static/model-map.js` and is tested under Node; the scene glue is
+`prepress/static/product-model.js`, shared by the panel and the viewer.
+`scripts/model_fit_check.cjs model.glb` is the oracle: on a model whose islands already lie where
+the page has their pieces, the automatic fit must come back as the identity, upright, unmirrored.
+
 ## What is missing
 
 No page for a customer to upload on — `/api/check` works, the UI for it does not exist yet, and

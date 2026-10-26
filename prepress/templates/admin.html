@@ -135,7 +135,28 @@ code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; 
 .dropzone label { display: block; margin: 0 0 8px; cursor: pointer; font-size: 13px; }
 .dropzone label b { display: block; font-size: 14px; }
 .dropzone input[type=file] { font-size: 12.5px; }
+/* The pairing view: the model on the left, the page on the right, the same height, so a point clicked on one
+   is found on the other without scrolling. Pair dots sit in a box the picture sizes, in page fractions. */
+.pair { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.pair-stage { position: relative; height: 58vh; border: 1px solid var(--line); border-radius: 8px;
+              overflow: hidden; background: #e8eaee; cursor: crosshair; }
+.pair-stage canvas { display: block; }
+.pair-page { height: 58vh; border: 1px solid var(--line); border-radius: 8px; overflow: auto; background: #fff;
+             display: grid; place-items: center; cursor: crosshair; }
+.pair-page .frame { position: relative; display: inline-block; line-height: 0; }
+.pair-page img { max-height: calc(58vh - 2px); max-width: 100%; display: block; }
+.pair-page i { position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%;
+               border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.4); pointer-events: none; }
+.pair-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.pair-tools .opt { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; margin: 0;
+                   font-weight: 500; cursor: pointer; }
+.pair-tools .opt input { width: auto; margin: 0; }
+#mdlStatus { font-size: 13px; font-weight: 600; min-height: 1.4em; }
 </style>
+<script type="importmap">
+{ "imports": { "three": "{{ asset('three.module.min.js') }}" } }
+</script>
+<script src="{{ asset('model-map.js') }}"></script>
 </head>
 <body>
 <header>
@@ -159,6 +180,7 @@ code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; 
          content, and every save below reads it. -->
     <nav class="nav" id="nav">
         <a href="#s-tpl">Szablony</a>
+        <a href="#s-3d">Modele 3D</a>
         <a href="#s-mat">Materiały</a>
         <a href="#s-rules">Reguły</a>
         <a href="#s-msg">Komunikaty</a>
@@ -270,6 +292,66 @@ code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; 
         <p id="tplNone" class="note" style="margin-top:10px">Brak zapisanych szablonów.</p>
     </section>
 
+    <section class="sec" id="s-3d">
+        <h2>Model 3D → szablon na produkcie</h2>
+        <p class="note" style="margin:0 0 12px">
+            Produkt, którego nie opisze płaski obrys — ścianka, namiot, chwiej. Wgraj model
+            <code>.glb</code> (z Blendera: File → Export → glTF 2.0) razem ze stroną szablonu, a tu
+            dopasujesz, która ściana modelu nosi którą część strony. Najpierw automatycznie, po kształcie
+            wysp UV modelu; gdzie wyjdzie źle, klikasz ten sam punkt na modelu i na stronie — trzy pary
+            na ścianę. Klient zobaczy model w swojej grafice pod <code>/model/&lt;token&gt;</code>.
+        </p>
+        <div class="two">
+            <div>
+                <label for="mdlTemplate">Szablon, do którego należy model</label>
+                <select id="mdlTemplate"></select>
+                <div id="mdlNewFields">
+                    <label for="mdlName">Nazwa dla klienta</label>
+                    <input id="mdlName" placeholder="np. Ścianka tekstylna prosta 3 × 2,4 m">
+                    <label for="mdlPage">Strona szablonu — PDF z wykrojnikiem albo PNG/JPG</label>
+                    <input id="mdlPage" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
+                    <div class="grid" style="margin-top:6px">
+                        <div><label for="mdlPageNo">Strona PDF <span class="note">(która, gdy jest kilka)</span></label>
+                            <input id="mdlPageNo" type="number" min="1" value="1"></div>
+                        <div><label for="mdlW">Szerokość (mm) <span class="note">(tylko obrazek)</span></label>
+                            <input id="mdlW" type="number" step="1" placeholder="np. 2976"></div>
+                        <div><label for="mdlH">Wysokość (mm) <span class="note">(tylko obrazek)</span></label>
+                            <input id="mdlH" type="number" step="1" placeholder="np. 2376"></div>
+                    </div>
+                    <label for="mdlMaterial">Materiał</label>
+                    <select id="mdlMaterial"></select>
+                </div>
+                <label for="mdlFile">Model — plik .glb (glTF 2.0)</label>
+                <input id="mdlFile" type="file" accept=".glb,model/gltf-binary">
+                <div class="acts"><button id="mdlImport">Wgraj model</button></div>
+                <p id="msgMdl" class="msg" hidden></p>
+            </div>
+            <div>
+                <h2>Szablony z modelem</h2>
+                <div id="mdlList"><p class="note">Podaj token, żeby wczytać listę.</p></div>
+            </div>
+        </div>
+        <div id="mdlPair" hidden style="margin-top:18px">
+            <div class="pair-tools">
+                <label class="opt"><input type="radio" name="mdlTexture" value="checker" checked> szachownica z literami</label>
+                <label class="opt"><input type="radio" name="mdlTexture" value="sheet"> strona szablonu</label>
+                <span class="spacer" style="flex:1"></span>
+                <button id="mdlAuto" class="ghost">Dopasuj automatycznie</button>
+                <button id="mdlSave">Zapisz mapowanie</button>
+            </div>
+            <p id="mdlStatus"></p>
+            <div class="pair">
+                <div class="pair-stage" id="mdlStage"></div>
+                <div class="pair-page" id="mdlPageBox"><span class="frame"><img id="mdlPageImg" alt="strona szablonu"><span id="mdlPageDots"></span></span></div>
+            </div>
+            <p class="note" style="margin:8px 0">Obracasz myszką, kółkiem przybliżasz. Kliknięcie (bez przeciągania) wybiera
+                punkt na modelu — potem kliknij ten sam punkt na stronie. Litery szachownicy mają czytać się wprost,
+                rząd A u góry: lustro albo obrót widać od razu.</p>
+            <div id="mdlFaces" style="margin-top:8px"></div>
+            <p id="msgPair" class="msg" hidden></p>
+        </div>
+    </section>
+
     <section class="sec" id="s-mat">
         <h2 id="formTitle">Nowy materiał</h2>
         <div class="grid">
@@ -375,6 +457,7 @@ code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; 
 <!-- Sortable 1.15.6, MIT. Kept in the repository rather than pulled from a CDN, because the panel
      runs on the shop's own network and a template import must not depend on the internet. -->
 <script src="{{ asset('sortable.min.js') }}"></script>
+<script type="module" src="{{ asset('admin-models.js') }}"></script>
 <script>
 const el = (id) => document.getElementById(id);
 const FIELDS = ['id', 'name', 'bleed_mm', 'safe_mm', 'min_dpi', 'max_width_mm',

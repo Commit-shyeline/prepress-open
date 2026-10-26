@@ -234,8 +234,10 @@ def upsert_template(template, path=None):
 
 # What an edit may touch. Geometry is NOT on this list on purpose — an outline's ROLE can only be
 # judged against the picture it came from, and an edit form has no picture.
+# `model_map` is the one piece of geometry on it: how a 3D model's faces wear the page, derived
+# in the admin's pairing view (static/model-map.js), which does have the picture.
 EDITABLE_TEMPLATE_FIELDS = ("name", "bleed_mm", "safe_mm", "sewn_sides_mm",
-                           "sides", "material", "note")
+                           "sides", "material", "note", "model_map")
 
 
 def update_template(token, changes, path=None):
@@ -357,16 +359,21 @@ def _write(path, **changes):
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
-def source_path(token, path=None):
-    """Where a template's production PDF lives, or None for a token that is not a token."""
+# A 3D product's model is kept the same way, beside its page: `templates/<token>.glb`.
+MODEL_SUFFIX = ".glb"
+
+
+def source_path(token, path=None, suffix=".pdf"):
+    """Where a template's production PDF (or, with `suffix`, its 3D model) lives, or None for a
+    token that is not a token."""
     if not _TOKEN_PATTERN.match(str(token or "")):
         return None
-    return os.path.join(os.path.dirname(path or DEFAULT_STORE), "templates", f"{token}.pdf")
+    return os.path.join(os.path.dirname(path or DEFAULT_STORE), "templates", f"{token}{suffix}")
 
 
-def save_template_source(token, data, path=None):
+def save_template_source(token, data, path=None, suffix=".pdf"):
     """Keep `data` (PDF bytes) as the template's production file, atomically. False for a bad token."""
-    target = source_path(token, path)
+    target = source_path(token, path, suffix)
     if not target:
         return False
     os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -377,9 +384,9 @@ def save_template_source(token, data, path=None):
     return True
 
 
-def load_template_source(token, path=None):
+def load_template_source(token, path=None, suffix=".pdf"):
     """The template's production PDF bytes, or None when it has none."""
-    target = source_path(token, path)
+    target = source_path(token, path, suffix)
     if not target or not os.path.isfile(target):
         return None
     with open(target, "rb") as handle:
@@ -387,9 +394,11 @@ def load_template_source(token, path=None):
 
 
 def remove_template_source(token, path=None):
-    target = source_path(token, path)
-    if target and os.path.isfile(target):
-        os.remove(target)
+    """Delete the template's production file and its model, whichever of the two it has."""
+    for suffix in (".pdf", MODEL_SUFFIX):
+        target = source_path(token, path, suffix)
+        if target and os.path.isfile(target):
+            os.remove(target)
 
 
 def get(material_id, path=None):

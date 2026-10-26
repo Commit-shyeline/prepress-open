@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>{{ name }} — podgląd 3D | prepress-open</title>
+{% include "_theme.html" %}
+{% include "_session.html" %}
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink);
+       font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+       display: flex; flex-direction: column; min-height: 100vh; }
+header b { font-size: 16px; } header a { font-size: 12.5px; }
+#stage { flex: 1; min-height: 320px; position: relative; }
+#stage canvas { display: block; }
+.note-float { position: absolute; right: 12px; bottom: 12px; font-size: 12px; color: var(--muted);
+              background: color-mix(in srgb, var(--surface) 88%, transparent);
+              border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+#err { position: absolute; inset: 0; display: none; place-items: center; font-weight: 600;
+       color: var(--alert); text-align: center; padding: 24px; }
+#loading { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 600;
+           color: var(--muted); }
+/* The same chrome rules as the flag scene, because the same pages embed both. */
+body.bare header, body.bare .note-float { display: none; }
+body.embed header { display: none; }
+body.bare, body.embed { background: transparent; height: 100vh; min-height: 0; overflow: hidden; }
+body.bare #stage, body.embed #stage { min-height: 0; }
+body.bare #stage canvas { pointer-events: none; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "{{ asset('three.module.min.js') }}" } }
+</script>
+<script src="{{ asset('model-map.js') }}"></script>
+</head>
+<body class="{{ 'bare' if bare else '' }}{{ ' embed' if embed else '' }}">
+{% with page_title = name, page_sub = 'podgląd 3D produktu',
+        extra_actions = '<a href="' ~ base ~ '/api/templates/' ~ token ~ '/pdf">Pobierz szablon</a>'
+                        ~ '<a href="' ~ base ~ '/">← szablony</a>' %}
+{% include "_brand_header.html" %}{% endwith %}
+
+<div id="stage">
+    <div id="loading">Wczytujemy model…</div>
+    <div class="note-float" id="sideNote">Obróć myszką. Kółko przybliża.</div>
+    <div id="err"></div>
+</div>
+
+<script type="module">
+/* A product whose shape is a model the shop imported (admin „Modele 3D"), wearing its template page the
+   way the flag scene wears its own: the page texture is the sheet, then the demo print, then the
+   customer's design or the check page's artwork — each outranking the last, because they load in no
+   fixed order. The model's faces already know where on the page they lie (`model_map`, fitted in the
+   admin's pairing view with model-map.js); this page only loads and dresses. */
+import * as THREE from 'three';
+import { OrbitControls } from '{{ asset("OrbitControls.js") }}';
+import { loadProductModel, groundModel, dressModel, wearPage, lightScene, PAGE_CHANNEL }
+    from '{{ asset("product-model.js") }}';
+
+const token = {{ token|tojson }};
+const params = new URLSearchParams(location.search);
+const stage = document.getElementById('stage');
+const BARE = document.body.classList.contains('bare');
+
+function fail(text) {
+    const loading = document.getElementById('loading');
+    if (loading) loading.remove();
+    const box = document.getElementById('err');
+    box.textContent = text;
+    box.style.display = 'grid';
+}
+
+const scene = new THREE.Scene();
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+stage.appendChild(renderer.domElement);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 500);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+lightScene(scene);
+const pivot = new THREE.Group();
+scene.add(pivot);
+// A hero turns slowly; a page someone inspects stays put. Reduced motion stops the turn.
+let spinning = BARE && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+if (params.get('shot') === '1') spinning = false;
+
+let model = null, bounds = null, size = null;
+try {
+    const info = await fetch(`{{ base }}/api/templates/${encodeURIComponent(token)}/model`).then((r) => r.json());
+    if (info.error) throw new Error(info.error);
+    model = await loadProductModel(info.glb, '{{ base }}/static/draco/');
+    dressModel(model, info.map);
+    size = groundModel(model.root);
+    pivot.add(model.root);
+    document.getElementById('loading').remove();
+} catch (error) {
+    fail('Nie udało się wczytać modelu. ' + (error && error.message ? error.message : ''));
+}
+
+if (model) {
+    const ground = new THREE.Mesh(
+        new THREE.CircleGeometry(Math.max(size.x, size.z) * 1.6, 48),
+        new THREE.MeshStandardMaterial({ color: 0xe8eaee, roughness: 0.95 }));
+    ground.rotation.x = -Math.PI / 2;
+    if (!BARE) scene.add(ground);
+    bounds = new THREE.Box3().setFromObject(pivot);
+    const centre = bounds.getCenter(new THREE.Vector3());
+    controls.target.copy(centre);
+    const distance = Math.max(size.x, size.z, size.y) * 1.9;
+    camera.position.set(centre.x + distance * 0.75, centre.y + size.y * 0.45, centre.z + distance * 0.75);
+    controls.update();
+    document.getElementById('sideNote').textContent =
+        `${size.x.toFixed(2)} × ${size.z.toFixed(2)} × ${size.y.toFixed(2)} m · obróć myszką`;
+
+    /* The page texture, by rank: the sheet itself (0), this template's demo print (1), the customer's
+       own work (2) — a saved design, or the artwork the check page hands over. */
+    let rank = -1;
+    function wear(url, atRank) {
+        if (atRank < rank) return;
+        new THREE.TextureLoader().load(url, (texture) => {
+            if (atRank < rank) return;              // something more authoritative landed meanwhile
+            rank = atRank;
+            texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+            wearPage(model, texture);
+            // For a caller that waits for the print (`?shot=1`): the demo or better is on.
+            if (atRank >= 1) document.body.dataset.art = 'on';
+        }, undefined, () => { /* no picture at this rank — the lower one stays, which is correct */ });
+    }
+    wear(`{{ base }}/api/templates/${encodeURIComponent(token)}/sheet.png`, 0);
+    wear(`{{ base }}/api/demo-artwork.jpg?token=${encodeURIComponent(token)}`
+         + (params.get('label') ? `&label=${encodeURIComponent(params.get('label'))}` : ''), 1);
+    if (params.get('design')) {
+        wear(`{{ base }}/api/designs/${encodeURIComponent(params.get('design'))}/png`, 2);
+    }
+
+    window.addEventListener('message', (event) => {
+        if (event.origin !== window.location.origin || !event.data) return;
+        if (typeof event.data.artwork === 'string' && event.data.artwork.startsWith('data:image/')) {
+            wear(event.data.artwork, 2);
+        }
+        if (event.data.export === 'glb') exportGlb(event.source);
+    });
+
+    /* „Pobierz model 3D (.glb)" — the dressed model as a plain glTF: the page position moves into the
+       standard `uv` so any viewer reads it, the page material loses its channel trick, and faces
+       without a print keep the modeller's material. */
+    async function exportGlb(reply) {
+        try {
+            const { GLTFExporter } = await import('{{ asset("GLTFExporter.js") }}');
+            const posed = new THREE.Group();
+            model.root.updateMatrixWorld(true);
+            const pageMaterial = model.pageMaterial.clone();
+            if (pageMaterial.map) { pageMaterial.map = pageMaterial.map.clone(); pageMaterial.map.channel = 0; }
+            for (const mesh of model.meshes) {
+                const geometry = mesh.node.geometry.clone();
+                const pageUv = geometry.getAttribute(`uv${PAGE_CHANNEL}`);
+                if (pageUv) { geometry.setAttribute('uv', pageUv); geometry.deleteAttribute(`uv${PAGE_CHANNEL}`); }
+                const material = Array.isArray(mesh.node.material) ? [pageMaterial, mesh.original.material]
+                                                                   : mesh.original.material;
+                const copy = new THREE.Mesh(geometry, material);
+                copy.applyMatrix4(mesh.node.matrixWorld);
+                posed.add(copy);
+            }
+            new GLTFExporter().parse(posed,
+                (glb) => reply.postMessage({ exported: {
+                    glb: new Blob([glb], { type: 'model/gltf-binary' }) } }, window.location.origin),
+                (error) => reply.postMessage({ exported: { error: String(error) } }, window.location.origin),
+                { binary: true, onlyVisible: true });
+        } catch (error) {
+            reply.postMessage({ exported: { error: String(error) } }, window.location.origin);
+        }
+    }
+
+    /* `?shot=1`: a still catalogue picture — one fixed angle, and `data-shot` on the body with the
+       ground line, the left edge and the pixels per metre, for a caller that stands a person beside it. */
+    if (params.get('shot') === '1') {
+        resize();
+        pivot.rotation.y = THREE.MathUtils.degToRad(-12);
+        camera.updateMatrixWorld();
+        const toPx = (v) => {
+            const p = v.clone().project(camera);
+            return [(p.x + 1) / 2 * stage.clientWidth, (1 - p.y) / 2 * stage.clientHeight];
+        };
+        const foot = new THREE.Vector3(bounds.min.x, bounds.min.y, centre.z);
+        const [left, groundPx] = toPx(foot);
+        const [, metre] = toPx(foot.clone().setY(bounds.min.y + 1));
+        document.body.dataset.shot = JSON.stringify({
+            left: Math.round(left), ground: Math.round(groundPx), pxPerMetre: +(groundPx - metre).toFixed(2),
+            heightM: +size.y.toFixed(3),
+        });
+    }
+}
+
+function resize() {
+    const width = stage.clientWidth || 1;
+    const height = stage.clientHeight || 1;
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+renderer.setAnimationLoop(() => {
+    if (spinning) pivot.rotation.y += 0.0035;
+    controls.update();
+    renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
