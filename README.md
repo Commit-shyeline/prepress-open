@@ -76,7 +76,8 @@ shown on `/model/<token>` as its own 3D model wearing the template page, and the
 **through the admin panel alone** („Modele 3D"): a `.glb` (glTF 2.0; from Blender it is
 File → Export → glTF 2.0 — `.blend` and `.obj` are not read, there is no converter here) together
 with the page it wears, a PDF die-line (one chosen page) or a PNG/JPG with its size in mm. The page
-becomes a sheet template, the model is kept beside it (`templates/<token>.glb`, never committed).
+becomes a sheet template with a 30 mm safe margin (edit it on the template's row — the demo print
+is drawn inside it), the model is kept beside it (`templates/<token>.glb`, never committed).
 
 The panel then fits the model's faces to the page. A **face is one UV island** of a mesh. First
 pass is automatic: every island's UV box is laid on the page box its shape fits best (four turns,

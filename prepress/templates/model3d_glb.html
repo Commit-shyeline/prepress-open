@@ -84,9 +84,24 @@ scene.add(pivot);
 let spinning = BARE && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 if (params.get('shot') === '1') spinning = false;
 
-let model = null, bounds = null, size = null;
+/* The check page posts the customer's artwork 900 ms after this frame's `load`, and a model of
+   some megabytes is still downloading then — so what arrives is parked here and applied the moment
+   the model is dressed. The flag scene's listener sits after its fetch only because /shape is instant. */
+const parked = { artwork: null, exportTo: null };
+let onMessage = (event) => {
+    if (typeof event.data.artwork === 'string' && event.data.artwork.startsWith('data:image/')) {
+        parked.artwork = event.data.artwork;
+    }
+    if (event.data.export === 'glb') parked.exportTo = event.source;
+};
+window.addEventListener('message', (event) => {
+    if (event.origin !== window.location.origin || !event.data) return;
+    onMessage(event);
+});
+
+let model = null, bounds = null, size = null, info = null;
 try {
-    const info = await fetch(`{{ base }}/api/templates/${encodeURIComponent(token)}/model`).then((r) => r.json());
+    info = await fetch(`{{ base }}/api/templates/${encodeURIComponent(token)}/model`).then((r) => r.json());
     if (info.error) throw new Error(info.error);
     model = await loadProductModel(info.glb, '{{ base }}/static/draco/');
     dressModel(model, info.map);
@@ -119,6 +134,9 @@ if (model) {
         if (atRank < rank) return;
         new THREE.TextureLoader().load(url, (texture) => {
             if (atRank < rank) return;              // something more authoritative landed meanwhile
+            // Only THIS page fits the model: the demo endpoint answers with the bundled flag artwork
+            // when the template's own cannot be drawn, and a 1:3 flag over a wall is not a preview.
+            if (atRank >= 1 && !samePage(texture.image)) return;
             rank = atRank;
             texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
             wearPage(model, texture);
@@ -126,6 +144,8 @@ if (model) {
             if (atRank >= 1) document.body.dataset.art = 'on';
         }, undefined, () => { /* no picture at this rank — the lower one stays, which is correct */ });
     }
+    const [pageW, pageH] = info.page_mm || [1, 1];
+    const samePage = (image) => image && Math.abs(Math.log((image.width / image.height) / (pageW / pageH))) < 0.03;
     wear(`{{ base }}/api/templates/${encodeURIComponent(token)}/sheet.png`, 0);
     wear(`{{ base }}/api/demo-artwork.jpg?token=${encodeURIComponent(token)}`
          + (params.get('label') ? `&label=${encodeURIComponent(params.get('label'))}` : ''), 1);
@@ -133,13 +153,14 @@ if (model) {
         wear(`{{ base }}/api/designs/${encodeURIComponent(params.get('design'))}/png`, 2);
     }
 
-    window.addEventListener('message', (event) => {
-        if (event.origin !== window.location.origin || !event.data) return;
+    onMessage = (event) => {
         if (typeof event.data.artwork === 'string' && event.data.artwork.startsWith('data:image/')) {
             wear(event.data.artwork, 2);
         }
         if (event.data.export === 'glb') exportGlb(event.source);
-    });
+    };
+    if (parked.artwork) wear(parked.artwork, 2);
+    if (parked.exportTo) exportGlb(parked.exportTo);
 
     /* „Pobierz model 3D (.glb)" — the dressed model as a plain glTF: the page position moves into the
        standard `uv` so any viewer reads it, the page material loses its channel trick, and faces

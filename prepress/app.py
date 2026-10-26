@@ -1798,6 +1798,7 @@ def api_admin_template_source(token):
 # from the model's UV islands and the page's boxes, corrected by clicked point pairs where needed.
 MODEL_MAX_BYTES = 64 * 1024 * 1024
 GLB_MAGIC = b"glTF"
+MODEL_PAGE_SAFE_MM = 30.0
 
 
 @app.route("/api/admin/models", methods=["POST"])
@@ -1833,8 +1834,12 @@ def api_admin_import_model():
         source_pdf, page_mm, problem = _page_as_pdf(page_bytes, request.form)
         if problem:
             return jsonify({"error": problem}), 400
+        # No bleed: the page is the supplier's own print area. A safe margin, because the demo print
+        # and the check both need one (a template without a safe area has no demo); the panel's
+        # own default, editable on the template's row afterwards.
         template, problem = _template_from_payload({
-            "name": request.form.get("name"), "kind": "sheet", "scale": 1, "bleed_mm": 0, "safe_mm": 0,
+            "name": request.form.get("name"), "kind": "sheet", "scale": 1, "bleed_mm": 0,
+            "safe_mm": MODEL_PAGE_SAFE_MM,
             "page_mm": page_mm, "outlines": [], "material": request.form.get("material"),
             "source_name": page.filename or "", "note": request.form.get("note")})
         if problem:

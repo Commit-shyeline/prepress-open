@@ -103,7 +103,8 @@ export function wearPage(model, texture) {
     texture.channel = PAGE_CHANNEL;
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
-    texture.needsUpdate = true;
+    // A texture still downloading uploads itself when its image lands; marking it now only warns.
+    if (texture.image) texture.needsUpdate = true;
     model.pageMaterial.map = texture;
     model.pageMaterial.needsUpdate = true;
 }

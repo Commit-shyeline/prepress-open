@@ -7,6 +7,7 @@
 const maths = window.PrepressModelMap;
 const ADMIN_HEADERS = () => ({ 'X-Admin-Token': el('token').value.trim() });
 const CLICK_TRAVEL_PX = 5;                     // less than this between down and up is a click, not an orbit
+const SLIVER_SHARE = 0.01;                     // an island under 1 % of the largest's UV box is not a printed face
 const DOT_COLOURS = ['#d81b60', '#1e88e5', '#43a047', '#fb8c00', '#8e24aa', '#00acc1', '#6d4c41', '#c0ca33'];
 
 let three = null, orbit = null, scene3d = null;   // the lazily imported modules
@@ -35,8 +36,12 @@ function renderPickers(templates) {
         </div>`).join('') : '<p class="note">Jeszcze żaden szablon nie ma modelu.</p>';
     el('mdlList').querySelectorAll('[data-mdl-fit]').forEach((button) =>
         button.addEventListener('click', () => openPairing(button.dataset.mdlFit)));
-    const materials = el('tplMaterial');
-    if (materials) el('mdlMaterial').innerHTML = materials.innerHTML;
+}
+
+async function loadMaterials() {
+    const data = await (await fetch('api/materials')).json();
+    el('mdlMaterial').innerHTML = '<option value="">— bez materiału —</option>'
+        + (data.materials || []).map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
 }
 
 async function importModel() {
@@ -115,9 +120,14 @@ function buildView(token, info, model) {
     pageImg.src = `api/templates/${encodeURIComponent(token)}/sheet.png`;
     const [pageW, pageH] = info.page_mm || [1, 1];
 
-    // Per face: { face, printed, pairs: [{from, to, point}], affine, source, residual, turn, mirror }
-    const faces = model.faces.map((face) => ({ face, printed: true, pairs: [], affine: null, source: null,
-                                              residual: null, turn: 0, mirror: false }));
+    // Per face: { face, printed, pairs: [{from, to, point}], affine, source, residual, turn, mirror }.
+    // Biggest UV island first; the slivers — caps, stubs, feet, a column has 144 of them — start unticked,
+    // or every one would be stretched over the whole page and the list would be unreadable.
+    const area = (box) => (box ? (box[2] - box[0]) * (box[3] - box[1]) : 0);
+    const largest = Math.max(...model.faces.map((face) => area(face.box)), 0);
+    const faces = [...model.faces].sort((a, b) => area(b.box) - area(a.box) || b.triangles - a.triangles)
+        .map((face) => ({ face, printed: area(face.box) >= largest * SLIVER_SHARE || (face.space === 'xyz'),
+                          pairs: [], affine: null, source: null, residual: null, turn: 0, mirror: false }));
     const byKey = new Map(faces.map((entry) => [entry.face.key, entry]));
     let pending = null;                        // a model point waiting for its page point
     let texture = 'checker';
@@ -184,7 +194,8 @@ function buildView(token, info, model) {
     }
 
     function autoFit() {
-        const fits = maths.autoFit(faces.map((entry) => ({ key: entry.face.key, box: entry.face.box })), info.boxes || []);
+        const fits = maths.autoFit(faces.filter((entry) => entry.printed).map((entry) => ({ key: entry.face.key, box: entry.face.box })),
+                                   info.boxes || []);
         for (const entry of faces) {
             entry.pairs = [];
             const fit = fits.find((one) => one.key === entry.face.key);
@@ -289,4 +300,5 @@ if (el('mdlImport')) {
     document.querySelectorAll('[name="mdlTexture"]').forEach((radio) =>
         radio.addEventListener('change', () => { if (view && radio.checked) view.setTexture(radio.value); }));
     loadTemplateList().then(renderPickers);
+    loadMaterials();
 }
