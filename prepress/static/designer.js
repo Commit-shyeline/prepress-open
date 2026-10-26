@@ -18,6 +18,9 @@
 	const originals = new Map(); // src -> the uploaded File
 	const TEXT_RASTER_DPI = 150;
 	const RASTER_MAX_EDGE = 8192; // a 2.4 m text at 150 dpi is 14 000 px: capped, and the check says what that costs
+	// An uploaded picture goes to the page at the customer's own pixels — up to this size. Bigger, it is sent at
+	// RASTER_MAX_EDGE instead: the public door takes 100 MB a request (Cloudflare), and one photo filled it (2026-10-26).
+	const PICTURE_MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 	const loadImage = ( src ) =>
 		new Promise( ( resolve, reject ) => {
@@ -378,15 +381,36 @@
 			return toBlob( canvas );
 		}
 
+		/** The uploaded file where this session still has it (shrunk to RASTER_MAX_EDGE when it is over
+		 * PICTURE_MAX_UPLOAD_BYTES — a JPEG stays a JPEG, anything else goes as PNG), else the on-canvas copy. */
+		async function pictureUpload( src ) {
+			const original = originals.get( src );
+			if ( ! original ) {
+				return fetch( src ).then( ( response ) => response.blob() );
+			}
+			if ( original.size <= PICTURE_MAX_UPLOAD_BYTES ) {
+				return original;
+			}
+			const url = URL.createObjectURL( original );
+			try {
+				const image = await loadImage( url );
+				const scale = Math.min( 1, RASTER_MAX_EDGE / Math.max( image.naturalWidth, image.naturalHeight ) );
+				const canvas = Object.assign( document.createElement( 'canvas' ), { width: Math.round( image.naturalWidth * scale ), height: Math.round( image.naturalHeight * scale ) } );
+				canvas.getContext( '2d' ).drawImage( image, 0, 0, canvas.width, canvas.height );
+				const type = original.type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+				return new Promise( ( resolve ) => canvas.toBlob( resolve, type, 0.92 ) );
+			} finally {
+				URL.revokeObjectURL( url );
+			}
+		}
+
 		/** Each element's own pixels for the page: the uploaded file where this session still has it, else the on-canvas
 		 * copy; a text freshly rasterised. [ [ id, Blob ], … ] in drawing order. */
 		async function elementRasters() {
 			const mmPerPixel = JSON.parse( main.dataset.pageMm )[ 0 ] / artwork.width;
 			return Promise.all( elements.map( async ( element ) => [
 				element.id,
-				element.type === 'image'
-					? originals.get( element.src ) || ( await fetch( element.src ).then( ( response ) => response.blob() ) )
-					: await textRaster( element, mmPerPixel ),
+				element.type === 'image' ? await pictureUpload( element.src ) : await textRaster( element, mmPerPixel ),
 			] ) );
 		}
 

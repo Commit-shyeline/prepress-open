@@ -136,12 +136,14 @@ def build_pdf(template, title=None):
     pdf.setTitle(title or template.get("name") or "Szablon")
     pdf.setCreator("prepress-open")
 
+    mirror_back = back_mirrored(template)
     for index, side in enumerate(side_labels):
         # The back is a MIRROR of the front (shop rule, 2026-08-24). A flag's pole is on the left of
         # the front, so seen from behind it is on the right, and a designer given an unmirrored back
         # puts the artwork on the wrong edge. Only the outlines flip — the spec panel is drawn after
-        # this and stays readable.
-        mirror = page_w if index else None
+        # this and stays readable. A product whose back is a print of its own (a tension-fabric wall:
+        # `back_mirrored: false`) keeps the back as drawn.
+        mirror = page_w if index and mirror_back else None
         for entry in drawing["brutto"]:
             _stroke(pdf, entry, BRUTTO_RGB, mirror_x_mm=mirror)
         for entry in drawing["netto"]:
@@ -159,7 +161,7 @@ def build_pdf(template, title=None):
         pdf.showPage()
     pdf.save()
     if len(side_labels) > 1:
-        notes.append(f"strony: {len(side_labels)} — {', '.join(side_labels)}, tył lustrzany")
+        notes.append(f"strony: {len(side_labels)} — {', '.join(side_labels)}, " + ("tył lustrzany" if mirror_back else "tył bez lustra"))
     return _stamp(buffer.getvalue(), template, notes, side_labels)
 
 
@@ -775,6 +777,12 @@ def scale_of(template):
         return 1
 
 
+def back_mirrored(template):
+    """Whether the second side is the front seen through the fabric (a flag: yes, the default) or a print of
+    its own (a tension-fabric wall: `back_mirrored: false`)."""
+    return template.get("back_mirrored") is not False
+
+
 def sides_of(template):
     """How many printed sides this product has. Anything unexpected reads as one."""
     try:
@@ -927,7 +935,7 @@ def _stamp(pdf_bytes, template, notes, side_labels=("",)):
             page.obj[pikepdf.Name(STAMP_KEY)] = pikepdf.String(json.dumps(
                 {**payload,
                  "side": side_labels[index] if index < len(side_labels) else "",
-                 "mirrored": index > 0},
+                 "mirrored": index > 0 and back_mirrored(template)},
                 ensure_ascii=False))
         with pdf.open_metadata(set_pikepdf_as_editor=False) as meta:
             meta["dc:title"] = f"prepress-open template {template.get('token') or ''}".strip()

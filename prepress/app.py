@@ -1426,6 +1426,8 @@ def api_admin_save_template():
         "safe_mm": safe_mm,
         "sewn_sides_mm": sewn_mm,
         "sides": sides,
+        # The back as a print of its own (a tension-fabric wall) rather than the front mirrored (a flag).
+        "back_mirrored": payload.get("back_mirrored") is not False,
         "material": str(payload.get("material") or "").strip() or None,
         "source_name": str(payload.get("source_name") or "").strip(),
         "note": str(payload.get("note") or "").strip(),

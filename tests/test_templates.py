@@ -272,6 +272,22 @@ def _save(client, name, **extra):
                        json=payload).get_json()["template"]
 
 
+def test_a_wall_s_back_is_a_print_of_its_own_not_the_front_mirrored(client):
+    """A flag's back is the front seen through the fabric, so it is mirrored; a tension-fabric wall's two sides
+    are two prints (`back_mirrored: false`), so page 2 is drawn as page 1 and stamped unmirrored."""
+    from prepress import identify
+    wall = _save(client, "Ścianka dwustronna", sides=2, back_mirrored=False)
+    flag = _save(client, "Flaga dwustronna", sides=2)
+    assert wall["back_mirrored"] is False and flag["back_mirrored"] is True
+    import pypdfium2
+    for template, mirrored, note in ((wall, False, "tył bez lustra"), (flag, True, "tył lustrzany")):
+        sheet = client.get(f"/api/templates/{template['token']}/pdf")
+        assert sheet.status_code == 200 and len(pypdfium2.PdfDocument(io.BytesIO(sheet.data))) == 2
+        stamps = [identify.read_stamp(sheet.data, page_index=index)["stamp"] for index in range(2)]
+        assert [stamp["mirrored"] for stamp in stamps] == [False, mirrored]
+        assert any(note in line for line in stamps[0]["notes"])
+
+
 def test_a_sewn_tunnel_is_taken_off_BEFORE_the_margin_is_measured(client):
     """The Vento Regular case, and the correction that followed it.
 
