@@ -1825,7 +1825,12 @@ def _finished_mm(template):
         return [round(float(page[0]) - VENTO_FINISHED_INSET_MM, 1),
                 round(float(page[1]) - VENTO_FINISHED_INSET_MM, 1)]
     trim = template.get("trim_mm") or []
-    return [float(trim[0]), float(trim[1])] if len(trim) == 2 else None
+    if len(trim) != 2:
+        return None
+    # A flat template drawn at 1:N (Ultima's Formulate walls at 1:4) is ordered at full size; a sheet of
+    # panels has no finished size to scale.
+    scale = 1 if template.get("kind") == "sheet" else from_template.scale_of(template)
+    return [float(trim[0]) * scale, float(trim[1]) * scale]
 
 
 # Deriving a template's safe outline costs about a second, and the landing page asks for the whole

@@ -239,6 +239,13 @@ def test_a_face_s_text_stays_inside_its_outline_and_moves_outside_a_cramped_face
     assert len(from_template._legend(per_face=False)) == 3
 
 
+def test_a_flat_template_drawn_at_one_to_four_is_ordered_at_full_size():
+    # Ultima's Formulate 3000 wall: a 744 × 594 mm page at 1:4 is a 2976 × 2376 mm print
+    assert app_module._finished_mm({"trim_mm": [744, 594], "scale": 4}) == [2976, 2376]
+    assert app_module._finished_mm({"trim_mm": [2300, 2300], "scale": 10, "kind": "sheet"}) == [2300, 2300]
+    assert app_module._finished_mm({"trim_mm": [800, 2400]}) == [800, 2400]
+
+
 def test_the_free_box_is_the_largest_empty_rectangle():
     from prepress import from_template
     # one panel in the top-left quarter: the free box is the bottom half or the right half, not the panel
