@@ -551,6 +551,44 @@ def _page_boxes(template):
     return fractions or [[0.0, 0.0, 1.0, 1.0]]
 
 
+# A printed banner, mesh or rigid board at the ordered size, on what such a print stands on
+# (templates/scene.html, static/print-scene-rules.js). Sizes are clamped here and again in the page:
+# the URL comes from a shop's product page, and a 1 km banner is not a scene, it is a hang.
+SCENE_KINDS = {"baner": "Baner", "siatka": "Siatka mesh", "plyta": "Płyta"}
+SCENE_SIZE_MM = (100, 20000)
+SCENE_THICKNESS_MM = (0.3, 30.0)
+SCENE_EYELET_MM = (100, 500)
+
+
+def _scene_number(name, bounds, default):
+    try:
+        value = float(request.args.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    if value != value:                              # NaN
+        return default
+    return min(max(value, bounds[0]), bounds[1])
+
+
+@app.route("/scena/<kind>")
+def print_scene(kind):
+    """`?w=&h=` mm, `&t=` board thickness mm, `&sides=2` printed both sides, `&oczka=` eyelet pitch mm,
+    `&label=` the demo print's wording; `?bare`, `?embed`, `?shot` as on /model/<token>."""
+    if kind not in SCENE_KINDS:
+        return jsonify({"error": "Nie znamy takiej sceny."}), 404
+    board = kind == "plyta"
+    cfg = {"kind": kind, "title": SCENE_KINDS[kind],
+           "w": _scene_number("w", SCENE_SIZE_MM, 1000 if board else 3000),
+           "h": _scene_number("h", SCENE_SIZE_MM, 700 if board else 1000),
+           "t": _scene_number("t", SCENE_THICKNESS_MM, 5.0),
+           "sides": 2 if request.args.get("sides") == "2" else 1,
+           "oczka": _scene_number("oczka", SCENE_EYELET_MM, 500),
+           "label": (request.args.get("label") or "")[:40]}
+    return render_template("scene.html", cfg=cfg,
+                           bare=request.args.get("bare") == "1",
+                           embed=request.args.get("embed") == "1")
+
+
 @app.route("/podglad-hero")
 def hero_preview():
     """A LAYOUT preview of the two-layer hero, for settling how it should look before it is one.

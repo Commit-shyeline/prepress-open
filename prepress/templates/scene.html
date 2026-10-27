@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>{{ cfg.title }} — wizualizacja | prepress-open</title>
+{% include "_theme.html" %}
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink);
+       font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+       display: flex; flex-direction: column; min-height: 100vh; }
+header b { font-size: 16px; } header a { font-size: 12.5px; }
+#stage { flex: 1; min-height: 320px; position: relative; }
+#stage canvas { display: block; }
+.note-float { position: absolute; right: 12px; bottom: 12px; font-size: 12px; color: var(--muted);
+              max-width: min(70%, 520px);
+              background: color-mix(in srgb, var(--surface) 88%, transparent);
+              border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+#err { position: absolute; inset: 0; display: none; place-items: center; font-weight: 600;
+       color: var(--alert); }
+/* `bare`: the scene only, no chrome, no interaction, transparent ground — a product page's picture.
+   `embed`: no header, the note stays — a frame the visitor may turn. Same page, same code. */
+body.bare header, body.bare .note-float { display: none; }
+body.embed header { display: none; }
+body.bare, body.embed { background: transparent; height: 100vh; min-height: 0; overflow: hidden; }
+body.bare #stage, body.embed #stage { min-height: 0; }
+body.bare #stage canvas { pointer-events: none; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "{{ asset('three.module.min.js') }}" } }
+</script>
+<script src="{{ asset('print-scene-rules.js') }}"></script>
+</head>
+<body class="{{ 'bare' if bare else '' }}{{ ' embed' if embed else '' }}">
+{% with page_title = cfg.title, page_sub = 'wizualizacja wydruku',
+        extra_actions = '<a href="' ~ base ~ '/">← szablony</a>' %}
+{% include "_brand_header.html" %}{% endwith %}
+
+<div id="stage">
+    <div class="note-float" id="sideNote"></div>
+    <div id="err"></div>
+</div>
+
+<script type="module">
+/* A printed banner, a mesh or a rigid board at the ORDERED size, standing where such a print stands.
+   Procedural, like the flag scene (model3d.html): the geometry comes from the size, not from a file,
+   because a banner is any size at all and no library of models could hold them. What it stands on
+   follows the size (print-scene-rules.js carrierFor): crowd barriers, a Heras fence, a billboard
+   frame, a truss.
+   The board is the board and nothing else (the shop, 2026-10-27): the chosen thickness, the front
+   printed, the back white — or printed too on a double-sided order.
+
+   Units are METRES, as the .glb product models are. The texture contract is model3d.html's: the
+   demo print until `artwork` (and `artworkBack`) arrive by postMessage from this origin; a `scene`
+   message from any origin resizes — numbers only, clamped, so an embedding shop page can drive it
+   from its own form. `?shot=1` is the catalogue still (data-shot, as the flag scene writes it). */
+import * as THREE from 'three';
+import { OrbitControls } from '{{ asset("OrbitControls.js") }}';
+import { lightScene } from '{{ asset("product-model.js") }}';
+
+const rules = window.PrepressPrintScene;
+const initial = {{ cfg|tojson }};
+const brand = { name: {{ brand_name|tojson }}, logo: {{ brand_logo|tojson }} };
+const params = new URLSearchParams(location.search);
+const stage = document.getElementById('stage');
+const note = document.getElementById('sideNote');
+const bare = document.body.classList.contains('bare');
+const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const MM = 0.001;
+const SIZE_MIN = 100, SIZE_MAX = 20000;          // mm; the server clamps the same way
+const THICKNESS_MIN = 0.3, THICKNESS_MAX = 30;
+const EYELET_MIN = 100, EYELET_MAX = 500;
+const clamp = (v, lo, hi, fallback) => (Number.isFinite(v) ? Math.min(Math.max(v, lo), hi) : fallback);
+
+const scene = new THREE.Scene();
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+stage.appendChild(renderer.domElement);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.05, 400);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI / 2 - 0.02;        // never under the ground
+lightScene(scene);
+const ground = new THREE.Mesh(new THREE.CircleGeometry(1, 64),
+    new THREE.MeshStandardMaterial({ color: 0xe8eaee, roughness: 0.95 }));
+ground.rotation.x = -Math.PI / 2;
+ground.visible = !bare;
+scene.add(ground);
+const product = new THREE.Group();                  // everything the size decides; rebuilt on a change
+scene.add(product);
+
+/* ── Materials shared across rebuilds, so a print that arrived stays worn ── */
+const STEEL = new THREE.MeshStandardMaterial({ color: 0xb4b9c1, roughness: 0.45, metalness: 0.15 });
+const ZINC = new THREE.MeshStandardMaterial({ color: 0xc9cdd3, roughness: 0.5, metalness: 0.1 });
+const CONCRETE = new THREE.MeshStandardMaterial({ color: 0x9a9a96, roughness: 0.95 });
+const BLACK = new THREE.MeshStandardMaterial({ color: 0x1d1f23, roughness: 0.6 });
+const BOARD_EDGE = new THREE.MeshStandardMaterial({ color: 0xf4f4f2, roughness: 0.55 });
+const BOARD_BACK = new THREE.MeshStandardMaterial({ color: 0xf7f7f5, roughness: 0.6 });
+// Frontlit "Black Back" is the standard banner: its reverse is the dark coating, not white.
+const BANNER_BACK = new THREE.MeshStandardMaterial({ color: 0x3a3b3e, roughness: 0.85, side: THREE.BackSide });
+const printFront = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82 });
+// The board's back face: a box face already faces outward and its UVs read forward from behind, so
+// it is a plain FrontSide material (BackSide drew it only from INSIDE the board).
+const printBack = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82 });
+// The mesh: one cloth, both faces, holes cut by alphaTest — the ink soaks through a mesh, so the
+// back really is the front's print seen through the knit.
+const meshCloth = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, side: THREE.DoubleSide });
+meshCloth.alphaMap = perforation();
+meshCloth.alphaMap.wrapS = meshCloth.alphaMap.wrapT = THREE.RepeatWrapping;
+// Blended, not alphaTest: at the distance a whole banner is seen from, the holes are under a pixel,
+// mipmapped they average to ~70 % cover, and alphaTest would read that as solid cloth (hard
+// nearest-filtered holes read as moiré instead). Blending shows what the eye sees: a veil.
+meshCloth.alphaTest = 0;
+meshCloth.transparent = true;
+meshCloth.depthWrite = false;
+
+/* The mesh's holes. ~30 % open, like a 270 g banner mesh; drawn far coarser than the real knit
+   (a 1 mm hole is under a pixel at any viewing distance) so the see-through READS. */
+function perforation() {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, 64, 64);
+    ctx.fillStyle = '#000';
+    for (let y = 8; y < 64; y += 16) {
+        for (let x = 8; x < 64; x += 16) {
+            ctx.beginPath();
+            ctx.arc(x, y, 4.6, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+    return new THREE.CanvasTexture(canvas);
+}
+const MESH_HOLE_PITCH_M = 0.012;                    // one 16 px cell of the canvas, on the cloth
+
+/* ── The state: what is on screen ── */
+let cfg = sanitize(initial);
+let artwork = null, artworkBack = null;             // textures the shop sent; null = the demo print
+let bounds = new THREE.Box3();
+
+/* `raw` over what is on screen: a value that is not a number keeps the one shown (the first call
+   has nothing shown yet, so the defaults stand in). */
+function sanitize(raw) {
+    const kind = ['baner', 'siatka', 'plyta'].includes(raw.kind) ? raw.kind : cfg ? cfg.kind : 'baner';
+    const isBoard = kind === 'plyta';
+    const shown = cfg || { w: isBoard ? 1000 : 3000, h: isBoard ? 700 : 1000, t: 5, oczka: rules.EYELET_PITCH };
+    return {
+        kind, title: raw.title || (cfg && cfg.title) || '',
+        w: clamp(Number(raw.w), SIZE_MIN, SIZE_MAX, shown.w),
+        h: clamp(Number(raw.h), SIZE_MIN, SIZE_MAX, shown.h),
+        t: clamp(Number(raw.t), THICKNESS_MIN, THICKNESS_MAX, shown.t),
+        sides: Number(raw.sides) === 2 ? 2 : 1,
+        oczka: clamp(Number(raw.oczka), EYELET_MIN, EYELET_MAX, shown.oczka),
+        label: String(raw.label || '').slice(0, 40),
+    };
+}
+
+/* ── The demo print: the brand and the size, so a bare scene still says what it shows ── */
+function demoPrint(width, height) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 2048;
+    canvas.height = Math.max(256, Math.min(8192, Math.round(2048 * height / width)));
+    const ctx = canvas.getContext('2d');
+    const accent = getComputedStyle(document.body).getPropertyValue('--accent-mid').trim() || '#3ea855';
+    ctx.fillStyle = '#f2f4f7';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = accent;
+    ctx.beginPath();                                 // a diagonal band: a print, not a blank sheet
+    ctx.moveTo(0, canvas.height * 0.62);
+    ctx.lineTo(canvas.width, canvas.height * 0.18);
+    ctx.lineTo(canvas.width, canvas.height * 0.42);
+    ctx.lineTo(0, canvas.height * 0.86);
+    ctx.closePath();
+    ctx.fill();
+    const unit = Math.min(canvas.width, canvas.height);
+    ctx.fillStyle = '#1b1e24';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `800 ${Math.round(unit * 0.22)}px system-ui, Segoe UI, sans-serif`;
+    ctx.fillText(cfg.label || brand.name || 'prepress-open', canvas.width / 2, canvas.height * 0.36, canvas.width * 0.9);
+    ctx.font = `600 ${Math.round(unit * 0.1)}px system-ui, Segoe UI, sans-serif`;
+    ctx.fillStyle = '#f2f4f7';
+    ctx.fillText(`${width} × ${height} mm`, canvas.width / 2, canvas.height * 0.52, canvas.width * 0.9);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+}
+
+function wear(texture, material) {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+    material.map = texture;
+    material.needsUpdate = true;
+}
+
+function dress() {
+    const front = artwork || demoPrint(cfg.w, cfg.h);
+    wear(front, printFront);
+    wear(front, meshCloth);
+    // A double-sided board's back wears its own print, or the front's again, reading forward from behind.
+    if (artworkBack || artwork) {
+        wear(artworkBack || artwork, printBack);
+    } else {
+        wear(front, printBack);
+    }
+    if (artwork) document.body.dataset.art = 'on';
+}
+
+/* ── Builders. Everything in metres, the ground at y = 0, the product centred on x = 0 ── */
+function tube(radius, length, material = STEEL) {
+    return new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 14), material);
+}
+
+function along(mesh, from, to) {
+    // A cylinder stands on its own y; lay it from `from` to `to`.
+    const a = new THREE.Vector3(...from), b = new THREE.Vector3(...to);
+    mesh.position.copy(a).add(b).multiplyScalar(0.5);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+    return mesh;
+}
+
+/* A tube of `radius` from `from` to `to`, its length the distance between them. */
+function rod(from, to, radius, material = STEEL) {
+    return along(tube(radius, new THREE.Vector3(...from).distanceTo(new THREE.Vector3(...to)), material), from, to);
+}
+
+/* One Heras panel: Ø42 tube frame, the wire mesh as instanced Ø4 wires. `x0` is its left edge. */
+function fencePanel(x0, y0) {
+    const F = rules.FENCE;
+    const w = F.width * MM, h = F.height * MM, r = F.tube * MM / 2;
+    const panel = new THREE.Group();
+    panel.add(along(tube(r, w, ZINC), [x0, y0 + r, 0], [x0 + w, y0 + r, 0]));
+    panel.add(along(tube(r, w, ZINC), [x0, y0 + h - r, 0], [x0 + w, y0 + h - r, 0]));
+    panel.add(along(tube(r, h, ZINC), [x0 + r, y0, 0], [x0 + r, y0 + h, 0]));
+    panel.add(along(tube(r, h, ZINC), [x0 + w - r, y0, 0], [x0 + w - r, y0 + h, 0]));
+    const columns = Math.round(w / (F.cellWidth * MM)) - 1, rows = Math.round(h / (F.cellHeight * MM)) - 1;
+    const wire = new THREE.InstancedMesh(new THREE.CylinderGeometry(F.wire * MM / 2, F.wire * MM / 2, 1, 6), ZINC,
+                                         columns + rows);
+    const proxy = new THREE.Object3D();
+    let i = 0;
+    for (let c = 1; c <= columns; c++) {
+        proxy.position.set(x0 + c * F.cellWidth * MM, y0 + h / 2, 0);
+        proxy.rotation.set(0, 0, 0);
+        proxy.scale.set(1, h - 2 * r, 1);
+        proxy.updateMatrix();
+        wire.setMatrixAt(i++, proxy.matrix);
+    }
+    for (let row = 1; row <= rows; row++) {
+        proxy.position.set(x0 + w / 2, y0 + row * F.cellHeight * MM, 0);
+        proxy.rotation.set(0, 0, Math.PI / 2);
+        proxy.scale.set(1, w - 2 * r, 1);
+        proxy.updateMatrix();
+        wire.setMatrixAt(i++, proxy.matrix);
+    }
+    panel.add(wire);
+    return panel;
+}
+
+/* The fence the banner hangs on: `panels` in a row, each standing in a concrete foot, the feet
+   shared where two panels meet. Returns where the banner's face goes. */
+function fence(panels) {
+    const F = rules.FENCE;
+    const [footW, footD, footH] = F.foot.map(v => v * MM);
+    const w = F.width * MM, gap = 0.04;
+    const total = panels * w + (panels - 1) * gap;
+    const left = -total / 2;
+    for (let p = 0; p < panels; p++) product.add(fencePanel(left + p * (w + gap), footH * 0.6));
+    for (let p = 0; p <= panels; p++) {
+        const foot = new THREE.Mesh(new THREE.BoxGeometry(footW, footH, footD), CONCRETE);
+        const x = p === 0 ? left + F.tube * MM : p === panels ? left + total - F.tube * MM : left + p * (w + gap) - gap / 2;
+        foot.position.set(x, footH / 2, 0);
+        product.add(foot);
+    }
+    // Hung with its top just under the top tube, on the face of the mesh, as a banner tied to a fence is.
+    const bannerTop = footH * 0.6 + F.height * MM - 0.1;
+    return { z: F.tube * MM / 2 + 0.012, bottom: Math.max(bannerTop - cfg.h * MM, 0.08), tieZ: 0 };
+}
+
+/* One crowd-control barrier: a Ø38 frame whose top corners are rounded, Ø20 infill bars, and a
+   pair of splayed legs at each end — the event barrier of the shop's reference photos. `x0` is
+   its left edge. */
+function barrierPanel(x0) {
+    const B = rules.BARRIER;
+    const w = B.width * MM, h = B.height * MM, r = B.tube * MM / 2, corner = B.corner * MM;
+    const bottom = 0.12;                                // the frame's bottom rail, above the legs
+    const path = new THREE.CurvePath();
+    const bl = new THREE.Vector3(x0, bottom, 0), br = new THREE.Vector3(x0 + w, bottom, 0);
+    const up = (x) => new THREE.Vector3(x, h - corner, 0);
+    path.add(new THREE.LineCurve3(bl, up(x0)));
+    path.add(new THREE.QuadraticBezierCurve3(up(x0), new THREE.Vector3(x0, h, 0), new THREE.Vector3(x0 + corner, h, 0)));
+    path.add(new THREE.LineCurve3(new THREE.Vector3(x0 + corner, h, 0), new THREE.Vector3(x0 + w - corner, h, 0)));
+    path.add(new THREE.QuadraticBezierCurve3(new THREE.Vector3(x0 + w - corner, h, 0), new THREE.Vector3(x0 + w, h, 0), up(x0 + w)));
+    path.add(new THREE.LineCurve3(up(x0 + w), br));
+    const panel = new THREE.Group();
+    panel.add(new THREE.Mesh(new THREE.TubeGeometry(path, 80, r, 12, false), ZINC));
+    panel.add(along(tube(r, w, ZINC), bl.toArray(), br.toArray()));
+    const bars = Math.round(w / (B.barPitch * MM)) - 1;
+    const infill = new THREE.InstancedMesh(new THREE.CylinderGeometry(B.bar * MM / 2, B.bar * MM / 2, 1, 8), ZINC, bars);
+    const proxy = new THREE.Object3D();
+    const railTop = h - 0.06;
+    for (let i = 0; i < bars; i++) {
+        proxy.position.set(x0 + (i + 1) * w / (bars + 1), (bottom + railTop) / 2, 0);
+        proxy.scale.set(1, railTop - bottom, 1);
+        proxy.updateMatrix();
+        infill.setMatrixAt(i, proxy.matrix);
+    }
+    panel.add(infill);
+    panel.add(along(tube(r * 0.8, w - 2 * corner, ZINC), [x0 + corner, railTop, 0], [x0 + w - corner, railTop, 0]));
+    // Splayed legs: from the frame's foot out to either side, front and back.
+    const spread = B.legSpread * MM / 2;
+    for (const x of [x0 + 0.06, x0 + w - 0.06]) {
+        for (const z of [-spread, spread]) panel.add(rod([x, bottom, 0], [x, 0.005, z], 0.012));
+        panel.add(rod([x, 0.01, -spread], [x, 0.01, spread], 0.012));
+    }
+    return panel;
+}
+
+/* A row of barriers, butted end to end, long enough for the banner. */
+function barriers(count) {
+    const B = rules.BARRIER;
+    const w = B.width * MM, gap = 0.02;
+    const total = count * w + (count - 1) * gap;
+    for (let i = 0; i < count; i++) product.add(barrierPanel(-total / 2 + i * (w + gap)));
+    const top = B.height * MM - 0.04;
+    return { z: B.tube * MM / 2 + 0.006, bottom: Math.max(top - cfg.h * MM, 0.12), tieZ: 0 };
+}
+
+/* A billboard frame: a steel frame round the banner on two or three posts, the bottom edge at the
+   clearance a billboard keeps above the ground. */
+function billboard(w, h) {
+    const B = rules.BILLBOARD;
+    const clearance = B.clearance * MM, margin = 0.1, beam = 0.08;
+    const frameW = w + 2 * margin, frameH = h + 2 * margin;
+    const bottom = clearance, top = clearance + frameH;
+    const posts = w > 4 ? 3 : 2;
+    for (let p = 0; p < posts; p++) {
+        const x = posts === 1 ? 0 : -frameW / 2 + 0.3 + (frameW - 0.6) * p / (posts - 1);
+        product.add(along(tube(0.075, top + 0.1), [x, 0, -0.14], [x, top + 0.1, -0.14]));
+        const plate = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.03, 0.4), STEEL);
+        plate.position.set(x, 0.015, -0.14);
+        product.add(plate);
+    }
+    const bar = (sx, sy, sz, x, y, z) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), STEEL);
+        m.position.set(x, y, z);
+        product.add(m);
+    };
+    bar(frameW, beam, beam, 0, bottom + beam / 2, 0);
+    bar(frameW, beam, beam, 0, top - beam / 2, 0);
+    bar(beam, frameH, beam, -frameW / 2 + beam / 2, bottom + frameH / 2, 0);
+    bar(beam, frameH, beam, frameW / 2 - beam / 2, bottom + frameH / 2, 0);
+    return { z: beam / 2 + 0.01, bottom: clearance + margin, tieZ: 0 };
+}
+
+/* A free-standing truss frame for a banner too big for any billboard: a box frame of lattice
+   truss on base plates, the banner tensioned inside it. */
+function trussFrame(w, h) {
+    const T = 0.29, chord = 0.025, margin = 0.35, lift = 0.3;
+    const frameW = w + 2 * margin, frameH = h + 2 * margin + lift;
+    const truss = (from, to) => {
+        const a = new THREE.Vector3(...from), b = new THREE.Vector3(...to);
+        const dir = b.clone().sub(a).normalize();
+        const length = a.distanceTo(b);
+        // Two perpendicular offsets to the run, for the four chords of a square truss.
+        const u = Math.abs(dir.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+        const v = new THREE.Vector3().crossVectors(dir, u).normalize();
+        for (const [su, sv] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+            const off = u.clone().multiplyScalar(su * T / 2).add(v.clone().multiplyScalar(sv * T / 2));
+            product.add(along(tube(chord, length), a.clone().add(off).toArray(), b.clone().add(off).toArray()));
+        }
+        const steps = Math.max(1, Math.round(length / 0.5));
+        for (let s = 0; s <= steps; s++) {
+            const at = a.clone().add(dir.clone().multiplyScalar(length * s / steps));
+            for (const [p, q] of [[u, v], [v, u]]) {
+                const o = q.clone().multiplyScalar(T / 2);
+                const c = at.clone().add(o).add(p.clone().multiplyScalar(-T / 2));
+                const d = at.clone().add(o).add(p.clone().multiplyScalar(T / 2));
+                product.add(along(tube(0.012, T), c.toArray(), d.toArray()));
+                const c2 = at.clone().sub(o).add(p.clone().multiplyScalar(-T / 2));
+                const d2 = at.clone().sub(o).add(p.clone().multiplyScalar(T / 2));
+                product.add(along(tube(0.012, T), c2.toArray(), d2.toArray()));
+            }
+        }
+    };
+    const x0 = -frameW / 2, x1 = frameW / 2, y0 = T / 2, y1 = frameH + T / 2;
+    truss([x0, y0, 0], [x1, y0, 0]);
+    truss([x0, y1, 0], [x1, y1, 0]);
+    truss([x0, y0, 0], [x0, y1, 0]);
+    truss([x1, y0, 0], [x1, y1, 0]);
+    for (const x of [x0, x1]) {
+        const plate = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.02, 1.0), STEEL);
+        plate.position.set(x, 0.01, 0);
+        product.add(plate);
+    }
+    return { z: T / 2 + 0.01, bottom: y0 + T / 2 + lift, tieZ: 0 };
+}
+
+/* The banner or the mesh: a plane with a slight bulge (a tensioned banner is never flat), its
+   welded seams, the eyelets, and a cable tie through every eyelet to whatever stands behind. */
+function banner(place) {
+    const w = cfg.w * MM, h = cfg.h * MM;
+    const geometry = new THREE.PlaneGeometry(w, h, 32, 16);
+    const bulge = Math.min(0.04, w * 0.012) * (cfg.kind === 'siatka' ? 0.3 : 1);
+    const position = geometry.attributes.position;
+    for (let i = 0; i < position.count; i++) {
+        const u = position.getX(i) / w + 0.5, v = position.getY(i) / h + 0.5;
+        position.setZ(i, bulge * Math.sin(Math.PI * u) * Math.sin(Math.PI * v));
+    }
+    geometry.computeVertexNormals();
+    const centreY = place.bottom + h / 2;
+    if (cfg.kind === 'siatka') {
+        const cloth = new THREE.Mesh(geometry, meshCloth);
+        meshCloth.alphaMap.repeat.set(w / MESH_HOLE_PITCH_M, h / MESH_HOLE_PITCH_M);
+        cloth.position.set(0, centreY, place.z);
+        product.add(cloth);
+    } else {
+        const front = new THREE.Mesh(geometry, printFront);
+        front.position.set(0, centreY, place.z);
+        product.add(front);
+        const back = new THREE.Mesh(geometry, BANNER_BACK);
+        back.position.copy(front.position);
+        product.add(back);
+    }
+    // Seams: a banner wider than the roll is welded from parts, and the weld shows as a line.
+    for (const x of rules.seams(cfg.w)) {
+        const line = new THREE.Mesh(new THREE.PlaneGeometry(0.006, h),
+            new THREE.MeshStandardMaterial({ color: 0xd9dbe0, roughness: 0.9, transparent: true, opacity: 0.6 }));
+        line.position.set(-w / 2 + x * MM, centreY, place.z + bulge + 0.002);
+        product.add(line);
+    }
+    // Eyelets round the edges, and a tie through each. Instanced: a dense-eyelet 7 m banner has 160.
+    const spots = rules.eyelets(cfg.w, cfg.h, cfg.oczka);
+    const rings = new THREE.InstancedMesh(new THREE.TorusGeometry(0.0065, 0.0018, 8, 16), STEEL, spots.length);
+    const ties = new THREE.InstancedMesh(new THREE.TorusGeometry(0.016, 0.0018, 6, 14), BLACK, spots.length);
+    const proxy = new THREE.Object3D();
+    spots.forEach(([x, y], i) => {
+        const px = -w / 2 + x * MM, py = place.bottom + y * MM;
+        proxy.position.set(px, py, place.z + 0.003);
+        proxy.rotation.set(0, 0, 0);
+        proxy.updateMatrix();
+        rings.setMatrixAt(i, proxy.matrix);
+        // The tie loops from the eyelet back to the carrier behind: a ring turned edge-on.
+        proxy.position.set(px, py, (place.z + place.tieZ) / 2);
+        proxy.rotation.set(0, Math.PI / 2, 0);
+        proxy.updateMatrix();
+        ties.setMatrixAt(i, proxy.matrix);
+    });
+    product.add(rings, ties);
+}
+
+/* The board: a box of the ordered size and the chosen thickness, standing on its bottom edge.
+   Front printed; back white, or printed on a double-sided order; the edges the board's own white. */
+function board() {
+    const w = cfg.w * MM, h = cfg.h * MM, t = cfg.t * MM;
+    const back = cfg.sides === 2 ? printBack : BOARD_BACK;
+    const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, t),
+        [BOARD_EDGE, BOARD_EDGE, BOARD_EDGE, BOARD_EDGE, printFront, back]);
+    box.position.set(0, h / 2, 0);
+    product.add(box);
+}
+
+function describe(carrier) {
+    const cm = (mm) => (mm / 10).toLocaleString('pl-PL', { maximumFractionDigits: 1 });
+    if (cfg.kind === 'plyta') {
+        return `Płyta ${cfg.t.toLocaleString('pl-PL')} mm · ${cfg.w} × ${cfg.h} mm · `
+            + (cfg.sides === 2 ? 'druk dwustronny' : 'druk jednostronny, tył biały');
+    }
+    const what = cfg.kind === 'siatka' ? 'Siatka mesh' : 'Baner';
+    const many = (n, one, few, lots) => `${n} ${n === 1 ? one : n < 5 ? few : lots}`;
+    const where = carrier.kind === 'barrier'
+        ? `na barierkach (${many(carrier.panels, 'barierka', 'barierki', 'barierek')} 2,5 × 1,1 m)`
+        : carrier.kind === 'fence'
+        ? `na ogrodzeniu Heras (${many(carrier.panels, 'panel', 'panele', 'paneli')} 3,5 × 2 m)`
+        : carrier.kind === 'billboard' ? 'na tablicy billboardowej' : 'na ramie kratownicowej';
+    const seams = rules.seams(cfg.w).length;
+    return `${what} ${cfg.w} × ${cfg.h} mm · oczka co ${cm(cfg.oczka)} cm · ${where}`
+        + (seams ? ` · zgrzew z ${seams + 1} części` : '');
+}
+
+function build() {
+    while (product.children.length) {
+        const child = product.children.pop();
+        if (child.geometry) child.geometry.dispose();
+    }
+    let carrier = null;
+    if (cfg.kind === 'plyta') {
+        board();
+    } else {
+        carrier = rules.carrierFor(cfg.w, cfg.h);
+        const place = carrier.kind === 'barrier' ? barriers(carrier.panels)
+            : carrier.kind === 'fence' ? fence(carrier.panels)
+            : carrier.kind === 'billboard' ? billboard(cfg.w * MM, cfg.h * MM)
+            : trussFrame(cfg.w * MM, cfg.h * MM);
+        banner(place);
+    }
+    dress();
+    note.textContent = describe(carrier);
+    bounds = new THREE.Box3().setFromObject(product);
+    const size = bounds.getSize(new THREE.Vector3());
+    ground.scale.setScalar(Math.max(size.x, size.z, 1) * 1.4);
+    fitCamera();
+}
+
+/* ── Camera ── */
+const centreOf = () => bounds.getCenter(new THREE.Vector3());
+/* From the bounding SPHERE, not the box's face: the camera stands off-axis, and a box framed
+   face-on loses its near corner at an angle (the board did). */
+function framingDistance() {
+    const radius = bounds.getBoundingSphere(new THREE.Sphere()).radius;
+    const aspect = Math.max(stage.clientWidth / Math.max(stage.clientHeight, 1), 0.2);
+    const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
+    const narrowest = Math.min(halfFov, Math.atan(Math.tan(halfFov) * aspect));
+    return radius / Math.sin(narrowest) * 1.02;
+}
+function placeCamera(yawDeg, lift = 0.08) {
+    const centre = centreOf();
+    const away = framingDistance();
+    const yaw = THREE.MathUtils.degToRad(yawDeg);
+    camera.position.set(centre.x + Math.sin(yaw) * away, centre.y + away * lift, centre.z + Math.cos(yaw) * away);
+    controls.target.copy(centre);
+    camera.lookAt(centre);
+}
+// `?yaw=` degrees round the product (180 = from behind): a still of the back, or of a board's edge.
+const askedYaw = Number.isFinite(parseFloat(params.get('yaw'))) ? parseFloat(params.get('yaw')) : null;
+function fitCamera() {
+    placeCamera(askedYaw ?? (cfg.kind === 'plyta' ? -28 : -16));
+    controls.update();
+}
+
+function resize() {
+    const w = stage.clientWidth || 1, h = stage.clientHeight || 1;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', () => { resize(); fitCamera(); });
+resize();
+build();
+
+/* `?shot=1`: the catalogue still — one fixed angle, and `data-shot` for a caller that stands a
+   person beside it at true scale (the ground line, the left edge, pixels per metre). */
+if (params.get('shot') === '1') {
+    placeCamera(askedYaw ?? -14);
+    camera.updateMatrixWorld();
+    const toPx = (v) => {
+        const p = v.clone().project(camera);
+        return [(p.x + 1) / 2 * stage.clientWidth, (1 - p.y) / 2 * stage.clientHeight];
+    };
+    const foot = new THREE.Vector3(bounds.min.x, 0, centreOf().z);
+    const [left, groundPx] = toPx(foot);
+    const [, metre] = toPx(foot.clone().setY(1));
+    document.body.dataset.shot = JSON.stringify({
+        left: Math.round(left), ground: Math.round(groundPx), pxPerMetre: +(groundPx - metre).toFixed(2),
+        heightM: +bounds.max.y.toFixed(3),
+    });
+}
+if (bare) controls.enabled = false;
+
+/* ── Messages ──
+   `scene` from ANY origin: numbers, clamped — a shop page's form driving this frame. `artwork` and
+   `artworkBack` from THIS origin only: a data URI is the customer's file, and model3d.html keeps
+   the same rule. */
+window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || typeof data !== 'object') return;
+    if (data.scene && typeof data.scene === 'object') {
+        const asked = { ...data.scene };
+        const parsed = asked.material ? rules.sceneOf(asked.material) : null;
+        if (parsed) Object.assign(asked, { kind: parsed.kind, t: parsed.thickness || asked.t, sides: parsed.sides });
+        cfg = sanitize({ ...cfg, ...asked });
+        build();
+    }
+    if (event.origin !== window.location.origin) return;
+    const load = (uri, done) => {
+        if (typeof uri !== 'string' || !uri.startsWith('data:image/')) return;
+        new THREE.TextureLoader().load(uri, (texture) => { done(texture); dress(); });
+    };
+    load(data.artwork, (texture) => { artwork = texture; });
+    load(data.artworkBack, (texture) => { artworkBack = texture; });
+});
+
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+    if (bare && !calm && params.get('shot') !== '1') {
+        // A slow sway for a product page, as the flag's hero turns: the print is read, the carrier seen.
+        placeCamera(-16 + Math.sin(clock.getElapsedTime() * 0.18) * 14);
+    }
+    controls.update();
+    renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

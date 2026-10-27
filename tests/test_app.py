@@ -1068,3 +1068,33 @@ def test_the_admin_page_hides_its_token_field_behind_a_proxy_that_holds_it(clien
     assert "const PROXIED = false" in plain and 'aria-label="Token panelu">' in plain
     proxied = client.get("/admin", headers={"X-Admin-Token": "t"}).get_data(as_text=True)
     assert "const PROXIED = true" in proxied and 'aria-label="Token panelu" hidden>' in proxied
+
+
+# ── The print scene: a banner, a mesh or a board at the ordered size ────────
+
+def _scene_cfg(page):
+    """The `initial` config the scene page embeds."""
+    line = next(row for row in page.splitlines() if row.strip().startswith("const initial ="))
+    return json.loads(line.split("=", 1)[1].strip().rstrip(";"))
+
+
+def test_the_print_scene_carries_the_ordered_size(client):
+    answer = client.get("/scena/baner?w=7000&h=1000&oczka=300&label=TEST")
+    assert answer.status_code == 200
+    cfg = _scene_cfg(answer.get_data(as_text=True))
+    assert cfg == {"kind": "baner", "title": "Baner", "w": 7000.0, "h": 1000.0, "t": 5.0, "sides": 1,
+                   "oczka": 300.0, "label": "TEST"}
+
+
+def test_a_board_scene_takes_its_thickness_and_sides(client):
+    cfg = _scene_cfg(client.get("/scena/plyta?w=1200&h=800&t=10&sides=2").get_data(as_text=True))
+    assert (cfg["kind"], cfg["t"], cfg["sides"]) == ("plyta", 10.0, 2)
+
+
+def test_scene_sizes_are_clamped_and_garbage_falls_back(client):
+    cfg = _scene_cfg(client.get("/scena/siatka?w=999999&h=1&t=abc&oczka=nan").get_data(as_text=True))
+    assert (cfg["w"], cfg["h"], cfg["t"], cfg["oczka"]) == (20000.0, 100.0, 5.0, 500)
+
+
+def test_an_unknown_scene_is_a_404(client):
+    assert client.get("/scena/rakieta").status_code == 404
