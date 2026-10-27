@@ -16,8 +16,9 @@
 	// A Heras M500 mobile fence panel: 3 500 × 2 000 mm, Ø42 mm tube frame, 100 × 300 mm wire mesh of Ø4 mm wire,
 	// standing in a 600 × 220 × 140 mm concrete foot.
 	const FENCE = { width: 3500, height: 2000, tube: 42, wire: 4, cellWidth: 100, cellHeight: 300, foot: [ 600, 220, 140 ] };
-	// The largest billboard the scene puts a banner on; bigger goes on a frame (the shop: "like 7x5m i think").
-	const BILLBOARD = { width: 7000, height: 5000, clearance: 1500 };
+	// The largest standard billboard in Poland, 12 × 4 m (48 m², frontlight/backlight); bigger is a one-off build, so the
+	// scene puts it on a truss frame (the shop, 2026-10-27, after checking: it had guessed 7 × 5 m).
+	const BILLBOARD = { width: 12000, height: 4000, clearance: 1500 };
 	const ROLL_WIDTH = 3200;    // the widest roll: a wider banner is welded from two or more parts
 	const EYELET_PITCH = 500;   // the standard finishing: eyelets every 50 cm round every edge
 	const EYELET_INSET = 25;    // from the edge to the eyelet's centre, inside the welded hem

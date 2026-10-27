@@ -13,9 +13,10 @@ const rules = require( '../prepress/static/print-scene-rules.js' );
 	assert.deepStrictEqual( rules.carrierFor( 7000, 1500 ), { kind: 'fence', panels: 2 } );
 	assert.deepStrictEqual( rules.carrierFor( 7100, 1500 ), { kind: 'fence', panels: 3 } );
 	assert.deepStrictEqual( rules.carrierFor( 4000, 3000 ), { kind: 'billboard' } );   // taller than the fence
-	assert.deepStrictEqual( rules.carrierFor( 7000, 5000 ), { kind: 'billboard' } );   // the largest billboard
-	assert.deepStrictEqual( rules.carrierFor( 8000, 5000 ), { kind: 'frame' } );
-	assert.deepStrictEqual( rules.carrierFor( 2000, 5100 ), { kind: 'frame' } );
+	assert.deepStrictEqual( rules.carrierFor( 12000, 4000 ), { kind: 'billboard' } );  // the largest billboard, 48 m²
+	assert.deepStrictEqual( rules.carrierFor( 10000, 3000 ), { kind: 'billboard' } );
+	assert.deepStrictEqual( rules.carrierFor( 12100, 4000 ), { kind: 'frame' } );
+	assert.deepStrictEqual( rules.carrierFor( 7000, 5000 ), { kind: 'frame' } );        // taller than any billboard
 }
 
 // ── eyelets: every corner, never further apart than the pitch, evened out ──
