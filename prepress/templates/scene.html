@@ -20,6 +20,9 @@ header b { font-size: 16px; } header a { font-size: 12.5px; }
               border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
 #err { position: absolute; inset: 0; display: none; place-items: center; font-weight: 600;
        color: var(--alert); }
+/* A phone's frame is ~340 px wide: the note spans it, one line shorter, over the ground. */
+@media (max-width: 480px) { .note-float { left: 8px; right: 8px; bottom: 8px; max-width: none; font-size: 11px;
+                                          padding: 4px 8px; } }
 /* `bare`: the scene only, no chrome, no interaction, transparent ground — a product page's picture.
    `embed`: no header, the note stays — a frame the visitor may turn. Same page, same code. */
 body.bare header, body.bare .note-float { display: none; }
@@ -138,7 +141,8 @@ function perforation() {
 const MESH_HOLE_PITCH_M = 0.012;                    // one 16 px cell of the canvas, on the cloth
 
 /* ── The state: what is on screen ── */
-let cfg = sanitize(initial);
+let cfg = null;                                     // declared first: sanitize() reads what is shown
+cfg = sanitize(initial);
 let artwork = null, artworkBack = null;             // textures the shop sent; null = the demo print
 let bounds = new THREE.Box3();
 
@@ -583,6 +587,10 @@ window.addEventListener('message', (event) => {
     load(data.artwork, (texture) => { artwork = texture; });
     load(data.artworkBack, (texture) => { artworkBack = texture; });
 });
+
+// Listening now: an embedding page resends its size on this (a message sent before it is lost).
+// Carries nothing but the flag, so any parent may hear it.
+if (window.parent !== window) window.parent.postMessage({ sceneReady: true }, '*');
 
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
