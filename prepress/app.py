@@ -395,8 +395,10 @@ def api_trace():
 # NIP, or the door), from where, what, how it went, how long. Static assets are left out.
 
 def _client_ip():
-    """The real client behind the proxies: first hop of X-Forwarded-For, else the socket."""
-    forwarded = request.headers.get("X-Forwarded-For", "")
+    """The real client behind the proxies, for the logs only: Cloudflare's CF-Connecting-IP when a Cloudflare
+    tunnel is in front (behind it, X-Forwarded-For names only the tunnel's own loopback hop), else the first
+    hop of X-Forwarded-For, else the socket. Used for nothing but log lines, so a forged value costs nothing."""
+    forwarded = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For", "")
     return forwarded.split(",")[0].strip() or request.remote_addr or "-"
 
 

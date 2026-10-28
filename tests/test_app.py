@@ -91,6 +91,11 @@ def test_the_trace_writes_clamped_lines_only_when_configured(client, monkeypatch
     assert client.post("/api/trace", json={"events": "not a list"}).status_code == 204
     assert len(log.read_text(encoding="utf-8").splitlines()) == 20
 
+    # Behind a Cloudflare tunnel X-Forwarded-For is only the tunnel's loopback hop; the visitor is in CF-Connecting-IP.
+    client.post("/api/trace", json={"events": ["tunnel"]},
+                headers={"X-Forwarded-For": "127.0.0.1", "CF-Connecting-IP": "203.0.113.7"})
+    assert " 203.0.113.7 " in log.read_text(encoding="utf-8").splitlines()[-1]
+
 
 def test_a_gated_check_refuses_an_anonymous_upload(client, monkeypatch):
     monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)
