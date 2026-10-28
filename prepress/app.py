@@ -108,6 +108,10 @@ VISIT_WEBHOOK_ENV = "PREPRESS_VISIT_WEBHOOK"
 # One ping per identity per this many minutes. A customer checking eight files is one visit.
 VISIT_QUIET_MINUTES = 30
 _visit_last = {}
+# A file to append what visitors do ON the pages (clicks, script errors, tab hidden/visible), the
+# half the access log cannot see. Unset = the pages send nothing and the endpoint writes nothing.
+TRACE_LOG_ENV = "PREPRESS_TRACE_LOG"
+TRACE_LOG_MAX_BYTES = 20 * 1024 * 1024  # past this the log starts again, the old one kept as .1
 # Subjects the issuing app reserves for itself; a token carrying one is not a customer.
 RESERVED_SUBJECTS = {"__status_admin__"}
 
@@ -151,7 +155,8 @@ def _inject_base_path():
             "brand_name": os.environ.get(BRAND_NAME_ENV) or "prepress-open",
             "brand_logo": os.environ.get(BRAND_LOGO_ENV) or "",
             "brand_icon": os.environ.get(BRAND_ICON_ENV) or "",
-            "guide_url": (os.environ.get(GUIDE_URL_ENV) or "").strip()}
+            "guide_url": (os.environ.get(GUIDE_URL_ENV) or "").strip(),
+            "trace": bool(_trace_log_path())}
 
 
 def _session_secret():
@@ -356,6 +361,34 @@ def api_session():
                     "login": _login_url()})
 
 
+def _trace_log_path():
+    return (os.environ.get(TRACE_LOG_ENV) or "").strip()
+
+
+@app.route("/api/trace", methods=["POST"])
+def api_trace():
+    """Append a page's batch of events to the trace log, one line each: time, who, from where, what.
+
+    Not login-guarded on purpose: a script error before login is exactly the breakage worth seeing.
+    Everything is clamped instead of trusted (20 events of 200 characters, whitespace collapsed),
+    because this is an open endpoint whose only power is writing lines to one file.
+    """
+    path = _trace_log_path()
+    events = (request.get_json(silent=True) or {}).get("events")
+    if not path or not isinstance(events, list):
+        return "", 204
+    prefix = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {_caller()} {_client_ip()}"
+    lines = "".join(f"{prefix} {' '.join(str(event)[:200].split())}\n" for event in events[:20])
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > TRACE_LOG_MAX_BYTES:
+            os.replace(path, path + ".1")
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(lines)
+    except OSError as error:
+        logger.warning("trace log not written: %s", error)
+    return "", 204
+
+
 # ── Access log ──────────────────────────────────────────────────────────────
 # Waitress logs nothing per request, so the console of a public checker stayed blank while
 # customers downloaded templates and ran checks. One line per request: who (the session's
@@ -374,7 +407,8 @@ def _start_clock():
 
 @app.after_request
 def _access_log(response):
-    if not request.path.startswith(f"{base_path()}/static/"):
+    # The trace posts every 2 s per open tab; its own file says everything, here it is only noise.
+    if not request.path.startswith(f"{base_path()}/static/") and request.endpoint != "api_trace":
         elapsed_ms = (time.perf_counter() - getattr(request, "_started", time.perf_counter())) * 1000
         logger.info("%s %s %s %s %d %.0fms", _client_ip(), _caller(), request.method,
                     request.full_path.rstrip("?"), response.status_code, elapsed_ms)

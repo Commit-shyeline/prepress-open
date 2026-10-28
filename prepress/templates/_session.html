@@ -45,3 +45,49 @@ document.addEventListener('click', async (event) => {
     setTimeout(() => URL.revokeObjectURL(url), 4000);
 });
 </script>
+{% if trace %}
+<script>
+/* What happens ON the page, for the deployment's trace log (PREPRESS_TRACE_LOG): a click that did
+   nothing, a script error that froze the page, a tab left open — none of which makes a request the
+   access log could show. Batched every 2 s; flushed with keepalive when the page goes away. */
+(() => {
+    const queue = [];
+    // A fixed URL, not 'api/trace': relative it resolves against /projekt/<token>/ on the design page.
+    const TRACE_URL = {{ (base ~ '/api/trace')|tojson }};
+    function trace(what, detail) {
+        // Local wall clock, so the browser's time reads next to the server's in the same log line.
+        queue.push(new Date().toTimeString().slice(0, 8) + ' ' + what + (detail ? ' ' + detail : ''));
+        if (queue.length > 40) queue.splice(0, queue.length - 40);
+    }
+    function flush(unloading) {
+        if (!queue.length) return;
+        fetch(TRACE_URL, {
+            method: 'POST',
+            keepalive: unloading,
+            headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+            body: JSON.stringify({ events: queue.splice(0, 20) }),
+        }).catch(() => { /* a lost trace must never surface to the visitor */ });
+    }
+    setInterval(() => flush(false), 2000);
+    addEventListener('pagehide', () => flush(true));
+
+    trace('open', location.pathname + ' ' + innerWidth + 'x' + innerHeight + ' ' + navigator.userAgent);
+    // Capture phase, so a click is recorded even when its handler stops propagation or throws.
+    addEventListener('click', (event) => {
+        // The target can be the document itself (a click on nothing), which has no .closest.
+        const target = (event.target.closest && event.target.closest('button, a, label, input, select, summary, [role="button"]')) || event.target;
+        const name = target.id || target.getAttribute?.('name') || '';
+        trace('click', (target.tagName || '?').toLowerCase() + (name ? '#' + name : '')
+            + ' "' + (target.textContent || target.value || '').trim().slice(0, 40) + '"');
+    }, true);
+    addEventListener('change', (event) => {
+        const input = event.target;
+        const files = input.files ? [...input.files].map((file) => file.name + ' ' + Math.round(file.size / 1024) + 'kB') : [];
+        trace('change', (input.id || input.name || input.tagName.toLowerCase()) + (files.length ? ' ' + files.join(', ') : ''));
+    }, true);
+    addEventListener('error', (event) => trace('error', (event.message || 'resource') + ' ' + (event.filename || event.target?.src || '') + ':' + (event.lineno || '')), true);
+    addEventListener('unhandledrejection', (event) => trace('rejection', String(event.reason?.message || event.reason)));
+    document.addEventListener('visibilitychange', () => trace('tab', document.visibilityState));
+})();
+</script>
+{% endif %}

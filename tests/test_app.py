@@ -72,6 +72,26 @@ def test_only_a_page_that_opened_announces_a_visit(client, monkeypatch):
     assert announced == ["1234567890"]
 
 
+def test_the_trace_writes_clamped_lines_only_when_configured(client, monkeypatch, tmp_path):
+    """Open to anonymous callers (a pre-login script error is worth seeing), so the clamp is the guard."""
+    log = tmp_path / "trace.log"
+    events = {"events": ["10:00:00 open /", "x" * 500, "line\nbreak"] + ["n"] * 30}
+
+    assert client.post("/api/trace", json=events).status_code == 204
+    assert not log.exists()
+
+    monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)
+    monkeypatch.setenv(app_module.TRACE_LOG_ENV, str(log))
+    assert client.post("/api/trace", json=events, headers=_bearer()).status_code == 204
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 20
+    assert "1234567890" in lines[0] and lines[0].endswith("10:00:00 open /")
+    assert lines[1].endswith(" " + "x" * 200)
+    assert lines[2].endswith(" line break")
+    assert client.post("/api/trace", json={"events": "not a list"}).status_code == 204
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 20
+
+
 def test_a_gated_check_refuses_an_anonymous_upload(client, monkeypatch):
     monkeypatch.setenv(app_module.SESSION_SECRET_ENV, SESSION_SECRET)
     answer = client.post("/api/check", data={"file": (io.BytesIO(b"%PDF-1.7"), "x.pdf")},
