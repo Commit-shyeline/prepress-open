@@ -93,6 +93,7 @@ body.cutting .note-float { top: 12px; bottom: auto; max-width: 34%; }
    texture phase, so the wind checkbox forced the structure that phase needs anyway. */
 import * as THREE from 'three';
 import { OrbitControls } from '{{ asset("OrbitControls.js") }}';
+import { shotData } from '{{ asset("shot-frame.js") }}';
 import { shears, silhouette, fillSilhouette, pointInRing }
     from '{{ asset("fabric.js") }}';
 
@@ -2751,18 +2752,8 @@ function build(data, cutFrom) {
     if (params.get('shot') === '1') {
         for (const g of guides) g.line.visible = false;
         placeCamera({ dist: 1.0, yaw: -12, aim: 0.5 });
-        camera.updateMatrixWorld();             // project() reads the matrix, which only a render would refresh
-        const toPx = (v) => {
-            const p = v.clone().project(camera);
-            return [(p.x + 1) / 2 * stage.clientWidth, (1 - p.y) / 2 * bandHeight()];
-        };
-        const foot = new THREE.Vector3(bounds.min.x, bounds.min.y, centre.z);
-        const [left, ground] = toPx(foot);
-        const [, metre] = toPx(foot.clone().setY(bounds.min.y + 1000 * S));
-        document.body.dataset.shot = JSON.stringify({
-            left: Math.round(left), ground: Math.round(ground), pxPerMetre: +(ground - metre).toFixed(2),
-            heightM: +(size.y / (1000 * S)).toFixed(3),
-        });
+        document.body.dataset.shot = shotData(camera, new THREE.Vector3(bounds.min.x, bounds.min.y, centre.z),
+                                              1000 * S, stage.clientWidth, bandHeight(), size.y / (1000 * S));
     }
 
     /* ── Movement, and where it must stop ──

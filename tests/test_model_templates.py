@@ -123,6 +123,10 @@ def test_the_map_from_the_pairing_view_is_stored_and_served(client):
     again = client.get(f"/api/templates/{token}/model").get_json()
     assert again["name"] == "Ścianka 3 m" and again["map"]["faces"][0]["mesh"] == 0
 
+    # a corrected .glb for the same template: the map named the OLD file's meshes, so it goes
+    assert _import(client, token=token).status_code == 200
+    assert client.get(f"/api/templates/{token}/model").get_json()["map"] == {"faces": []}
+
     bad = dict(MAP, faces=[{"mesh": 0, "island": 0, "affine": [[1, 0], [0, 1]]}])
     assert client.put(f"/api/admin/templates/{token}/model-map", headers={"X-Admin-Token": TOKEN}, json=bad).status_code == 400
     assert client.put(f"/api/admin/templates/{token}/model-map", headers={"X-Admin-Token": TOKEN},

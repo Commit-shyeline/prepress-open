@@ -365,6 +365,9 @@ def _trace_log_path():
     return (os.environ.get(TRACE_LOG_ENV) or "").strip()
 
 
+_trace_lock = threading.Lock()
+
+
 @app.route("/api/trace", methods=["POST"])
 def api_trace():
     """Append a page's batch of events to the trace log, one line each: time, who, from where, what.
@@ -374,16 +377,20 @@ def api_trace():
     because this is an open endpoint whose only power is writing lines to one file.
     """
     path = _trace_log_path()
-    events = (request.get_json(silent=True) or {}).get("events")
-    if not path or not isinstance(events, list):
+    if not path:                                    # disabled: the body is not even parsed
+        return "", 204
+    body = request.get_json(silent=True)
+    events = body.get("events") if isinstance(body, dict) else None
+    if not isinstance(events, list):
         return "", 204
     prefix = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {_caller()} {_client_ip()}"
     lines = "".join(f"{prefix} {' '.join(str(event)[:200].split())}\n" for event in events[:20])
     try:
-        if os.path.exists(path) and os.path.getsize(path) > TRACE_LOG_MAX_BYTES:
-            os.replace(path, path + ".1")
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write(lines)
+        with _trace_lock:                           # two threads over the limit would rotate twice
+            if os.path.exists(path) and os.path.getsize(path) > TRACE_LOG_MAX_BYTES:
+                os.replace(path, path + ".1")
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(lines)
     except OSError as error:
         logger.warning("trace log not written: %s", error)
     return "", 204
@@ -789,7 +796,23 @@ def api_template_shape(token):
 # texture path before an upload page exists. Configured, never hardcoded to one shop's disk: unset
 # means the scene simply shows bare cloth.
 DEMO_ARTWORK_ENV = "PREPRESS_DEMO_ARTWORK"
-_demo_artwork_cache = {}
+_demo_artwork_cache = {}                            # {stamp: png} per template and label, oldest out first
+_demo_artwork_lock = threading.Lock()
+_DEMO_ARTWORK_CACHE_SLOTS = 32
+
+
+def _demo_artwork_png(stamp, render):
+    """The PNG for `stamp`, rendered at most once per slot. A one-slot cache shared by 8 threads
+    handed request A request B's picture under A's ETag when two catalogue shots rendered at once."""
+    with _demo_artwork_lock:
+        png = _demo_artwork_cache.get(stamp)
+    if png is None:
+        png = render()
+        with _demo_artwork_lock:
+            while len(_demo_artwork_cache) >= _DEMO_ARTWORK_CACHE_SLOTS:
+                _demo_artwork_cache.pop(next(iter(_demo_artwork_cache)))
+            _demo_artwork_cache[stamp] = png
+    return png
 
 
 @app.route("/api/demo-artwork.jpg")
@@ -812,22 +835,19 @@ def api_demo_artwork():
         etag = f'"demo-{abs(hash(stamp))}"'
         if request.headers.get("If-None-Match") == etag:
             return Response(status=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
-        if _demo_artwork_cache.get("stamp") != stamp or _demo_artwork_cache.get("token") != token:
-            try:
-                pdf = demo_artwork.build_pdf(template, label, "") if label else demo_artwork.build_pdf(template)
-                png = shape.render_preview(pdf, 0, max_pixels=2800)
-            except (demo_artwork.DemoError, from_template.TemplateError) as error:
-                logger.info("demo artwork for %s not drawable: %s", token, error)
-                template = None                     # bare cloth beats a wrong picture
-            except Exception as error:              # noqa: BLE001 — a demo is decoration
-                logger.warning("demo artwork render failed for %s: %s", token, error)
-                template = None
-            else:
-                _demo_artwork_cache.clear()
-                _demo_artwork_cache.update({"stamp": stamp, "token": token, "png": png})
+        def render():
+            pdf = demo_artwork.build_pdf(template, label, "") if label else demo_artwork.build_pdf(template)
+            return shape.render_preview(pdf, 0, max_pixels=2800)
+        try:
+            png = _demo_artwork_png(stamp, render)
+        except (demo_artwork.DemoError, from_template.TemplateError) as error:
+            logger.info("demo artwork for %s not drawable: %s", token, error)
+            template = None                         # bare cloth beats a wrong picture
+        except Exception as error:                  # noqa: BLE001 — a demo is decoration
+            logger.warning("demo artwork render failed for %s: %s", token, error)
+            template = None
         if template:
-            return Response(_demo_artwork_cache["png"], mimetype="image/png",
-                            headers={"Cache-Control": "no-cache", "ETag": etag})
+            return Response(png, mimetype="image/png", headers={"Cache-Control": "no-cache", "ETag": etag})
     bundled = os.path.join(app.static_folder, "demo-artwork.pdf")
     source = os.environ.get(DEMO_ARTWORK_ENV, "").strip() or bundled
     if not os.path.exists(source):
@@ -842,17 +862,15 @@ def api_demo_artwork():
     etag = f'"demo-{int(stamp)}"'
     if request.headers.get("If-None-Match") == etag:
         return Response(status=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
-    if _demo_artwork_cache.get("stamp") != stamp or _demo_artwork_cache.get("token"):
-        try:
-            with open(source, "rb") as handle:
-                png = shape.render_preview(handle.read(), 0, max_pixels=2800)
-        except Exception as error:                  # noqa: BLE001 — a bad demo file is not a 500
-            logger.warning("demo artwork render failed for %s: %s", source, error)
-            return jsonify({"error": "Nie udało się wyrenderować przykładowej grafiki."}), 500
-        _demo_artwork_cache.clear()
-        _demo_artwork_cache.update({"stamp": stamp, "token": None, "png": png})
-    return Response(_demo_artwork_cache["png"], mimetype="image/png",
-                    headers={"Cache-Control": "no-cache", "ETag": etag})
+    def render_bundled():
+        with open(source, "rb") as handle:
+            return shape.render_preview(handle.read(), 0, max_pixels=2800)
+    try:
+        png = _demo_artwork_png(f"{source}:{stamp}", render_bundled)
+    except Exception as error:                      # noqa: BLE001 — a bad demo file is not a 500
+        logger.warning("demo artwork render failed for %s: %s", source, error)
+        return jsonify({"error": "Nie udało się wyrenderować przykładowej grafiki."}), 500
+    return Response(png, mimetype="image/png", headers={"Cache-Control": "no-cache", "ETag": etag})
 
 
 @app.route("/api/templates/<token>/pdf")
@@ -1898,6 +1916,9 @@ def api_admin_import_model():
     if token:
         if not materials.get_template(token):
             return jsonify({"error": f"Nie ma szablonu o tokenie {token!r}."}), 404
+        # The map names the OLD file's meshes and islands; dressing the new mesh with it put the
+        # print on the wrong faces. Cleared, so the next admin pairing view fits the new file.
+        materials.update_template(token, {"model_map": None})
     else:
         page = request.files.get("page")
         if page is None:
@@ -2089,8 +2110,11 @@ def api_templates():
         "name": t.get("name"),
         "page_mm": t.get("page_mm"),
         "trim_mm": t.get("trim_mm"),
-        # The size the price list sells the flag as — what the caption under a template reads.
+        # The size the price list sells the flag as — what the caption under a template reads; a sheet of
+        # panels at 1:N has none, and says its scale instead.
         "finished_mm": _finished_mm(t),
+        "kind": t.get("kind"),
+        "scale": t.get("scale"),
         "sides": t.get("sides") or 1,
         # How many lines of each kind, so a customer sees "this one creases" without getting the
         # geometry of somebody's die.
@@ -2123,11 +2147,11 @@ def _finished_mm(template):
         return [round(float(page[0]) - VENTO_FINISHED_INSET_MM, 1),
                 round(float(page[1]) - VENTO_FINISHED_INSET_MM, 1)]
     trim = template.get("trim_mm") or []
-    if len(trim) != 2:
+    # A sheet of panels at 1:N has no one finished size („Balon Flash 47x22 cm" named a 4 m balloon, 2026-10-23).
+    if len(trim) != 2 or template.get("kind") == "sheet":
         return None
-    # A flat template drawn at 1:N (Ultima's Formulate walls at 1:4) is ordered at full size; a sheet of
-    # panels has no finished size to scale.
-    scale = 1 if template.get("kind") == "sheet" else from_template.scale_of(template)
+    # A flat template drawn at 1:N (Ultima's Formulate walls at 1:4) is ordered at full size.
+    scale = from_template.scale_of(template)
     return [float(trim[0]) * scale, float(trim[1]) * scale]
 
 

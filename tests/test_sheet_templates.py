@@ -242,8 +242,16 @@ def test_a_face_s_text_stays_inside_its_outline_and_moves_outside_a_cramped_face
 def test_a_flat_template_drawn_at_one_to_four_is_ordered_at_full_size():
     # Ultima's Formulate 3000 wall: a 744 × 594 mm page at 1:4 is a 2976 × 2376 mm print
     assert app_module._finished_mm({"trim_mm": [744, 594], "scale": 4}) == [2976, 2376]
-    assert app_module._finished_mm({"trim_mm": [2300, 2300], "scale": 10, "kind": "sheet"}) == [2300, 2300]
+    # a sheet of panels at 1:10 has no one finished size: the generator says „siatka 1:10" instead of a wrong cm
+    assert app_module._finished_mm({"trim_mm": [2300, 2300], "scale": 10, "kind": "sheet"}) is None
     assert app_module._finished_mm({"trim_mm": [800, 2400]}) == [800, 2400]
+
+
+def test_the_face_name_cap_is_one_rule_for_the_readability_test_and_the_drawing():
+    from prepress import from_template
+    # a wide, low home: the name may be a third of the home's height, not 2 % of the page
+    assert from_template._name_cap_pt(across_mm=12, page_short_mm=1000) == pytest.approx(12 * 0.33 * from_template.PT_PER_MM)
+    assert from_template._name_cap_pt(across_mm=200, page_short_mm=1000) == pytest.approx(20 * from_template.PT_PER_MM)
 
 
 def test_the_free_box_is_the_largest_empty_rectangle():

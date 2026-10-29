@@ -399,6 +399,10 @@
 				canvas.getContext( '2d' ).drawImage( image, 0, 0, canvas.width, canvas.height );
 				const type = original.type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
 				return new Promise( ( resolve ) => canvas.toBlob( resolve, type, 0.92 ) );
+			} catch ( error ) {
+				// iOS Safari refuses to decode a photo past its 16.7 MP canvas limit: the on-canvas copy goes instead of the save failing.
+				console.warn( 'picture shrink failed, sending the on-canvas copy', error );
+				return fetch( src ).then( ( response ) => response.blob() );
 			} finally {
 				URL.revokeObjectURL( url );
 			}

@@ -386,8 +386,7 @@ def _draw_face_text(pdf, label, box_mm, template, home_mm, page_short_mm, rotati
     along, across = (home_h, home_w) if rotation in (90, 270) else (home_w, home_h)
     # The name: never more than 2 % of the page (a 60 mm PRZÓD across a 176 mm band, 2026-10-18),
     # never more than a third of the home's height, and it must fit the home's width.
-    label_pt = specblock._pick_size(label, specblock.BOLD, along * 0.95,
-                                    min(page_short_mm * 0.02, across * 0.33) * PT_PER_MM, 4.0)
+    label_pt = specblock._pick_size(label, specblock.BOLD, along * 0.95, _name_cap_pt(across, page_short_mm), 4.0)
     # The lines: half the name, and never taller than what the remaining height holds.
     spec_pt = min(specblock._pick_size(line, specblock.FONT, along * 0.95,
                                        min(label_pt * 0.5, page_short_mm * 0.006 * PT_PER_MM), 3.0)
@@ -413,6 +412,13 @@ def _draw_face_text(pdf, label, box_mm, template, home_mm, page_short_mm, rotati
     pdf.restoreState()
 
 
+def _name_cap_pt(across_mm, page_short_mm):
+    """The largest a face's name may be: 2 % of the page, and a third of the home's height — ONE cap for the
+    readability test (_place_face_text) and the drawing (_draw_face_text), or a name judged readable at 6 pt was
+    drawn smaller inside a low home (audit 2026-10-28)."""
+    return min(page_short_mm * 0.02, across_mm * 0.33) * PT_PER_MM
+
+
 FACE_TEXT_READABLE_PT = 6.0     # a face's name smaller than this is unreadable on screen: it goes outside the face, with a leader
 FACE_TEXT_REACH_SHARE = 0.25    # how far round a face its text may sit, as a share of the page's short side
 
@@ -429,8 +435,9 @@ def _place_face_text(pdf, face, label, region_box, template, ink, page_w, page_h
     page_short = min(page_w, page_h)
     face_ink = _outside_taken(ink, face["within_mm"], page_w, page_h) if face.get("within_mm") else ink
     home = _free_rect_in(region_box, face_ink, page_w, page_h) or region_box
-    along = (home[3] - home[1]) if rotation in (90, 270) else (home[2] - home[0])
-    label_pt = specblock._pick_size(label, specblock.BOLD, along * 0.95, page_short * 0.02 * PT_PER_MM, 1.0)
+    along, across = ((home[3] - home[1], home[2] - home[0]) if rotation in (90, 270)
+                     else (home[2] - home[0], home[3] - home[1]))
+    label_pt = specblock._pick_size(label, specblock.BOLD, along * 0.95, _name_cap_pt(across, page_short), 1.0)
     if label_pt < FACE_TEXT_READABLE_PT:
         outside = _free_rect_near(region_box, ink, page_w, page_h)
         if outside:

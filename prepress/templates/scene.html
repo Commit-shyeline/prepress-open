@@ -61,6 +61,7 @@ body.bare #stage canvas { pointer-events: none; }
    from its own form. `?shot=1` is the catalogue still (data-shot, as the flag scene writes it). */
 import * as THREE from 'three';
 import { OrbitControls } from '{{ asset("OrbitControls.js") }}';
+import { shotData } from '{{ asset("shot-frame.js") }}';
 import { lightScene } from '{{ asset("product-model.js") }}';
 
 const rules = window.PrepressPrintScene;
@@ -202,8 +203,13 @@ function wear(texture, material) {
     material.needsUpdate = true;
 }
 
+let demoTexture = null;   // the 2048 × up-to-8192 demo print, one at a time: every rebuild drew a new one and kept the old
 function dress() {
-    const front = artwork || demoPrint(cfg.w, cfg.h);
+    if (!artwork) {
+        if (demoTexture) demoTexture.dispose();
+        demoTexture = demoPrint(cfg.w, cfg.h);
+    }
+    const front = artwork || demoTexture;
     wear(front, printFront);
     wear(front, meshCloth);
     // A double-sided board's back wears its own print, or the front's again, reading forward from behind.
@@ -488,8 +494,8 @@ function describe(carrier) {
 
 function build() {
     while (product.children.length) {
-        const child = product.children.pop();
-        if (child.geometry) child.geometry.dispose();
+        // A fence panel is a Group: its tubes and the instanced wires sit a level down (they leaked per rebuild).
+        product.children.pop().traverse((node) => { if (node.geometry) node.geometry.dispose(); });
     }
     let carrier = null;
     if (cfg.kind === 'plyta') {
@@ -550,18 +556,8 @@ build();
    person beside it at true scale (the ground line, the left edge, pixels per metre). */
 if (params.get('shot') === '1') {
     placeCamera(askedYaw ?? -14);
-    camera.updateMatrixWorld();
-    const toPx = (v) => {
-        const p = v.clone().project(camera);
-        return [(p.x + 1) / 2 * stage.clientWidth, (1 - p.y) / 2 * stage.clientHeight];
-    };
-    const foot = new THREE.Vector3(bounds.min.x, 0, centreOf().z);
-    const [left, groundPx] = toPx(foot);
-    const [, metre] = toPx(foot.clone().setY(1));
-    document.body.dataset.shot = JSON.stringify({
-        left: Math.round(left), ground: Math.round(groundPx), pxPerMetre: +(groundPx - metre).toFixed(2),
-        heightM: +bounds.max.y.toFixed(3),
-    });
+    document.body.dataset.shot = shotData(camera, new THREE.Vector3(bounds.min.x, 0, centreOf().z),
+                                          1, stage.clientWidth, stage.clientHeight, bounds.max.y);
 }
 if (bare) controls.enabled = false;
 

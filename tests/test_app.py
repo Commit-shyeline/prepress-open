@@ -89,12 +89,27 @@ def test_the_trace_writes_clamped_lines_only_when_configured(client, monkeypatch
     assert lines[1].endswith(" " + "x" * 200)
     assert lines[2].endswith(" line break")
     assert client.post("/api/trace", json={"events": "not a list"}).status_code == 204
+    assert client.post("/api/trace", json=["a list body"]).status_code == 204
     assert len(log.read_text(encoding="utf-8").splitlines()) == 20
 
     # Behind a Cloudflare tunnel X-Forwarded-For is only the tunnel's loopback hop; the visitor is in CF-Connecting-IP.
     client.post("/api/trace", json={"events": ["tunnel"]},
                 headers={"X-Forwarded-For": "127.0.0.1", "CF-Connecting-IP": "203.0.113.7"})
     assert " 203.0.113.7 " in log.read_text(encoding="utf-8").splitlines()[-1]
+
+
+def test_the_demo_artwork_cache_keeps_one_picture_per_stamp_and_a_bounded_number():
+    rendered = []
+    app_module._demo_artwork_cache.clear()
+    for stamp in ("t1:VENTO S", "t1:VENTO M", "t1:VENTO S"):
+        app_module._demo_artwork_png(stamp, lambda stamp=stamp: rendered.append(stamp) or stamp.encode())
+    assert rendered == ["t1:VENTO S", "t1:VENTO M"]                 # a second ask for S is a hit, not M's picture
+    assert app_module._demo_artwork_png("t1:VENTO S", lambda: b"never") == b"t1:VENTO S"
+    for extra in range(app_module._DEMO_ARTWORK_CACHE_SLOTS):
+        app_module._demo_artwork_png(f"t2:{extra}", lambda extra=extra: str(extra).encode())
+    assert len(app_module._demo_artwork_cache) == app_module._DEMO_ARTWORK_CACHE_SLOTS
+    assert "t1:VENTO S" not in app_module._demo_artwork_cache        # the oldest went first
+    app_module._demo_artwork_cache.clear()
 
 
 def test_a_gated_check_refuses_an_anonymous_upload(client, monkeypatch):
@@ -1123,3 +1138,13 @@ def test_scene_sizes_are_clamped_and_garbage_falls_back(client):
 
 def test_an_unknown_scene_is_a_404(client):
     assert client.get("/scena/rakieta").status_code == 404
+
+
+def test_the_three_scenes_share_one_shot_frame_helper():
+    """The `?shot=1` maths lives in static/shot-frame.js once: a page with its own copy drifts (the GLB viewer's
+    measured its bounds before the turn)."""
+    templates = os.path.join(os.path.dirname(app_module.__file__), "templates")
+    for name in ("model3d.html", "model3d_glb.html", "scene.html"):
+        with open(os.path.join(templates, name), encoding="utf-8") as handle:
+            page = handle.read()
+        assert "shot-frame.js" in page and "const toPx" not in page, name

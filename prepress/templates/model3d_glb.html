@@ -54,6 +54,7 @@ body.bare #stage canvas { pointer-events: none; }
    admin's pairing view with model-map.js); this page only loads and dresses. */
 import * as THREE from 'three';
 import { OrbitControls } from '{{ asset("OrbitControls.js") }}';
+import { shotData } from '{{ asset("shot-frame.js") }}';
 import { loadProductModel, groundModel, dressModel, wearPage, lightScene, PAGE_CHANNEL }
     from '{{ asset("product-model.js") }}';
 
@@ -136,7 +137,8 @@ if (model) {
             if (atRank < rank) return;              // something more authoritative landed meanwhile
             // Only THIS page fits the model: the demo endpoint answers with the bundled flag artwork
             // when the template's own cannot be drawn, and a 1:3 flag over a wall is not a preview.
-            if (atRank >= 1 && !samePage(texture.image)) return;
+            // The customer's own file (rank 2) is shown whatever its shape — a wrong shape is theirs to see.
+            if (atRank === 1 && !samePage(texture.image)) return;
             rank = atRank;
             texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
             wearPage(model, texture);
@@ -197,18 +199,10 @@ if (model) {
     if (params.get('shot') === '1') {
         resize();
         pivot.rotation.y = THREE.MathUtils.degToRad(-12);
-        camera.updateMatrixWorld();
-        const toPx = (v) => {
-            const p = v.clone().project(camera);
-            return [(p.x + 1) / 2 * stage.clientWidth, (1 - p.y) / 2 * stage.clientHeight];
-        };
-        const foot = new THREE.Vector3(bounds.min.x, bounds.min.y, centre.z);
-        const [left, groundPx] = toPx(foot);
-        const [, metre] = toPx(foot.clone().setY(bounds.min.y + 1));
-        document.body.dataset.shot = JSON.stringify({
-            left: Math.round(left), ground: Math.round(groundPx), pxPerMetre: +(groundPx - metre).toFixed(2),
-            heightM: +size.y.toFixed(3),
-        });
+        pivot.updateMatrixWorld(true);
+        const turned = new THREE.Box3().setFromObject(pivot);   // the turn moves the left edge: measure AFTER it
+        const foot = new THREE.Vector3(turned.min.x, turned.min.y, turned.getCenter(new THREE.Vector3()).z);
+        document.body.dataset.shot = shotData(camera, foot, 1, stage.clientWidth, stage.clientHeight, size.y);
     }
 }
 

@@ -158,7 +158,9 @@ function buildView(token, info, model) {
         drawMarkers();
         status(`Punkt na „${hit.name}” (wyspa ${hit.island + 1}). Teraz kliknij ten sam punkt na stronie.`);
     });
-    el('mdlPageBox').addEventListener('click', (event) => {
+    // Named, so dispose() can take it off: the page box outlives the view, and a listener left behind
+    // by template A would push B's clicks into A's faces (and A's save would store them).
+    function onPageClick(event) {
         if (!pending) return status('Najpierw kliknij punkt na modelu.');
         const box = pageImg.getBoundingClientRect();
         const to = [(event.clientX - box.left) / box.width, (event.clientY - box.top) / box.height];
@@ -168,7 +170,8 @@ function buildView(token, info, model) {
         pending = null;
         refit(entry);
         render();
-    });
+    }
+    el('mdlPageBox').addEventListener('click', onPageClick);
 
     function status(text) { el('mdlStatus').textContent = text; }
 
@@ -283,6 +286,7 @@ function buildView(token, info, model) {
         renderer.setAnimationLoop(null);
         renderer.dispose();
         window.removeEventListener('resize', resize);
+        el('mdlPageBox').removeEventListener('click', onPageClick);
         el('mdlPageDots').innerHTML = '';
     }
 
