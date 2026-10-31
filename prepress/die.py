@@ -127,6 +127,81 @@ def bare_perimeter(array, px_per_mm, polylines, bleed_mm, paper_min_channel):
     return round(bare / taken, 3)
 
 
+def bleed_shortfall(array, px_per_mm, polylines, reach_mm, paper_min_channel):
+    """(share of the bleed line where the artwork stops short, the typical such gap in page mm), or None.
+
+    Walked INWARD from every sample on the bleed line, because a row or column scan of the page cannot
+    tell a shaped product from a short one: a flag's corners outside its curve, and the white upper half
+    of a roll-up, both read as "no artwork at this edge" (2026-10-31). Ink at the line is
+    a bleed. Paper the whole way in to `reach_mm` is a white background, which is the designer's call.
+    Ink that starts in between is artwork that stops short, and how far in it starts is the strip that
+    prints white. The typical gap is the median: one corner sample can read a registration mark's
+    surroundings, and the deepest of thousands said 17 mm of a roll-up whose panel stops 12 mm short.
+    """
+    import numpy
+
+    ink = (array < paper_min_channel).any(axis=2)
+    height_px, width_px = ink.shape
+    # The first look is this far in: the line itself is where a template draws its brutto guide.
+    first_mm = MIN_SAMPLE_STEP_PX / px_per_mm
+    depths_mm = numpy.arange(first_mm, max(reach_mm, first_mm) + 1e-9, 1 / px_per_mm)
+    spacing_mm = SIDE_SAMPLE_SPACING_PX / px_per_mm
+    gaps_mm = []
+    taken = 0
+    for polyline in polylines:
+        points = polyline[:-1] if len(polyline) > 2 and polyline[0] == polyline[-1] else polyline
+        if len(points) < 3:
+            continue
+        signed = sum(points[i][0] * points[(i + 1) % len(points)][1]
+                     - points[(i + 1) % len(points)][0] * points[i][1] for i in range(len(points)))
+        inward = 1.0 if signed > 0 else -1.0         # the opposite of bare_perimeter's outward
+        for (x, y), normal in _perimeter_samples(points, inward, spacing_mm):
+            column = numpy.rint((x + normal[0] * depths_mm) * px_per_mm).astype(int)
+            row = numpy.rint((y + normal[1] * depths_mm) * px_per_mm).astype(int)
+            on_sheet = (column >= 0) & (column < width_px) & (row >= 0) & (row < height_px)
+            if not on_sheet[0]:
+                continue
+            taken += 1
+            inked = numpy.flatnonzero(ink[row[on_sheet], column[on_sheet]])
+            if inked.size and inked[0] > 0:
+                gaps_mm.append(float(depths_mm[on_sheet][inked[0]]))
+    if taken == 0:
+        return None
+    return round(len(gaps_mm) / taken, 3), round(float(numpy.median(gaps_mm)) if gaps_mm else 0.0, 2)
+
+
+def located_offset(array, px_per_mm, polylines, max_shift_mm, paper_min_channel):
+    """(dx, dy) in page mm that moves the outline onto the artwork: the shift, within `max_shift_mm`,
+    putting the most ink and the least paper inside it — a cross-correlation, through the FFT.
+
+    For a file made on ANOTHER page than the template's: the graphic team's own die page holds the
+    same M Play A flag 23.6 mm left of and 12 mm above where the template draws it (2026-10-31), so
+    walking the template's line where the template puts it measured a correct file as 24 mm short. Ink outside the outline costs nothing — bleed past the line is not a fault.
+    """
+    import numpy
+    from PIL import Image, ImageDraw
+
+    signed = numpy.where((array < paper_min_channel).any(axis=2), 1.0, -1.0)
+    height_px, width_px = signed.shape
+    margin_px = int(math.ceil(max_shift_mm * px_per_mm))
+    canvas = Image.new("L", (width_px + 2 * margin_px, height_px + 2 * margin_px), 0)
+    draw = ImageDraw.Draw(canvas)
+    for polyline in polylines:
+        draw.polygon([(x * px_per_mm + margin_px, y * px_per_mm + margin_px) for x, y in polyline], fill=1)
+    outline_mask = numpy.asarray(canvas, dtype=float)
+    padded = numpy.zeros_like(outline_mask)
+    padded[margin_px:margin_px + height_px, margin_px:margin_px + width_px] = signed
+    score = numpy.fft.irfft2(numpy.fft.rfft2(padded) * numpy.conj(numpy.fft.rfft2(outline_mask)), outline_mask.shape)
+    # score[dy, dx] = the outline shifted by (dx, dy) over the artwork; negative shifts wrap to the end.
+    shifts = numpy.r_[0:margin_px + 1, -margin_px:0]
+    window = score[numpy.ix_(shifts % outline_mask.shape[0], shifts % outline_mask.shape[1])]
+    row, column = numpy.unravel_index(numpy.argmax(window), window.shape)
+    # A tie with where the template already puts it keeps it there.
+    if window[row, column] <= score[0, 0] + 0.5:
+        return 0.0, 0.0
+    return shifts[column] / px_per_mm, shifts[row] / px_per_mm
+
+
 def _perimeter_samples(points, outward, spacing_mm):
     """((x, y), outward unit normal) at every point of a closed outline — the normal from its two
     neighbours, so a corner looks out diagonally — and every `spacing_mm` along each stretch

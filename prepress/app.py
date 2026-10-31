@@ -1235,7 +1235,12 @@ def _judge(data, filename, form, token=None):
     # declared full-size box whatever page its DPI tag implies.
     drawn = rules.drawn_scale(page_mm, expected) if kind == "pdf" else 1
     measured_at = dict(expected, scale=drawn) if drawn > 1 else expected
-    facts = dict(measure.measure(data, measured_at, page_index, cut_spot=cut_spot))
+    template_record = materials.get_template((stamp or {}).get("template") or "")
+    # The back of a pair is the front seen through the fabric, so its outlines are reflected too.
+    template_lines = from_template.template_lines_mm(
+        template_record, mirrored=form.get("side") == "back") if template_record else None
+    facts = dict(measure.measure(data, measured_at, page_index, cut_spot=cut_spot,
+                                 template_lines=template_lines, locate_template_lines=assumed))
     facts["cut_spot"] = cut_spot
     # The scale the page's own millimetres are at, for the rules that weigh page geometry — the
     # die, a declared TrimBox — against the template's full-size numbers (`rules._page_scale`).
@@ -1249,7 +1254,6 @@ def _judge(data, filename, form, token=None):
     # straight guides — a winder's curved cut line never fills a row, so a file consisting of
     # nothing but guides measured as guide-free. The template knows its own outlines; an uploaded
     # outline within a millimetre of one of them IS that guide, whatever its shape.
-    template_record = materials.get_template((stamp or {}).get("template") or "")
     if template_record:
         own = [(float(o.get("width_mm") or 0), float(o.get("height_mm") or 0))
                for o in (template_record.get("outlines") or [])]

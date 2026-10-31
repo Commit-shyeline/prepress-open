@@ -790,6 +790,29 @@ def back_mirrored(template):
     return template.get("back_mirrored") is not False
 
 
+def template_lines_mm(template, mirrored=False):
+    """{"bleed": [...], "safe": [...]}: the closed brutto and safe outlines `derive` draws on the customer's
+    sheet, as polylines in page mm, y DOWN — the line a returned file's artwork must reach and the line its
+    content must stay inside. None when there is no brutto to walk: the page edge then stands in for it,
+    and a sheet's panels each carry their own. Not the `cut`: on a flag it is OPEN, the curve alone, with
+    the tunnel and the hem left out. `mirrored`: the back of a reflected pair."""
+    if template.get("kind") == "sheet":
+        return None
+    try:
+        drawing, _notes = derive(template)
+    except TemplateError:
+        return None
+    page_w, page_h = (float(v) for v in template["page_mm"])
+    reflect = mirrored and back_mirrored(template)
+
+    def closed_polylines(entries):
+        return [[((page_w - x) if reflect else x, page_h - y) for x, y in offset.flatten(entry)]
+                for entry in entries if entry.get("closed")]
+
+    bleed = closed_polylines(drawing.get("brutto") or [])
+    return {"bleed": bleed, "safe": closed_polylines(drawing.get("safe") or [])} if bleed else None
+
+
 def sides_of(template):
     """How many printed sides this product has. Anything unexpected reads as one."""
     try:

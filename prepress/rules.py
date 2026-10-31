@@ -280,19 +280,25 @@ def check_template_guides_removed(facts, expected, material=None):
 
 
 def check_artwork_reaches_bleed(facts, expected, material=None):
-    """Artwork must run to the page edge, or the trimmed job shows a white sliver.
+    """Artwork must run to the bleed line, or the trimmed job shows a white sliver.
 
-    `blank_edges_mm` is how much untouched paper sits on each side; anything more than a rounding
-    error means the design stops short of the bleed. It is at FULL SIZE, like the bleed it is
-    weighed against and printed beside (`measure._ink_facts`) — at 1:10 it used to be page
+    `bleed_shortfall` walks the bleed line itself (`die.bleed_shortfall`): the share of it where ink
+    stops short, and the typical such gap. A shaped product's corners and a white background are not
+    a shortfall there; on the page-edge scan (`blank_edges_mm`, the fallback) they were — a flag and a
+    roll-up both read as hundreds of millimetres short (2026-10-31). Both are at FULL SIZE, like the
+    bleed they are weighed against (`measure._ink_facts`) — at 1:10 they used to be page
     millimetres, so a 15 mm shortfall read as 1.5 mm and amber instead of red (2026-09-30).
     """
     if (material or {}).get("cut_path") and facts.get("die"):
         return None                                  # cut_margins judges this against the knife
+    shortfall = facts.get("bleed_shortfall")
     blank = facts.get("blank_edges_mm")
-    if blank is None:
+    if shortfall:
+        worst = 0.0 if shortfall["share"] <= BARE_PERIMETER_TOLERANCE else shortfall["missing_mm"]
+    elif blank is None:
         return _finding("bleed_coverage", "info", "unmeasured")
-    worst = max(blank)
+    else:
+        worst = max(blank)
     if worst <= TOLERANCE_MM:
         return _finding("bleed_coverage", "green", "ok")
     level = "red" if worst > expected["bleed_mm"] / 2 else "amber"

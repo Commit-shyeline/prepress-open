@@ -54,6 +54,12 @@ SOLID_RUN_MM = 2.0
 # ...and only rows inked across at least this share of their length count at all. A guide rectangle's
 # vertical sides ink roughly 0.1 % of every row; real artwork covers most of it.
 MIN_ROW_COVERAGE = 0.55
+# How far a template's bleed line may be moved to meet artwork drawn on someone else's page, at full
+# size. The one measured case was 24 mm (2026-10-31); further than this is a different product.
+LOCATE_MAX_SHIFT_MM = 50.0
+# Inside a shaped template's bleed outline, this much past the bleed is still the artwork's own edge
+# (antialiasing, a file that bleeds a little less than asked) rather than content in the keep-out ring.
+SILHOUETTE_BAND_MM = 3.0
 # A guide is one well-covered line with clean paper either side; how far either side we look.
 GUIDE_CLEARANCE_MM = 1.5
 # Local contrast above this counts as DETAIL — lettering, edges, a logo — rather than flat colour.
@@ -148,23 +154,27 @@ def _looks_like_a_guide(flags, inset_px, clearance_px):
     return not before.any() and not after.any()
 
 
-def measure(pdf_bytes, expected, page_index=0, cut_spot=None):
+def measure(pdf_bytes, expected, page_index=0, cut_spot=None, template_lines=None, locate_template_lines=False):
     """Everything the ink rules need, or Nones with a reason when it cannot be measured.
 
     `expected` is the stamped geometry, so the measurement knows where the boxes were without
     inferring anything from the file itself. `cut_spot` is the colorant a human named as the knife.
+    `template_lines` is the template's own {"bleed", "safe"} outlines (`from_template.template_lines_mm`)
+    — a shaped product's bleed is not the page edge, nor its safe area a rectangle.
+    `locate_template_lines`: the file was not drawn on our page, so the lines are first moved onto the
+    artwork (`die.located_offset`).
     """
     scale = expected.get("scale", 1) or 1
     artwork_height_mm = expected["brutto_mm"][1] / scale
     data = _bytes(pdf_bytes)
     if raster.is_raster(data):
-        return _measure_raster(data, expected, page_index)
+        return _measure_raster(data, expected, page_index, template_lines, locate_template_lines)
     try:
         array, px_per_mm = _render(data, page_index, artwork_height_mm)
     except Exception as error:                       # noqa: BLE001 — unmeasurable is an ANSWER
         return _unmeasurable(error)
 
-    facts = _ink_facts(array, px_per_mm, expected)
+    facts = _ink_facts(array, px_per_mm, expected, template_lines, locate_template_lines)
     if facts.get("min_dpi", "unset") != "unset":
         return facts                                 # the blank page: nothing more to read
     placements = structure.placed_images(data, page_index)
@@ -246,7 +256,7 @@ def _unmeasurable(error):
             "guides_present": None, "reason": f"{type(error).__name__}: {error}"[:140]}
 
 
-def _measure_raster(data, expected, page_index):
+def _measure_raster(data, expected, page_index, template_lines=None, locate_template_lines=False):
     """A flat raster IS the artwork: its pixels map onto the declared brutto box exactly, so the
     ink maths are the same and the resolution is pixels over the declared size. No guides (we did
     not issue this page), no live text, one placement — the whole image."""
@@ -257,7 +267,7 @@ def _measure_raster(data, expected, page_index):
                                                     TARGET_PX_PER_MM, MAX_RENDER_PX)
     except Exception as error:                       # noqa: BLE001 — unmeasurable is an ANSWER
         return _unmeasurable(error)
-    facts = _ink_facts(array, px_per_mm, expected)
+    facts = _ink_facts(array, px_per_mm, expected, template_lines, locate_template_lines)
     facts["guides_present"] = None
     facts["min_dpi"] = _full_size_dpi(dpi, scale)
     facts["image_placements"] = [{"rect_mm": [0, 0, round(artwork_mm[0], 1), round(artwork_mm[1], 1)],
@@ -266,7 +276,7 @@ def _measure_raster(data, expected, page_index):
     return facts
 
 
-def _ink_facts(array, px_per_mm, expected):
+def _ink_facts(array, px_per_mm, expected, template_lines=None, locate_template_lines=False):
     """Guides, blank edges and safe-area intrusion off a rendered RGB array.
 
     Measured in page pixels, REPORTED at full size: `expected["scale"]` is the scale the page was
@@ -310,11 +320,29 @@ def _ink_facts(array, px_per_mm, expected):
         inward(rows_inked, half_height_mm),
         inward(columns_inked[::-1], half_width_mm),
         inward(rows_inked[::-1], half_height_mm)))
-    regions, worst = _intrusion_regions(_detail_mask(array), px_per_mm, expected)
+    page_w_mm, page_h_mm = width_px / px_per_mm, height_px / px_per_mm
+    if template_lines and locate_template_lines:
+        dx, dy = die.located_offset(array, px_per_mm, template_lines["bleed"], LOCATE_MAX_SHIFT_MM / scale,
+                                    PAPER_MIN_CHANNEL)
+        template_lines = {role: [[(x + dx, y + dy) for x, y in polyline] for polyline in polylines]
+                          for role, polylines in template_lines.items()}
+        facts["bleed_line_offset_mm"] = (round(dx * scale, 1), round(dy * scale, 1))
+    detail = _detail_mask(array)
+    if template_lines and template_lines.get("safe"):
+        regions, worst = _shaped_intrusion_regions(detail, px_per_mm, template_lines, expected)
+    else:
+        regions, worst = _intrusion_regions(detail, px_per_mm, expected)
     # The depth goes to full size with the other numbers; the regions stay where the overlay
     # paints them, on the page.
     facts["safe_intrusion_mm"] = round(worst * scale, 2)
     facts["safe_intrusion_regions_mm"] = regions
+    found = die.bleed_shortfall(
+        array, px_per_mm,
+        (template_lines or {}).get("bleed")
+        or [[(0.0, 0.0), (page_w_mm, 0.0), (page_w_mm, page_h_mm), (0.0, page_h_mm)]],
+        (expected["bleed_mm"] + expected["safe_mm"]) / scale, PAPER_MIN_CHANNEL)
+    facts["bleed_shortfall"] = ({"share": found[0], "missing_mm": round(found[1] * scale, 1)}
+                               if found else None)
     return facts
 
 
@@ -395,23 +423,9 @@ def _intrusion_regions(detail, px_per_mm, expected):
     ring_detail[ring_px["top"]:height_px - ring_px["bottom"],
                 ring_px["left"]:width_px - ring_px["right"]] = False
 
-    tile_px = max(2, int(round(REGION_TILE_MM * px_per_mm)))
-    tiles_high = (height_px + tile_px - 1) // tile_px
-    tiles_wide = (width_px + tile_px - 1) // tile_px
-    marked = numpy.zeros((tiles_high, tiles_wide), dtype=bool)
-    for row in range(tiles_high):
-        for col in range(tiles_wide):
-            patch = ring_detail[row * tile_px:(row + 1) * tile_px,
-                                col * tile_px:(col + 1) * tile_px]
-            if patch.size and float(patch.mean()) >= REGION_TILE_DETAIL_SHARE:
-                marked[row, col] = True
-    if not marked.any():
+    regions = _regions_mm(ring_detail, px_per_mm)
+    if not regions:
         return [], 0.0
-
-    regions_px = _union_touching(_merge_tiles(marked, tile_px, width_px, height_px), tile_px)
-    regions = [[round(x / px_per_mm, 1), round(y / px_per_mm, 1),
-                round(w / px_per_mm, 1), round(h / px_per_mm, 1)]
-               for x, y, w, h in regions_px]
 
     # The verdict: the deepest reach past the safe boundary, over every region and every side it
     # touches. Same meaning the band scan had — distance from the detail to the ring's inner edge.
@@ -426,6 +440,83 @@ def _intrusion_regions(detail, px_per_mm, expected):
             if depths[side] > 0:
                 worst = max(worst, min(into, depths[side]))
     return regions, round(max(0.0, worst), 2)
+
+
+def _regions_mm(ring_detail, px_per_mm):
+    """[x, y, w, h] in page mm of the 10 mm tiles holding enough of `ring_detail`, merged into blocks."""
+    import numpy
+
+    height_px, width_px = ring_detail.shape
+    tile_px = max(2, int(round(REGION_TILE_MM * px_per_mm)))
+    tiles_high = (height_px + tile_px - 1) // tile_px
+    tiles_wide = (width_px + tile_px - 1) // tile_px
+    marked = numpy.zeros((tiles_high, tiles_wide), dtype=bool)
+    for row in range(tiles_high):
+        for col in range(tiles_wide):
+            patch = ring_detail[row * tile_px:(row + 1) * tile_px,
+                                col * tile_px:(col + 1) * tile_px]
+            if patch.size and float(patch.mean()) >= REGION_TILE_DETAIL_SHARE:
+                marked[row, col] = True
+    if not marked.any():
+        return []
+    regions_px = _union_touching(_merge_tiles(marked, tile_px, width_px, height_px), tile_px)
+    return [[round(x / px_per_mm, 1), round(y / px_per_mm, 1),
+             round(w / px_per_mm, 1), round(h / px_per_mm, 1)]
+            for x, y, w, h in regions_px]
+
+
+def _shaped_intrusion_regions(detail, px_per_mm, template_lines, expected):
+    """`_intrusion_regions` for a template's own shapes: the keep-out ring is inside its bleed outline and
+    outside its safe outline, not a rectangle inset from the page. A flag's curve crossed the rectangular
+    ring, and the edge of the flag itself read as content 33 mm into it (2026-10-31).
+
+    The artwork's own outer edge is left out — a band a bleed and `SILHOUETTE_BAND_MM` deep inside the
+    bleed outline, where the contrast is the product's edge against the paper, not a logo. The depth is
+    how far the deepest detail sits outside the safe outline, grown a pixel at a time.
+    """
+    import numpy
+
+    height_px, width_px = detail.shape
+    scale = expected.get("scale", 1) or 1
+    band_px = int(round((expected["bleed_mm"] / scale + SILHOUETTE_BAND_MM) * px_per_mm))
+    ring = _shrunk(_filled(template_lines["bleed"], px_per_mm, width_px, height_px), band_px)
+    safe = _filled(template_lines["safe"], px_per_mm, width_px, height_px)
+    ring_detail = detail & ring & ~safe
+    regions = _regions_mm(ring_detail, px_per_mm)
+    if not regions:
+        return [], 0.0
+    reached, steps = safe, 0
+    limit = int(numpy.ceil((expected["bleed_mm"] + expected["safe_mm"]) / scale * px_per_mm))
+    while steps < limit and (ring_detail & ~reached).any():
+        reached, steps = _grown(reached, 1), steps + 1
+    return regions, round(steps / px_per_mm, 2)
+
+
+def _filled(polylines, px_per_mm, width_px, height_px):
+    from PIL import Image, ImageDraw
+    import numpy
+
+    canvas = Image.new("1", (width_px, height_px), 0)
+    draw = ImageDraw.Draw(canvas)
+    for polyline in polylines:
+        draw.polygon([(x * px_per_mm, y * px_per_mm) for x, y in polyline], fill=1)
+    return numpy.asarray(canvas, dtype=bool)
+
+
+def _grown(mask, steps):
+    """The mask grown by `steps` pixels, four-connected, never wrapping round the page edge."""
+    grown = mask.copy()
+    for _ in range(steps):
+        before = grown.copy()
+        grown[1:, :] |= before[:-1, :]
+        grown[:-1, :] |= before[1:, :]
+        grown[:, 1:] |= before[:, :-1]
+        grown[:, :-1] |= before[:, 1:]
+    return grown
+
+
+def _shrunk(mask, steps):
+    return ~_grown(~mask, steps)
 
 
 def _union_touching(rectangles, gap_px):
