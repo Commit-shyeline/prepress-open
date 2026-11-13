@@ -412,6 +412,23 @@ def test_a_file_on_the_shops_server_is_checked_by_path(client, monkeypatch, tmp_
     assert "Serwer FTP: ftp.example.com" in client.get("/plik").get_data(as_text=True)
 
 
+def test_a_path_outside_the_roots_is_refused_without_being_opened(monkeypatch, tmp_path):
+    monkeypatch.setenv(app_module.PATH_ROOTS_ENV, str(tmp_path))
+    opened = []
+    real_realpath = os.path.realpath
+    monkeypatch.setattr(app_module.os.path, "realpath", lambda path: opened.append(str(path)) or real_realpath(path))
+    with pytest.raises(app_module.PathRefused):
+        app_module.resolve_shared_path(r"\\attacker-host\share\x.pdf")
+    assert all(path.startswith(str(tmp_path)) for path in opened), opened
+
+
+def test_a_json_body_is_capped_far_below_the_upload_limit(client, monkeypatch):
+    monkeypatch.setattr(app_module, "JSON_BODY_MAX_BYTES", 64)
+    assert client.post("/api/resolve", data=b'{"items": [' + b" " * 100 + b"]}",
+                       content_type="application/json").status_code == 413
+    assert client.post("/api/resolve", json={"items": []}).status_code != 413
+
+
 def test_the_path_check_is_off_without_roots(client):
     assert client.post("/api/check-path", data={"path": "x.pdf"},
                        content_type="multipart/form-data").status_code == 404

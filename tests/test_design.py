@@ -125,6 +125,19 @@ def test_a_saved_design_is_a_stamped_page_of_the_template_size(client, template_
     assert stamp["stamp"]["notes"] == [design.DEFAULT_NOTE]
 
 
+def test_a_picture_larger_than_the_editor_makes_is_refused_before_it_is_decoded(client, template_token):
+    from PIL import Image
+    huge = io.BytesIO()
+    Image.new("1", (8192, 8193)).save(huge, "PNG")      # one row over the ceiling; a few KB on the wire
+    saved = client.post(f"/api/designs/{template_token}",
+                        data={"artwork": (io.BytesIO(huge.getvalue()), "projekt.png"), "elements": "[]"},
+                        content_type="multipart/form-data")
+    assert saved.status_code == 400
+    element = {"id": "a", "x": 1, "y": 1, "scale": 1, "rotation": 0, "width": 1, "height": 1}
+    assert design._placements([element], {"a": huge.getvalue()}) == []
+    assert design._placements([element] * (design.MAX_RASTER_ELEMENTS + 1), {"a": _artwork_png()}) == []
+
+
 def _save_design(client, template_token, headers=None):
     saved = client.post(f"/api/designs/{template_token}",
                         data={"artwork": (io.BytesIO(_artwork_png()), "projekt.png"), "elements": "[]"},

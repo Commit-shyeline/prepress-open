@@ -38,6 +38,9 @@ app = Flask(__name__)
 # and takes its number from `_upload_limit_mb` — from 2026-09-02, when the cap was raised to
 # 1 GB, until 2026-09-30 it went on saying 512 MB, because the sentence had its own copy.
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
+# That gigabyte is for FILES. A JSON body is parsed whole in memory, and the largest real one (a template
+# with its outlines, from the admin panel) is a few hundred KB (audit U2, 2026-11-13).
+JSON_BODY_MAX_BYTES = 8 * 1024 * 1024
 
 
 @app.errorhandler(413)
@@ -77,7 +80,7 @@ PUBLIC_UPLOAD_LIMIT_ENV = "PREPRESS_PUBLIC_UPLOAD_LIMIT_MB"
 # Files the customer has ALREADY put on the shop's own file server (an FTP the shop publishes,
 # a share) are checked by PATH instead of being uploaded again — the way round a CDN's upload cap.
 # `;`-separated roots; the pasted path is resolved FIRST and then tested against a root, so `..`
-# cannot walk out, and nothing outside the roots is even tested for existence. Unset: no path check.
+# cannot walk out, and nothing whose TEXT lies outside the roots is even tested for existence. Unset: no path check.
 PATH_ROOTS_ENV = "PREPRESS_PATH_ROOTS"
 # What the page tells a customer about where to put the file. Either a whole sentence in
 # PREPRESS_PATH_HINT, or just the FTP host and login in ASCII — the sentence is then written here,
@@ -231,9 +234,15 @@ def resolve_shared_path(raw_path):
     if "://" in text:                                # ftp://host/dir/file → dir/file
         text = text.split("://", 1)[1].split("/", 1)[1] if "/" in text.split("://", 1)[1] else ""
     text = text.replace("/", "\\")
-    roots = [os.path.realpath(root) for root in _path_roots()]
+    configured = [os.path.normpath(root) for root in _path_roots()]
+    roots = [os.path.realpath(root) for root in configured]
     candidates = [text] + [os.path.join(root, text.lstrip("\\")) for root in roots]
     for candidate in candidates:
+        # By its text first: realpath OPENS the path, and a pasted \\host\x would make this server log
+        # in to a machine the customer chose (audit U1, 2026-11-13).
+        typed = os.path.normcase(os.path.normpath(candidate))
+        if not any(typed.startswith(os.path.normcase(root) + os.sep) for root in configured + roots):
+            continue
         try:
             real = os.path.realpath(candidate)
         except (OSError, ValueError):
@@ -412,6 +421,8 @@ def _client_ip():
 @app.before_request
 def _start_clock():
     request._started = time.perf_counter()
+    if request.mimetype == "application/json" and (request.content_length or 0) > JSON_BODY_MAX_BYTES:
+        return jsonify({"error": "Request body too large."}), 413
 
 
 @app.after_request
@@ -1022,7 +1033,8 @@ def api_design_save(token):
     except ValueError:
         elements = []
     rasters = {}
-    for element in elements if isinstance(elements, list) else []:
+    counted = elements if isinstance(elements, list) and len(elements) <= design.MAX_RASTER_ELEMENTS else []
+    for element in counted:
         upload = request.files.get(f"element-{element.get('id')}") if isinstance(element, dict) else None
         if upload is not None:
             raster = upload.read(DESIGN_ARTWORK_MAX_BYTES + 1)

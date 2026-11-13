@@ -13,6 +13,11 @@ import math
 from . import from_template, shape
 
 DEFAULT_NOTE = "projekt z edytora online"
+# The editor's own ceiling (designer.js RASTER_MAX_EDGE, squared). Checked from the header, before a
+# pixel is decoded: a 1 MB PNG can declare 400 megapixels and cost over a gigabyte to open, and the
+# save needs no login (audit U3, 2026-11-13).
+MAX_RASTER_PIXELS = 8192 * 8192
+MAX_RASTER_ELEMENTS = 40
 
 
 class DesignError(ValueError):
@@ -51,6 +56,8 @@ def compose_pdf(template, artwork_png, note=DEFAULT_NOTE, elements=None, rasters
         grid_w, grid_h = image.getSize()
     except Exception as error:                      # noqa: BLE001 — a bad upload is an ANSWER here
         raise DesignError("The design's picture could not be read; save it again.") from error
+    if grid_w * grid_h > MAX_RASTER_PIXELS:
+        raise DesignError("The design's picture is larger than the editor makes; save it again.")
 
     width_pt, height_pt = page_w * from_template.PT_PER_MM, page_h * from_template.PT_PER_MM
     buffer = io.BytesIO()
@@ -75,7 +82,7 @@ def _placements(elements, rasters):
     """[(element, ImageReader), …] in drawing order when every element has a usable raster; else []."""
     from reportlab.lib.utils import ImageReader
 
-    if not elements or not rasters:
+    if not elements or not rasters or len(elements) > MAX_RASTER_ELEMENTS:
         return []
     placed = []
     for element in elements:
@@ -84,12 +91,14 @@ def _placements(elements, rasters):
         try:
             geometry = [float(element[key]) for key in ("x", "y", "scale", "rotation", "width", "height")]
             raster = ImageReader(io.BytesIO(rasters[element["id"]]))
-            raster.getSize()
+            raster_w, raster_h = raster.getSize()
         except (KeyError, TypeError, ValueError):
             return []
         except Exception:                           # noqa: BLE001 — an unreadable raster: the canvas instead
             return []
         if not all(math.isfinite(value) for value in geometry) or geometry[4] <= 0 or geometry[5] <= 0:
+            return []
+        if raster_w * raster_h > MAX_RASTER_PIXELS:
             return []
         placed.append((element, raster))
     return placed
