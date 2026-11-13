@@ -3,8 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  INVALIDATED_LOG, ITEMS_SEP, columnIndex_, notifyKey_, isTicked, num_, shiftYmd, groupKey, rowNumbersInGroup,
-  rowsInGroup, itemId, warehouseDay, rowsRangeLabel, addressesIn, recipientsOf, afterLastInvalidation, sentItemSet,
+  INVALIDATED_LOG, ITEMS_SEP, columnIndex_, notifyKey_, isTicked, num_, daysOr_, shiftYmd, groupKey, rowNumbersInGroup,
+  rowsInGroup, itemId, warehouseDay, workingDaysBefore, orderRow, replyToOf, shippingLine,
+  rowsRangeLabel, addressesIn, recipientsOf, afterLastInvalidation, sentItemSet,
   addressFor, renderMail, groupForDigest, renderDigest, buildIcs, ymd_,
   ymdToDmy, easterYmd, polishHolidays, isWorkingDay, monthsBetween, buildCalendarHtml, plural_,
 } = require('./Code.js');
@@ -83,10 +84,16 @@ assert.equal(isTicked('TRUE'), true);
 assert.equal(isTicked(false), false);
 assert.equal(isTicked(''), false);
 assert.equal(num_(''), 0); assert.equal(num_('3'), 3); assert.equal(num_('x'), 0);
+// Lead-time defaults (customer 19.10: 1 day after, never before): empty → default, a typed 0 stays 0.
+assert.equal(daysOr_('', 1), 1); assert.equal(daysOr_(undefined, 1), 1);
+assert.equal(daysOr_(0, 1), 0); assert.equal(daysOr_(3, 1), 3);
 
 // 4. Recipients: PM only, warehouse is not on the per-order mail.
 assert.deepEqual(recipientsOf(fjordRows[0], idx), ['commit.shyeline+ola@gmail.com']);
 assert.deepEqual(addressesIn('Ola Berg // ola@x.no // +47 999; OLA@x.no, lager@x.no'), ['ola@x.no', 'lager@x.no']);
+// Replies go to the Ambient Hub project leader (customer 19.10); no address in LEADER → no reply-to.
+assert.equal(replyToOf(fjordRows[0], idx), 'commit.shyeline+leader@gmail.com');
+assert.equal(replyToOf(fjordRows[1], idx), '');
 
 // 5. Dedupe per ITEM, invalidation markers, test redirect.
 const both = ['a@x.no', 'b@x.no'];
@@ -113,9 +120,39 @@ assert.equal(mail.subject, 'Your order is on its way – Harbour Fest');
 assert.ok(mail.html.includes('Dear Kari Moen'));
 assert.ok(mail.html.includes('Round table 200x130') && mail.html.includes('Step-style shelving unit'));
 assert.ok(mail.html.includes('19.09.2026') && mail.html.includes('01.09.2026'));
-assert.ok(mail.html.includes('DHL, tracking 00340434161094012345'));
+const dhlUrl = 'https://www.dhl.com/pl-en/home/tracking.html?tracking-id=00340434161094012345';
+assert.ok(mail.html.includes(`DHL, tracking <a href="${dhlUrl}">00340434161094012345</a>`), 'DHL number is a tracking link');
+assert.ok(mail.text.includes(`DHL, tracking 00340434161094012345: ${dhlUrl}`));
 assert.ok(mail.html.includes('https://example.com/offer/HF-2026-004'));
 assert.ok(mail.html.includes('Planned delivery') && !mail.html.includes('Lead time'), 'transport shows the delivery date');
+
+// 6a. The carrier decides the Shipping line (logistics 07.10, customer 19.10).
+const withShipping = (carrier, tracking) => {
+  const r = harbour.slice(); r[idx.carrier] = carrier; r[idx.tracking] = tracking; return shippingLine(r, idx);
+};
+const driver = withShipping('own transport', 'Adam Wałek\n+48 600 000 000\nWX 12345');
+assert.ok(driver.html.includes('Own transport, driver:<br>Adam Wałek<br>+48 600 000 000<br>WX 12345'), 'driver details, one per line');
+const sheetLink = 'https://docs.google.com/spreadsheets/d/abc/edit';
+assert.equal(withShipping('EXCEL', sheetLink).html, `<a href="${sheetLink}">Parcel list</a>`, 'any carrier: link to the parcel-list sheet');
+assert.equal(withShipping('EXCEL', ''), null, 'no link yet → no Shipping line');
+// Order-level details may sit on any one row of the order (Shyeline's demo test 21.10).
+const blankRow = harbour.slice(); blankRow[idx.carrier] = ''; blankRow[idx.tracking] = '';
+const filledRow = harbour.slice(); filledRow[idx.carrier] = 'Own transport'; filledRow[idx.tracking] = 'Adam\n+48 600';
+assert.equal(orderRow([blankRow, filledRow])[idx.tracking], 'Adam\n+48 600');
+assert.equal(orderRow([filledRow, blankRow])[idx.carrier], 'Own transport', 'first filled wins');
+assert.ok(renderMail([blankRow, filledRow], idx, 'transport', fmt).html.includes('Own transport, driver:<br>Adam<br>+48 600'));
+assert.deepEqual(withShipping('Spedycja', 'anything'), { text: 'SUPPLY CHAIN', html: 'SUPPLY CHAIN' }, 'freight shows only the label');
+assert.equal(withShipping('DPD', '12345678901234').html,
+  'DPD, tracking <a href="https://tracktrace.dpd.com.pl/parcelDetails?typ=1&amp;p1=12345678901234">12345678901234</a>');
+assert.ok(withShipping('inpost', '6200').html.includes('href="https://inpost.pl/sledzenie-przesylek?number=6200"'), 'carrier match ignores case');
+assert.ok(withShipping('UPS', '1Z999').html.includes('href="https://www.ups.com/track?loc=en_US&amp;tracknum=1Z999"'));
+assert.ok(withShipping('FedEx', '7712').html.includes('href="https://www.fedex.com/fedextrack/?trknbr=7712"'));
+assert.equal(withShipping('Schenker', 'X1').text, 'Schenker, tracking X1', 'unknown carrier keeps the old wording');
+assert.equal(withShipping('DHL', '').text, 'DHL');
+assert.equal(withShipping('', ''), null);
+// A size typed on several lines (Alt+Enter) stays on several lines in the HTML mail.
+const multiLine = harbour.slice(); multiLine[idx.size] = '40x40x200 – 2 pcs\n40x40x180 – 1 pc';
+assert.ok(renderMail([multiLine], idx, 'transport', fmt).html.includes('40x40x200 – 2 pcs<br>40x40x180 – 1 pc'));
 
 // 6b. Produkcja mail: "Lead time" range replaces "Planned delivery", inline calendar follows.
 const lead = { start: '20260929', end: '20261003', today: '20260917' };
@@ -165,22 +202,28 @@ assert.equal(items.length, 2, 'both Harbour rows ship on 16.09; Fjord ships 29.0
 const digest = renderDigest(items, idx, fmt, '16.09.2026');
 assert.equal(digest.subject, 'Upcoming deliveries – 16.09.2026');
 assert.ok(!/dispatched|shipped/i.test(digest.text), 'the warehouse is told before dispatch, so the mail must not say the goods left');
-for (const h of ['Item', 'Size / weight', 'PM', 'PM e-mail', 'Producer', 'Delivery']) assert.ok(digest.html.includes(`<th align="left">${h}</th>`), h);
+for (const h of ['Item', 'Size / weight', 'PM', 'PM e-mail', 'Delivery']) assert.ok(digest.html.includes(`<th align="left">${h}</th>`), h);
 assert.ok(digest.html.includes('Kari Moen') && digest.html.includes('Round table 200x130'));
 assert.ok(!digest.html.includes('Ola Berg'), 'Fjord did not ship that day');
-assert.ok(digest.html.includes('Box Demo'));
+assert.ok(!digest.html.includes('Producer') && !digest.html.includes('Box Demo'), 'the recipient\'s warehouse never sees the producer');
+const toldSize = items[0].slice(); toldSize[idx.warehouseSize] = '2 pallets, 120 kg';
+const sizedDigest = renderDigest([toldSize, items[1]], idx, fmt, '16.09.2026').html;
+assert.ok(sizedDigest.includes('2 pallets, 120 kg') && !sizedDigest.includes('1 pallet – approx. 60 kg'), 'warehouse figure wins');
+assert.ok(sizedDigest.includes('100x125x80 – 4 pcs'), 'empty warehouse figure → the estimate');
 assert.equal(groupForDigest(rows, idx, shippedOn('20260929')).get('commit.shyeline+magazyn@gmail.com').length, 3, 'all three Fjord rows ship 29.09');
 assert.equal(groupForDigest(rows, idx, () => false).size, 0, 'nothing shipped → no digest');
 
-// 8c. The warehouse is told on its own date; without one, the ship date stands in.
+// 8c. The warehouse is told on its own date; without one, two working days before delivery.
 const dayOf = d => ymd_(d);
-assert.equal(ymd_(harbour[idx.shipped]), '20260916', 'Harbour ships on the 16th…');
-assert.equal(warehouseDay(harbour, idx, dayOf), '20260914', '…but the warehouse is told on the 14th');
+assert.equal(warehouseDay(harbour, idx, dayOf), '20260914', 'own "Data maila do magazynu" wins');
 const noWarehouseDate = harbour.slice();
 noWarehouseDate[idx.warehouseDate] = '';
-assert.equal(warehouseDay(noWarehouseDate, idx, dayOf), '20260916', 'no warehouse date → ship date stands in');
+assert.equal(ymd_(harbour[idx.delivery]), '20260919', 'Harbour is delivered on Saturday 19.09…');
+assert.equal(warehouseDay(noWarehouseDate, idx, dayOf), '20260917', '…so the warehouse hears on Thursday 17.09');
+assert.equal(workingDaysBefore('20261005', 2), '20261001', 'Monday delivery → Thursday, the weekend does not count');
+assert.equal(workingDaysBefore('20261112', 2), '20261109', '11.11 is a Polish holiday and does not count');
 const noDates = noWarehouseDate.slice();
-noDates[idx.shipped] = '';
+noDates[idx.delivery] = '';
 assert.equal(warehouseDay(noDates, idx, dayOf), '', 'no dates → never in a digest');
 
 // 8b. Polish plurals for the Log comments.
@@ -193,6 +236,9 @@ assert.equal(plural_(0, 'pozycja', 'pozycje', 'pozycji'), '0 pozycji');
 
 // 9. A sheet missing a required header fails loudly, not silently.
 assert.throws(() => columnIndex_(headers.filter(h => h !== 'Stan')), /Missing header\(s\): Stan/);
+// A header with a hint on its second line still matches by its first line.
+const hinted = headers.map(h => (h === 'Numer śledzenia' ? 'Numer śledzenia\n\\ dane śledzenia' : h));
+assert.equal(columnIndex_(hinted).tracking, idx.tracking);
 assert.deepEqual(rowsRangeLabel([6, 7]), { range: '6:7', label: 'rows 6–7' });
 
 console.log('sheet-notify: all checks passed');

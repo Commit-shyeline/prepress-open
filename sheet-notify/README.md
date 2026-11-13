@@ -60,15 +60,18 @@ and the mail goes out afresh. Deleting an already-empty cell does nothing.
 
 ## The warehouse digest
 
-The address in `E-mail magazyn` never receives per-order mails. Once a day at
+The address in `E-mail magazyn odbiorcy` never receives per-order mails. Once a day at
 `DIGEST_HOUR`, `sendDailyDigest` collects every row whose **`Data maila do
 magazynu`** is today — regardless of `Stan` or of any mail — and sends each
-warehouse address one table: item, size, PM, PM e-mail, producer, delivery
-date. A row without that date falls back to `Data wysyłki z Polski`.
+warehouse address one table: item, size, PM, PM e-mail, delivery date. The
+size comes from `wymiar i waga paczki - uprzedzenie magazynu odbiorcy` when it
+is filled, otherwise from the estimate the client sees. A row
+without that date is announced `WAREHOUSE_NOTICE_WORKING_DAYS` (2) working
+days before `Data dostawy do klienta`; weekends and Polish holidays don't count.
 
-The warehouse has its own date because it is told days before the goods
-leave, so it can prepare: ship Friday, tell the warehouse Wednesday, deliver
-Monday. The digest is idempotent per day and address.
+The warehouse is the recipient's, not the sender's: the mail tells it what is
+coming so it can line up people. That is also why it never shows the
+producer. The digest is idempotent per day and address.
 To test without waiting, run `sendDigestNow()` from the editor; it ignores
 the "already sent today" check.
 
@@ -96,6 +99,9 @@ Apps Script project until you delete it there.
   leave from the company domain rather than the account's own address. Leave
   `''` to use the account's address.
 - Mails are sent through Gmail (`GmailApp`), so copies land in Sent.
+- Replies: the first address in `LEADER` (the person running the project on
+  the sender's side) becomes the reply-to, so a client's answer reaches them
+  rather than the sending mailbox.
 
 ## The `Log` tab
 
@@ -127,10 +133,18 @@ naturally too.
 
 ## Adjusting
 
-- Column names: edit the strings in `COL`. Matching is by header text,
-  case-insensitive.
+- Column names: edit the strings in `COL`. Matching is by the header's first
+  line, case-insensitive, so a second line can carry a hint for the team.
+- Order-level details (carrier, tracking, address, dates, offer, LEADER) are
+  taken from the first row of the order that has them filled.
 - Which statuses send, and their wording: `NOTIFY`.
-- Digest hour: `DIGEST_HOUR`. Sender display name: `COMPANY_NAME`.
+- Digest hour: `DIGEST_HOUR`. Sender display name: `SENDER_NAME`; sign-off
+  under each mail: `COMPANY_NAME`.
+- What the Shipping line says per carrier: `CARRIERS` — a tracking link, a
+  link to a parcel-list sheet, the driver's details, or a fixed label.
+  `setup()` turns `Przewoźnik dostawy` into a dropdown of those names.
+- Lead-time window when `Dni przed` / `Dni po` are empty:
+  `DEFAULT_DAYS_BEFORE` / `DEFAULT_DAYS_AFTER`.
 
 ## Check
 

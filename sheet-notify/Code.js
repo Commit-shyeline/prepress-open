@@ -15,8 +15,10 @@
  *    date), transport and Delivered. Every other status is silent.
  *  - Rows are grouped by order code + PM address, so each PM receives only
  *    their own items. The warehouse address gets nothing per order; it gets
- *    one digest per day listing the rows whose "Data maila do magazynu" is
- *    that day, usually a few days before they ship.
+ *    one digest per day listing the rows it is told about that day: their
+ *    "Data maila do magazynu", or by default two working days before delivery.
+ *  - The Shipping line follows the carrier (CARRIERS); a client's reply goes to
+ *    the address in "LEADER", the Ambient Hub person running the project.
  *  - "Wysłano" records who received what. Clearing it forgets those
  *    recipients; tick "Zatwierdź" again to send again.
  *  - TEST_RECIPIENT, when set, redirects every mail there with the real
@@ -29,8 +31,16 @@
 
 const SHEET_NAME = 'Projekty';
 const LOG_SHEET_NAME = 'Log';
-const COMPANY_NAME = 'Ambient Hub';
+const COMPANY_NAME = 'Ambient Hub';                 // the sign-off under every mail
+const SENDER_NAME = 'Ambient Hub Project Status';   // the sender's name in the recipient's inbox
 const DATE_FMT = 'dd.MM.yyyy';
+// Lead-time window around "Data dostawy do klienta" when the row leaves "Dni przed"/"Dni po"
+// empty: customer 19.10 — "1 dzień po, nigdy przed".
+const DEFAULT_DAYS_BEFORE = 0;
+const DEFAULT_DAYS_AFTER = 1;
+// The recipient's warehouse hears this many working days before delivery when the row has
+// no "Data maila do magazynu" (customer 07.10: "1–2 dni przed"; Shyeline 08.10: two).
+const WAREHOUSE_NOTICE_WORKING_DAYS = 2;
 const DIGEST_HOUR = 17;      // local hour at which the warehouse digest goes out
 const SENDER_ALIAS = '';     // a verified "send as" address in Gmail, or '' for the account's own
 const TEST_RECIPIENT = '';   // e.g. 'commit.shyeline@gmail.com' during the trial week; '' = live
@@ -57,11 +67,11 @@ const COL = {
   client:         'Klient',
   pm:             'PM',
   pmEmail:        'E-mail PM',
-  warehouseEmail: 'E-mail magazyn',
+  warehouseEmail: 'E-mail magazyn odbiorcy',
+  warehouseSize:  'wymiar i waga paczki - uprzedzenie magazynu odbiorcy',
   project:        'Projekt',
   orderCode:      'Nr zlecenia',
   product:        'Produkt',
-  producer:       'Producent',
   carrier:        'Przewoźnik dostawy',
   address:        'Adres dostawy',
   size:           'Wymiar i waga (szacunek)',
@@ -69,6 +79,25 @@ const COL = {
   offer:          'Link do oferty',
   daysBefore:     'Dni przed',
   daysAfter:      'Dni po',
+  leader:         'LEADER',
+};
+
+// "Przewoźnik dostawy" → what the client sees on the Shipping line, and the dropdown setup()
+// puts on that column (logistics 07.10, customer 19.10). What "Numer śledzenia" holds:
+//   track  — a tracking number, appended to this tracking-page URL ('' = shown as plain text)
+//   list   — a link to the Google Sheet with the parcel list
+//   driver — the driver's name, phone, e-mail and plate, one per line
+//   label  — nothing; the client sees this fixed text
+const CARRIERS = {
+  'DHL':           { track: 'https://www.dhl.com/pl-en/home/tracking.html?tracking-id=' },
+  'DPD':           { track: 'https://tracktrace.dpd.com.pl/parcelDetails?typ=1&p1=' },
+  'InPost':        { track: 'https://inpost.pl/sledzenie-przesylek?number=' },
+  // FedEx and UPS: customer 28.10. Formats from carrier-list sites, not the carriers' docs — check on the first real parcel.
+  'FedEx':         { track: 'https://www.fedex.com/fedextrack/?trknbr=' },
+  'UPS':           { track: 'https://www.ups.com/track?loc=en_US&tracknum=' },
+  'EXCEL':         { list: true },
+  'Own transport': { driver: true },
+  'Spedycja':      { label: 'SUPPLY CHAIN' },
 };
 
 // The statuses that mail the PM. Anything else stays silent.
@@ -119,6 +148,12 @@ function setup() {
   const idx = columnIndex_(sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]);
   if (idx.approve >= 0 && sheet.getMaxRows() > 1) {
     sheet.getRange(2, idx.approve + 1, sheet.getMaxRows() - 1).insertCheckboxes();
+  }
+  if (idx.carrier >= 0 && sheet.getMaxRows() > 1) {
+    // Invalid allowed (with Sheets' warning mark): a carrier outside the list still mails, as "carrier, tracking X".
+    const carrierList = SpreadsheetApp.newDataValidation()
+      .requireValueInList(Object.keys(CARRIERS), true).setAllowInvalid(true).build();
+    sheet.getRange(2, idx.carrier + 1, sheet.getMaxRows() - 1).setDataValidation(carrierList);
   }
   ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('onSheetEdit').forSpreadsheet(ss).onEdit().create();
@@ -276,16 +311,17 @@ function sendGroup_(sheet, rowNumber, groupRows, rows, idx, key, status, log, tz
   link = rowsLink_(sheet, pendingRows);
 
   const fmtDate = d => (d instanceof Date ? Utilities.formatDate(d, tz, DATE_FMT) : String(d || ''));
+  const order = orderRow(group);
 
   // Produkcja carries the realisation window — "Dni przed" … "Dni po" around the
   // delivery date — as a "Lead time" line, an inline calendar and an .ics.
   let leadTime = null;
-  const delivery = cell_(row, idx, 'delivery');
+  const delivery = cell_(order, idx, 'delivery');
   if (status === 'Produkcja' && delivery instanceof Date) {
     const day = Utilities.formatDate(delivery, tz, 'yyyyMMdd');
     leadTime = {
-      start: shiftYmd(day, -num_(cell_(row, idx, 'daysBefore'))),
-      end: shiftYmd(day, num_(cell_(row, idx, 'daysAfter'))),
+      start: shiftYmd(day, -daysOr_(cell_(order, idx, 'daysBefore'), DEFAULT_DAYS_BEFORE)),
+      end: shiftYmd(day, daysOr_(cell_(order, idx, 'daysAfter'), DEFAULT_DAYS_AFTER)),
       today: Utilities.formatDate(new Date(), tz, 'yyyyMMdd'),
     };
   }
@@ -297,7 +333,7 @@ function sendGroup_(sheet, rowNumber, groupRows, rows, idx, key, status, log, tz
     attachments.push(Utilities.newBlob(ics, 'text/calendar', 'realisation.ics'));
   }
 
-  deliver_(recipients, mail.subject, mail.text, mail.html, attachments);
+  deliver_(recipients, mail.subject, mail.text, mail.html, attachments, replyToOf(order, idx));
   statusCell.setNote('');
   const items = group.map(r => text_(r, idx, 'product'));
   logLine_(log, [new Date(), key, status, recipients.join(', '), group.length, link,
@@ -353,9 +389,9 @@ function digestLocked_(now, force) {
   const fmtDate = d => (d instanceof Date ? Utilities.formatDate(d, tz, DATE_FMT) : String(d || ''));
   const dateLabel = Utilities.formatDate(now, tz, DATE_FMT);
 
-  const shippedToday = row => warehouseDay(row, idx, dayOf) === today;
+  const toldToday = row => warehouseDay(row, idx, dayOf) === today;
 
-  groupForDigest(rows, idx, shippedToday).forEach((items, address) => {
+  groupForDigest(rows, idx, toldToday).forEach((items, address) => {
     if (!force && alreadyDigested.has(address)) return;
     const mail = renderDigest(items, idx, fmtDate, dateLabel);
     deliver_([address], mail.subject, mail.text, mail.html, []);
@@ -364,11 +400,13 @@ function digestLocked_(now, force) {
   });
 }
 
-// Sends through Gmail so a copy lands in Sent. Honours the test redirect and the sender alias.
-function deliver_(recipients, subject, text, html, attachments) {
+// Sends through Gmail so a copy lands in Sent. Honours the test redirect, the sender alias and,
+// when given, the reply-to address (customer 19.10: replies go to the project leader).
+function deliver_(recipients, subject, text, html, attachments, replyTo) {
   const addressed = addressFor(recipients, subject, TEST_RECIPIENT);
-  const options = { htmlBody: html, name: COMPANY_NAME, attachments };
+  const options = { htmlBody: html, name: SENDER_NAME, attachments };
   if (SENDER_ALIAS) options.from = SENDER_ALIAS;
+  if (replyTo) options.replyTo = replyTo;
   GmailApp.sendEmail(addressed.to, addressed.subject, text, options);
 }
 
@@ -449,7 +487,8 @@ function rowsLink_(sheet, groupRows) {
 // Everything below takes plain arrays/strings and runs in Node for the test.
 
 function columnIndex_(headers) {
-  const norm = h => String(h || '').trim().toLowerCase();
+  // Only the header's first line counts, so a hint on a second line ("Numer śledzenia" ⏎ "\ dane śledzenia") is fine.
+  const norm = h => String(h || '').split(/\r?\n/)[0].trim().toLowerCase();
   const pos = headers.map(norm);
   const idx = {};
   for (const role in COL) idx[role] = pos.indexOf(norm(COL[role]));
@@ -477,6 +516,11 @@ function text_(row, idx, role) {
 function num_(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+
+// An empty cell takes the default; a typed 0 stays 0.
+function daysOr_(v, fallback) {
+  return v === '' || v == null ? fallback : num_(v);
 }
 
 function isTicked(v) {
@@ -528,12 +572,24 @@ function itemId(row, idx) {
   return text_(row, idx, 'product').toLowerCase();
 }
 
-// The day the warehouse is told about a row. It is told on its OWN date, usually
-// a few days before the goods leave, so it can prepare for the delivery
-// (customer, 2026-09-21: ship Friday → warehouse told Wednesday → delivery
-// Monday). A row with no such date falls back to the ship date.
+// The day the recipient's warehouse is told about a row, so it can line up people for
+// the delivery: the row's own "Data maila do magazynu", otherwise
+// WAREHOUSE_NOTICE_WORKING_DAYS working days before "Data dostawy do klienta".
 function warehouseDay(row, idx, dayOf) {
-  return dayOf(cell_(row, idx, 'warehouseDate')) || dayOf(cell_(row, idx, 'shipped'));
+  const ownDay = dayOf(cell_(row, idx, 'warehouseDate'));
+  if (ownDay) return ownDay;
+  const deliveryDay = dayOf(cell_(row, idx, 'delivery'));
+  return deliveryDay ? workingDaysBefore(deliveryDay, WAREHOUSE_NOTICE_WORKING_DAYS) : '';
+}
+
+// 'yyyyMMdd' minus n working days (weekends and Polish holidays skipped).
+function workingDaysBefore(ymd, n) {
+  let day = ymd;
+  while (n > 0) {
+    day = shiftYmd(day, -1);
+    if (isWorkingDay(day, polishHolidays(+day.slice(0, 4)))) n--;
+  }
+  return day;
 }
 
 // A1 row range and a human label for a set of sheet row numbers.
@@ -555,6 +611,41 @@ function addressesIn(text) {
 // Per-order mails go to the PM only; the warehouse gets the daily digest.
 function recipientsOf(row, idx) {
   return addressesIn(text_(row, idx, 'pmEmail'));
+}
+
+// One row standing for the whole order: each cell is the first non-empty value among the
+// order's rows, so a detail typed on any one row (tracking, driver, address) reaches the mail.
+function orderRow(group) {
+  const width = Math.max(...group.map(r => r.length));
+  return Array.from({ length: width }, (_, i) => {
+    const filled = group.find(r => r[i] !== '' && r[i] != null);
+    return filled ? filled[i] : '';
+  });
+}
+
+// The project leader's address from "LEADER", or '' when the cell holds no address.
+function replyToOf(row, idx) {
+  return addressesIn(text_(row, idx, 'leader'))[0] || '';
+}
+
+// The Shipping line as { text, html }, or null when there is nothing to say.
+// Carriers outside CARRIERS keep the old "carrier, tracking X" wording.
+function shippingLine(row, idx) {
+  const carrier = text_(row, idx, 'carrier');
+  const detail = text_(row, idx, 'tracking');
+  if (!carrier && !detail) return null;
+  const key = Object.keys(CARRIERS).find(k => k.toLowerCase() === carrier.toLowerCase());
+  const plain = s => ({ text: s, html: htmlLines_(s) });
+  if (!key) return plain([carrier, detail && 'tracking ' + detail].filter(Boolean).join(', '));
+  const rule = CARRIERS[key];
+  const name = key;
+  if (rule.label) return plain(rule.label);
+  if (rule.list) return detail ? { text: `Parcel list: ${detail}`, html: `<a href="${esc_(detail)}">Parcel list</a>` } : null;
+  if (!detail) return plain(name);
+  if (rule.driver) return { text: `${name}, driver:\n${detail}`, html: `${esc_(name)}, driver:<br>${htmlLines_(detail)}` };
+  if (!rule.track) return plain(`${name}, tracking ${detail}`);
+  const url = rule.track + encodeURIComponent(detail);
+  return { text: `${name}, tracking ${detail}: ${url}`, html: `${esc_(name)}, tracking <a href="${esc_(url)}">${esc_(detail)}</a>` };
 }
 
 // Log entries after the most recent "(invalidated…)" marker; everything before
@@ -588,15 +679,22 @@ function esc_(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Escaped text with the cell's own line breaks (Alt+Enter) kept as <br>.
+function htmlLines_(s) {
+  return esc_(s).replace(/\r?\n/g, '<br>');
+}
+
 // leadTime = { start, end, today } as 'yyyyMMdd', only for the Produkcja mail:
 // it replaces "Planned delivery" with a "Lead time" range and adds the calendar.
 function renderMail(group, idx, status, fmtDate, leadTime) {
-  const first = group[0];
+  const first = orderRow(group);
   const n = NOTIFY[status];
   const pm = text_(first, idx, 'pm').split('//')[0].trim();
   const project = text_(first, idx, 'project');
   const client = text_(first, idx, 'client');
 
+  // [label, text, html] — html only where the value carries a link; the rest is escaped text.
+  const shipping = shippingLine(first, idx);
   const facts = [
     ['Project', project],
     ['Client', client],
@@ -604,8 +702,7 @@ function renderMail(group, idx, status, fmtDate, leadTime) {
     leadTime
       ? ['Lead time', `${ymdToDmy(leadTime.start)} – ${ymdToDmy(leadTime.end)}`]
       : ['Planned delivery', fmtDate(cell_(first, idx, 'delivery'))],
-    ['Shipping', [text_(first, idx, 'carrier'), text_(first, idx, 'tracking') && 'tracking ' + text_(first, idx, 'tracking')]
-      .filter(Boolean).join(', ')],
+    ['Shipping', shipping && shipping.text, shipping && shipping.html],
     ['Delivery address', text_(first, idx, 'address')],
   ].filter(([, v]) => v);
 
@@ -623,13 +720,13 @@ function renderMail(group, idx, status, fmtDate, leadTime) {
   <p>Dear ${esc_(pm || client)},</p>
   <p>${esc_(n.intro)}</p>
   <table cellpadding="6" style="border-collapse:collapse">
-    ${facts.map(([k, v]) => `<tr><td style="color:#666;padding-right:16px">${esc_(k)}</td><td><b>${esc_(v)}</b></td></tr>`).join('')}
+    ${facts.map(([k, v, html]) => `<tr><td style="color:#666;padding-right:16px">${esc_(k)}</td><td><b>${html || htmlLines_(v)}</b></td></tr>`).join('')}
     ${offer ? `<tr><td style="color:#666">Offer</td><td><a href="${esc_(offer)}">${esc_(offer)}</a></td></tr>` : ''}
   </table>${calendar}
   <h3 style="margin:20px 0 8px">Items</h3>
   <table cellpadding="6" style="border-collapse:collapse;border:1px solid #ddd">
     <tr style="background:#f3f3f3"><th align="left">Item</th><th align="left">Size / weight</th></tr>
-    ${items.map(([p, s]) => `<tr><td style="border-top:1px solid #eee">${esc_(p)}</td><td style="border-top:1px solid #eee">${esc_(s)}</td></tr>`).join('')}
+    ${items.map(([p, s]) => `<tr><td style="border-top:1px solid #eee">${htmlLines_(p)}</td><td style="border-top:1px solid #eee">${htmlLines_(s)}</td></tr>`).join('')}
   </table>
   <p style="margin-top:24px">Best regards,<br>${esc_(COMPANY_NAME)}</p>
 </div>`;
@@ -646,12 +743,12 @@ function renderMail(group, idx, status, fmtDate, leadTime) {
   return { subject, html, text };
 }
 
-// Rows for which shippedToday(row) holds, bucketed by warehouse address. A row
+// Rows for which isDue(row) holds, bucketed by warehouse address. A row
 // with two warehouse addresses lands in both.
-function groupForDigest(rows, idx, shippedToday) {
+function groupForDigest(rows, idx, isDue) {
   const byAddress = new Map();
   rows.forEach(row => {
-    if (!text_(row, idx, 'product') || !shippedToday(row)) return;
+    if (!text_(row, idx, 'product') || !isDue(row)) return;
     addressesIn(text_(row, idx, 'warehouseEmail')).forEach(a => {
       const k = a.toLowerCase();
       if (!byAddress.has(k)) byAddress.set(k, []);
@@ -664,13 +761,14 @@ function groupForDigest(rows, idx, shippedToday) {
 function renderDigest(items, idx, fmtDate, dateLabel) {
   const cols = [
     ['Item', r => text_(r, idx, 'product')],
-    ['Size / weight', r => text_(r, idx, 'size')],
+    // The warehouse's own figure when the team gave one, else the estimate the client sees.
+    ['Size / weight', r => text_(r, idx, 'warehouseSize') || text_(r, idx, 'size')],
     ['PM', r => text_(r, idx, 'pm').split('//')[0].trim()],
     ['PM e-mail', r => addressesIn(text_(r, idx, 'pmEmail')).join(', ')],
-    ['Producer', r => text_(r, idx, 'producer')],
     ['Delivery', r => fmtDate(cell_(r, idx, 'delivery'))],
   ];
-  // Sent on "Data maila do magazynu", days before dispatch, so it must not claim the goods have left.
+  // No producer: this goes to the RECIPIENT's warehouse, which must not see suppliers (customer 19.10).
+  // Sent days before dispatch, so it must not claim the goods have left.
   const subject = `Upcoming deliveries – ${dateLabel}`;
   const intro = 'The following items are scheduled for delivery to your warehouse. Please expect them on the delivery dates listed.';
 
@@ -680,7 +778,7 @@ function renderDigest(items, idx, fmtDate, dateLabel) {
   <p>${esc_(intro)}</p>
   <table cellpadding="6" style="border-collapse:collapse;border:1px solid #ddd">
     <tr style="background:#f3f3f3">${cols.map(([h]) => `<th align="left">${esc_(h)}</th>`).join('')}</tr>
-    ${items.map(r => `<tr>${cols.map(([, f]) => `<td style="border-top:1px solid #eee">${esc_(f(r))}</td>`).join('')}</tr>`).join('')}
+    ${items.map(r => `<tr>${cols.map(([, f]) => `<td style="border-top:1px solid #eee">${htmlLines_(f(r))}</td>`).join('')}</tr>`).join('')}
   </table>
   <p style="margin-top:24px">Best regards,<br>${esc_(COMPANY_NAME)}</p>
 </div>`;
@@ -830,8 +928,9 @@ function buildIcs(summary, startYmd, endYmd, description, uidSeed) {
 
 if (typeof module !== 'undefined') {
   module.exports = {
-    COL, NOTIFY, NO_EMAIL_LOG, INVALIDATED_LOG, DIGEST_KEY, ITEMS_SEP,
-    columnIndex_, notifyKey_, isTicked, num_, shiftYmd, groupKey, rowNumbersInGroup, rowsInGroup, itemId, warehouseDay,
+    COL, NOTIFY, CARRIERS, NO_EMAIL_LOG, INVALIDATED_LOG, DIGEST_KEY, ITEMS_SEP,
+    columnIndex_, notifyKey_, isTicked, num_, daysOr_, shiftYmd, groupKey, rowNumbersInGroup, rowsInGroup, itemId,
+    warehouseDay, workingDaysBefore, orderRow, replyToOf, shippingLine, htmlLines_,
     rowsRangeLabel, addressesIn, recipientsOf, afterLastInvalidation, sentItemSet,
     addressFor, renderMail, groupForDigest, renderDigest, buildIcs, ymd_,
     ymdToDmy, easterYmd, polishHolidays, isWorkingDay, monthsBetween, buildCalendarHtml, plural_,

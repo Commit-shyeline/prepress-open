@@ -287,6 +287,7 @@ def test_the_editor_on_a_sheet_has_no_3d_link_and_the_check_judges_at_full_size(
     assert saved.status_code == 200, saved.get_json()
     judged = client.post(f"/api/recheck/{saved.get_json()['held']}", data={}, content_type="multipart/form-data").get_json()
     assert judged["recognised"] is True and judged["template_token"] == token
+    assert judged["show_model"] is False    # no flag scene for a siatka without a model of its own
     assert judged["measured"]["min_dpi"] == pytest.approx(2.5, abs=0.1)
 
 
