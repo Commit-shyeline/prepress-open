@@ -548,6 +548,13 @@ def _has_model(token):
     return bool(path and os.path.isfile(path))
 
 
+def _shows_model(template):
+    """Whether /model/<token> is a true picture of this product. A sheet of panels has no 3D flag to
+    wear it — unless it has a model of its own; without one the flag-scene fallback put a balloon's
+    siatka on a flag on /sprawdz (2026-11-10)."""
+    return template.get("kind") != "sheet" or _has_model(template.get("token"))
+
+
 @app.route("/api/templates/<token>/model.glb")
 def api_template_model_file(token):
     """The template's 3D model. Revalidated on every load (ETag) rather than cached for a day: a
@@ -974,8 +981,7 @@ def design_page(token):
         return jsonify({"error": "Nie znamy takiego szablonu — odśwież stronę."}), 404
     return render_template("design.html", token=token, name=template.get("name") or token,
                            page_mm=template.get("page_mm") or [0, 0],
-                           # A sheet of panels has no 3D flag to wear it — unless it has a model of its own.
-                           show_model=template.get("kind") != "sheet" or _has_model(token),
+                           show_model=_shows_model(template),
                            return_url=_return_url(request.args.get("return")))
 
 
@@ -1330,6 +1336,7 @@ def _judge(data, filename, form, token=None):
                     "assumed_template": assumed,
                     "free_size": free_size,
                     "template_token": (stamp or {}).get("template"),
+                    "show_model": bool(template_record) and _shows_model(template_record),
                     # Every named separation the file draws, and which one was read as the knife,
                     # so the page can offer the pick. Sent whatever the material is.
                     "separations": facts.get("spot_names") or [],

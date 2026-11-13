@@ -533,7 +533,7 @@ function paint(entry) {
     }
     if (!front.template_token) paintSettings(entry);
     renderReport(entry, front, view.back);
-    if (front.template_token) showModel(front, view.back);
+    if (front.template_token && front.show_model) showModel(front, view.back);
 }
 
 function checksHtml(data) {
