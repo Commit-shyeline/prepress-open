@@ -14,6 +14,8 @@ generate to the rules agreed earlier. That ordering is the whole design:
 Every other marked line — crease, perforation, sleeve, sewing — is drawn too, in its own colour, as
 information. A customer who cannot see where the flag folds cannot keep their logo off the fold.
 """
+import math
+
 from . import lines, offset, shape
 
 PT_PER_MM = 72.0 / 25.4
@@ -51,7 +53,7 @@ def derive(template):
                "informational": [(o.get("type"), shape.deserialise(o))
                                  for o in outlines
                                  if o.get("type") in _INFORMATIONAL]}
-    notes.append(f"netto: z {len(cuts)} " + ("linii cięcia" if len(cuts) > 1 else "linii cięcia"))
+    notes.append(f"netto: z {len(cuts)} linii cięcia")
 
     # BRUTTO — drawn if the shop drew it, else the cut grown by the typed bleed.
     if marked.get("bleed"):
@@ -580,6 +582,26 @@ SPEC_CLEARANCE_CELLS = 4    # ~15 mm kept round the spec panel, as the outline-b
 SPEC_TOP_BAND_SHARE = 0.3   # the spec panel looks for room in the top 30 % of the sheet first
 
 
+def _clip_to_page(x0, y0, x1, y1, page_w, page_h):
+    """The part of a segment that lies on the page (Liang–Barsky), or None. A customer's PDF may draw
+    a line to a coordinate a billion millimetres away; walking it cell by cell would never end."""
+    if not all(math.isfinite(v) for v in (x0, y0, x1, y1)):
+        return None
+    dx, dy = x1 - x0, y1 - y0
+    enter, leave = 0.0, 1.0
+    for direction, room in ((-dx, x0), (dx, page_w - x0), (-dy, y0), (dy, page_h - y0)):
+        if direction == 0:
+            if room < 0:
+                return None
+        elif direction < 0:
+            enter = max(enter, room / direction)
+        else:
+            leave = min(leave, room / direction)
+    if enter > leave:
+        return None
+    return x0 + dx * enter, y0 + dy * enter, x0 + dx * leave, y0 + dy * leave
+
+
 def _ink_cells(pdf_bytes, page_w, page_h, page_index=0):
     """Which cells of a page grid a drawn path runs through: every painted subpath of the page — the
     reader behind the admin inspector, no size floor, so a cut, a fold, a centre line and the shop's
@@ -596,8 +618,12 @@ def _ink_cells(pdf_bytes, page_w, page_h, page_index=0):
         points = offset.flatten(subpath)
         if subpath.get("closed") and len(points) > 1:
             points.append(points[0])
-        for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        for start, end in zip(points, points[1:]):
             seen = True
+            on_page = _clip_to_page(*start, *end, page_w, page_h)
+            if on_page is None:
+                continue
+            x0, y0, x1, y1 = on_page
             steps = max(1, int(max(abs(x1 - x0) / cell_w, abs(y1 - y0) / cell_h) * 2))
             for step in range(steps + 1):
                 x, y = x0 + (x1 - x0) * step / steps, y0 + (y1 - y0) * step / steps
@@ -771,12 +797,6 @@ def face_areas_mm(box_mm, template, face=None):
         if face.get("safe_mm"):
             safe_area = tuple(float(v) for v in face["safe_mm"])
     return graphic, safe_area
-
-
-def pdfmetrics_string_width(text, font, size_pt):
-    from reportlab.pdfbase.pdfmetrics import stringWidth
-
-    return stringWidth(text, font, size_pt)
 
 
 FREE_BOX_GRID = 64            # cells per side when looking for the empty rectangle

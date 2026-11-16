@@ -285,6 +285,11 @@ class _Elided(dict):
         return "…"
 
 
+# What a mistyped template raises: a stray brace or a positional `{0}`, and a placeholder that reaches
+# INTO a value (`{dpi.x}`, `{dpi[0]}`), which no mapping can answer for.
+_TEMPLATE_ERRORS = (ValueError, IndexError, KeyError, AttributeError, TypeError)
+
+
 def render(code, values=None, overrides=None):
     """The text for one notice code, with its numbers filled in.
 
@@ -297,11 +302,11 @@ def render(code, values=None, overrides=None):
         return code
     try:
         return string.Formatter().vformat(template, (), _Safe(values or {}))
-    except (ValueError, IndexError):
+    except _TEMPLATE_ERRORS:
         fallback = DEFAULT_MESSAGES.get(code, code)
         try:
             return string.Formatter().vformat(fallback, (), _Safe(values or {}))
-        except (ValueError, IndexError):
+        except _TEMPLATE_ERRORS:
             return fallback
 
 
@@ -317,7 +322,7 @@ def render_label(code, overrides=None):
         return code
     try:
         return string.Formatter().vformat(template, (), _Elided())
-    except (ValueError, IndexError):
+    except _TEMPLATE_ERRORS:
         return template
 
 

@@ -11,6 +11,15 @@ PAGE_W, PAGE_H = 400.0, 300.0
 FACE = (100.0, 100.0, 200.0, 200.0)  # left, bottom, right, top, mm
 
 
+def test_a_segment_is_cut_to_the_page_before_it_is_walked():
+    clip = from_template._clip_to_page
+    assert clip(10.0, 10.0, 20.0, 30.0, PAGE_W, PAGE_H) == (10.0, 10.0, 20.0, 30.0), "inside: untouched"
+    assert clip(-1e12, 150.0, 1e12, 150.0, PAGE_W, PAGE_H) == (0.0, 150.0, PAGE_W, 150.0), "a runaway line: only its page part"
+    assert clip(-50.0, -10.0, 500.0, -10.0, PAGE_W, PAGE_H) is None, "wholly below the page"
+    assert clip(float("inf"), 0.0, 10.0, 10.0, PAGE_W, PAGE_H) is None
+    assert clip(float("nan"), 0.0, 10.0, 10.0, PAGE_W, PAGE_H) is None
+
+
 def empty_ink():
     """The page's ink grid with nothing drawn: INK_CELL_MM cells, rows up the page."""
     return [[False] * int(PAGE_W / from_template.INK_CELL_MM) for _ in range(int(PAGE_H / from_template.INK_CELL_MM))]

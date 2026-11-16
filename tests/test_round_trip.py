@@ -399,6 +399,8 @@ def test_a_partly_customised_install_still_makes_whole_sentences():
 
 def test_a_broken_custom_message_falls_back_instead_of_crashing():
     """An admin typo must not take the generator down."""
-    for bad in ("{unclosed", "{nonexistent_placeholder} left alone", "{0} positional"):
+    for bad in ("{unclosed", "{nonexistent_placeholder} left alone", "{0} positional",
+                "{panels.x} attribute", "{panels[0]} index", "{missing[key]} lookup"):
         text = messages.render("panelled", {"panels": 2}, {"panelled": bad})
         assert isinstance(text, str) and text
+        assert messages.render_label("panelled", {"panelled": bad})

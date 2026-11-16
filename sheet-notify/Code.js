@@ -254,8 +254,10 @@ function handleTicks_(e, sheet, idx, touched, singleCell, clearedSent) {
     if (done.has(pair)) continue;
     done.add(pair);
 
+    // A row with no product belongs to no group, and its tick must still go out.
+    const tickedRows = groupRows.length ? groupRows : [r];
     if (!status) {
-      writeColumn_(sheet, idx, 'approve', groupRows, false);
+      writeColumn_(sheet, idx, 'approve', tickedRows, false);
       const typed = text_(row, idx, 'status');
       sheet.getRange(r, idx.approve + 1).setNote(`Status „${typed}" nie wysyła maili. `
         + `Maile idą przy: ${Object.keys(NOTIFY).map(k => `„${k}"`).join(', ')}.`);
@@ -266,7 +268,7 @@ function handleTicks_(e, sheet, idx, touched, singleCell, clearedSent) {
     try {
       sheet.getRange(r, idx.approve + 1).setNote('');
       const outcome = sendGroup_(sheet, r, groupRows, rows, idx, key, status, log, tz, link);
-      writeColumn_(sheet, idx, 'approve', groupRows, false);
+      writeColumn_(sheet, idx, 'approve', tickedRows, false);
       if (outcome === 'dedupe') {
         logLine_(log, [new Date(), key, status, NOACTION_DEDUPE, groupRows.length, link,
           `Zaznaczono — nic nie wysłano: każdy adres w „E-mail PM" ma już mail o statusie „${text_(row, idx, 'status')}" `

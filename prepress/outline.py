@@ -43,7 +43,6 @@ but a cut line must never be taken from one.
 This reader samples the curve itself, stable from 64 samples per segment upward (checked at 8, 64, 256
 and 2048), so what is measured and what gets redrawn are the same geometry.
 """
-import math
 
 # A subpath smaller than this is furniture — a registration dot, a pole marker, a logo. The VENTO
 # templates carry a 30 x 400 mm sleeve marker that must not be offered as a candidate cut line.
@@ -381,17 +380,6 @@ def _bezier(start, control_one, control_two, end, t):
     d = t ** 3
     return (a * start[0] + b * control_one[0] + c * control_two[0] + d * end[0],
             a * start[1] + b * control_one[1] + c * control_two[1] + d * end[1])
-
-
-def perimeter_mm(segments, start):
-    """Rough path length, for telling a long thin marker from a real outline."""
-    total = 0.0
-    here = start
-    for segment in segments:
-        end = segment[1] if segment[0] == "l" else segment[3]
-        total += math.dist(here, end)
-        here = end
-    return total
 
 
 def _identity(obj):
