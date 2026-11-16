@@ -199,11 +199,15 @@ def _sheet_from_source(template, source, title=None):
     # (Shyeline 2026-10-18: "place the spec boxes above it"): the top band first, the whole page
     # when the band has no room, the outline boxes when the page has no paths at all.
     top_band = (0.0, page_h_mm * (1 - SPEC_TOP_BAND_SHARE), page_w_mm, page_h_mm)
-    free_box = (_free_rect_in(top_band, ink, page_w_mm, page_h_mm,
+
+    def free_of(grid):
+        return (_free_rect_in(top_band, grid, page_w_mm, page_h_mm,
                               clearance_cells=SPEC_CLEARANCE_CELLS, least_share=0.08)
-                or _free_rect_in((0.0, 0.0, page_w_mm, page_h_mm), ink, page_w_mm, page_h_mm,
-                                 clearance_cells=SPEC_CLEARANCE_CELLS, least_share=0.02)
-                or _free_box_mm(page_w_mm, page_h_mm, outlines, extra_boxes=_text_boxes_mm(source)))
+                or _free_rect_in((0.0, 0.0, page_w_mm, page_h_mm), grid, page_w_mm, page_h_mm,
+                                 clearance_cells=SPEC_CLEARANCE_CELLS, least_share=0.02))
+    free_box = free_of(ink) or _free_box_mm(page_w_mm, page_h_mm, outlines, extra_boxes=_text_boxes_mm(source))
+    if not page_only:
+        free_box = _off_the_pieces(free_box, ink, drawing, free_of, page_w_mm, page_h_mm)
     faces = _face_boxes_mm(template)
     with pikepdf.open(io.BytesIO(source)) as production:
         sheet = pikepdf.new()
@@ -463,6 +467,56 @@ def _outside_taken(ink, polygon_mm, page_w, page_h):
     cell_w, cell_h = page_w / columns, page_h / rows
     return [[ink[row][column] or not _inside_polygon(((column + 0.5) * cell_w, (row + 0.5) * cell_h), polygon_mm)
              for column in range(columns)] for row in range(rows)]
+
+
+def _off_the_pieces(free_box, ink, drawing, free_of, page_w, page_h):
+    """`free_box` moved off the pieces when it lies inside one. The ink grid holds a piece's EDGE only,
+    so on a printed sheet of sewn pieces the largest empty rectangle was the inside of the widest piece
+    and the spec panel was laid over it. Then the cuts plus bleed are filled in and the search is run
+    again — the usual share floors first, then any rectangle that still holds the smallest panel
+    block — and `free_box` is kept as it was when nothing outside the pieces holds one. A box already
+    clear of every piece is returned unchanged."""
+    from . import specblock
+
+    pieces = [offset.flatten(entry) for entry in drawing["brutto"] or drawing["netto"] if entry.get("closed")]
+    box = free_box or (0.0, 0.0, page_w, page_h)        # no box: specblock centres on the page
+    centre = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+    if not ink or not any(_inside_polygon(centre, piece) for piece in pieces):
+        return free_box
+    filled = _inside_taken(ink, pieces, page_w, page_h)
+    found = free_of(filled)
+    if found:
+        return found
+    largest = _free_rect_in((0.0, 0.0, page_w, page_h), filled, page_w, page_h, clearance_cells=SPEC_CLEARANCE_CELLS)
+    least_w = specblock.MIN_PANEL_WIDTH_MM / specblock.MAX_PANEL_SHARE_OF_SAFE
+    least_h = specblock.MIN_PANEL_WIDTH_MM * specblock.PANEL_ASPECT * specblock.BLOCK_HEIGHT_IN_PANELS
+    if largest and largest[2] - largest[0] >= least_w and largest[3] - largest[1] >= least_h:
+        return largest
+    return free_box
+
+
+def _inside_taken(ink, polygons_mm, page_w, page_h):
+    """A copy of the ink grid with every cell whose centre lies inside any of `polygons_mm` taken as well."""
+    import math
+
+    if not ink:
+        return ink
+    rows, columns = len(ink), len(ink[0])
+    cell_w, cell_h = page_w / columns, page_h / rows
+    taken = [list(row) for row in ink]
+    for polygon in polygons_mm:
+        # Scanline, even-odd like _inside_polygon: a sheet is ~300k cells, too many to test one by one.
+        edges = list(zip(polygon, polygon[1:] + polygon[:1]))
+        for row in range(rows):
+            y = (row + 0.5) * cell_h
+            crossings = sorted(x0 + (y - y0) * (x1 - x0) / (y1 - y0)
+                               for (x0, y0), (x1, y1) in edges if (y0 > y) != (y1 > y))
+            for enter, leave in zip(crossings[::2], crossings[1::2]):
+                # cells whose centre lies between the two crossings
+                for column in range(max(0, math.floor(enter / cell_w - 0.5) + 1),
+                                    min(columns, math.floor(leave / cell_w - 0.5) + 1)):
+                    taken[row][column] = True
+    return taken
 
 
 def _inside_polygon(point, polygon):

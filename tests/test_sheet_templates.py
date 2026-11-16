@@ -264,6 +264,30 @@ def test_the_free_box_is_the_largest_empty_rectangle():
     assert from_template._free_box_mm(1000, 1000, []) is None
 
 
+def test_the_spec_panel_leaves_a_piece_whose_inside_looked_empty():
+    """A printed sheet's piece is a path along its EDGE only, so its inside read as room and the panel was
+    laid over the widest piece. The pieces' cuts plus bleed are filled in, and a home already off them stays."""
+    from prepress import from_template, shape
+    page_w, page_h = 400, 1000
+    piece = shape.deserialise(_panel(20, 20, 260, 960))             # one tall piece down the left of a narrow sheet
+    ink = [[False] * 100 for _ in range(250)]                        # 4 mm cells
+    from_template._mark_boxes(ink, [(20, 20, 20, 980), (280, 20, 280, 980), (20, 20, 280, 20), (20, 980, 280, 980)],
+                              page_w, page_h)                         # only its outline is inked
+    drawing = {"brutto": [piece], "netto": [piece]}
+
+    def free_of(grid):
+        return from_template._free_rect_in((0, 0, page_w, page_h), grid, page_w, page_h,
+                                           clearance_cells=from_template.SPEC_CLEARANCE_CELLS)
+    inside = free_of(ink)
+    assert inside[0] >= 20 and inside[2] <= 280                       # today's search: inside the piece
+    home = from_template._off_the_pieces(inside, ink, drawing, free_of, page_w, page_h)
+    assert home[0] >= 280, home                                       # now: the free strip to its right
+    # with the share floors failing, a strip too narrow for the smallest panel block keeps today's home
+    assert from_template._off_the_pieces(inside, ink, drawing, lambda grid: None, page_w, page_h) == inside
+    beside = (300.0, 100.0, 390.0, 900.0)
+    assert from_template._off_the_pieces(beside, ink, drawing, free_of, page_w, page_h) == beside
+
+
 def test_a_bad_scale_is_refused(client):
     assert _save_sheet(client, scale=0).status_code == 400
     assert _save_sheet(client, scale="dziesięć").status_code == 400
