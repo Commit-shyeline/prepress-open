@@ -788,6 +788,24 @@ def test_admin_writes_are_refused_with_the_wrong_token(client):
     assert answer.status_code == 403
 
 
+def test_a_json_body_that_is_not_an_object_is_refused_not_crashed(client):
+    assert client.post("/api/admin/materials", json=["token"]).status_code == 403
+
+
+@pytest.mark.parametrize("scale", ["abc", 0.5, -2])
+def test_a_scale_that_is_not_a_whole_number_is_an_error_the_customer_reads(client, scale):
+    answer = client.post("/api/template", json={"items": [
+        {"material": BANNER["id"], "width": "1000", "height": "500", "scale": scale}]})
+    assert 400 <= answer.status_code < 500
+
+
+def test_a_forwarded_prefix_that_is_not_a_path_is_ignored(client):
+    hostile = '/x";alert(1);//'
+    body = client.get("/plik", headers={"X-Forwarded-Prefix": hostile}).get_data(as_text=True)
+    assert "alert(1)" not in body
+    assert 'const BASE = "";' in body
+
+
 def test_the_panel_is_DISABLED_when_no_token_is_configured(client, monkeypatch):
     """Fail closed. An unauthenticated panel that edits print rules must not be the fallback."""
     monkeypatch.delenv(app_module.ADMIN_TOKEN_ENV, raising=False)

@@ -151,8 +151,15 @@ def resolve(material, width_mm, height_mm, label="", scale=None):
         notices.append(messages.notice("panelled", panels=panels,
                                        roll=_mm(material["max_width_mm"])))
 
-    resolved_scale = int(scale) if scale else choose_scale(width_mm + 2 * bleed,
-                                                          height_mm + 2 * bleed)
+    if scale:
+        try:
+            resolved_scale = int(scale)
+        except (TypeError, ValueError):
+            resolved_scale = 0
+        if resolved_scale < 1:      # "abc", 0.5, -2: a 500 or a negative page otherwise
+            raise ItemError(messages.notice("not_a_number", value=scale))
+    else:
+        resolved_scale = choose_scale(width_mm + 2 * bleed, height_mm + 2 * bleed)
     if resolved_scale != 1:
         notices.append(messages.notice("scaled", scale=resolved_scale,
                                        netto_w=_mm(width_mm), netto_h=_mm(height_mm)))

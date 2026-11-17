@@ -5,7 +5,6 @@ whole design collapses into the filename-and-size guessing this project exists t
 
 Run: python3.13 -m pytest tests -q
 """
-import json
 import os
 import sys
 

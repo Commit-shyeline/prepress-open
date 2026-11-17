@@ -407,8 +407,6 @@ def _intrusion_regions(detail, px_per_mm, expected):
     logo dissolving into forty confetti boxes reads worse than one honest block. Adjacent marked
     tiles merge row-wise, then equal row-runs merge vertically.
     """
-    import numpy
-
     height_px, width_px = detail.shape
     depths = _ring_depths_mm(expected)
     ring_px = {side: int(round(mm * px_per_mm)) for side, mm in depths.items()}

@@ -97,8 +97,6 @@ def bare_perimeter(array, px_per_mm, polylines, bleed_mm, paper_min_channel):
     `SIDE_SAMPLE_SPACING_PX`, so the share is of the perimeter, as it says — a rectangle's was
     the share of its four corners.
     """
-    import numpy
-
     ink = (array < paper_min_channel).any(axis=2)
     height_px, width_px = ink.shape
     step_mm = max(bleed_mm, MIN_SAMPLE_STEP_PX / px_per_mm)

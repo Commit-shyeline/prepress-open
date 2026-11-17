@@ -126,6 +126,8 @@ def base_path():
     a mounted copy, then from the environment for a fixed deployment.
     """
     forwarded = (request.headers.get("X-Forwarded-Prefix") or "").strip() if request else ""
+    if not re.fullmatch(r"(/[\w.-]+)*/?", forwarded):   # it lands in links and unescaped header markup
+        forwarded = ""
     return (forwarded or os.environ.get(BASE_PATH_ENV) or "").rstrip("/")
 
 
@@ -331,24 +333,21 @@ def announce_visit(who, page):
     url = (os.environ.get(VISIT_WEBHOOK_ENV) or "").strip()
     if not url or not who:
         return
-    import time
     now = time.time()
     if now - _visit_last.get(who, 0) < VISIT_QUIET_MINUTES * 60:
         return
     _visit_last[who] = now
 
     def post():
-        import json as _json
         import urllib.request
         try:
-            body = _json.dumps({"event": "visit", "who": who, "page": page}).encode()
+            body = json.dumps({"event": "visit", "who": who, "page": page}).encode()
             request_ = urllib.request.Request(
                 url, data=body, headers={"Content-Type": "application/json"})
             urllib.request.urlopen(request_, timeout=5).close()
         except Exception as error:                  # noqa: BLE001 — never the customer's problem
             logger.warning("visit webhook failed: %s", error)
 
-    import threading
     threading.Thread(target=post, daemon=True).start()
 
 
@@ -450,8 +449,8 @@ def require_admin(view):
         expected = admin_token()
         if not expected:
             return jsonify({"error": f"Admin panel is disabled: set {ADMIN_TOKEN_ENV} and restart."}), 503
-        supplied = (request.headers.get("X-Admin-Token")
-                    or (request.get_json(silent=True) or {}).get("token", ""))
+        body = request.get_json(silent=True)
+        supplied = request.headers.get("X-Admin-Token") or (body.get("token", "") if isinstance(body, dict) else "")
         # Constant-time compare so a wrong token cannot be found a character at a time.
         import hmac
         if not hmac.compare_digest(str(supplied), expected):
@@ -1265,7 +1264,6 @@ def _judge(data, filename, form, token=None):
                 stamp = from_template.stamp_payload(printed)
                 assumed = False
             else:
-                tolerance = 3.0
                 # The NAME is the second witness: a file saved off our template at a drifted page
                 # size still says `80x240` in its name, and that names the template family.
                 named, stated = named_size.parse_mm(filename)

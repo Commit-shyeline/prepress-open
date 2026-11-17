@@ -130,7 +130,7 @@ def _page_with_three_placements():
     pdf.drawImage(image, 0, 0, width=200, height=100)
     pdf.restoreState()
 
-    form = pdf.beginForm("nested")
+    pdf.beginForm("nested")
     pdf.drawImage(image, 0, 0, width=200, height=100)
     pdf.endForm()
     pdf.saveState()
@@ -255,7 +255,7 @@ def test_live_text_not_a_font_resource_is_what_means_not_converted():
 def test_text_is_found_inside_a_form_xobject_too():
     """Illustrator nests artwork in forms, and text one level down is still text."""
     def draw(pdf):
-        form = pdf.beginForm("label")
+        pdf.beginForm("label")
         pdf.setFont("Helvetica", 12)
         pdf.drawString(10, 10, "NAPIS")
         pdf.endForm()
