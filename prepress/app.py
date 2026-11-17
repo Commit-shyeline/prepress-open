@@ -935,17 +935,16 @@ def _caller():
     return session_identity() or ("open-door" if _opened_by_proxy() else "anonymous")
 
 
-def _remember_upload(data, filename):
+def _remember_upload(data, filename, shared=False):
     """Hold these bytes for a re-check; returns the token the page sends back.
 
     The owner is the session subject, or the LAN door the bytes came through: a held upload may then
-    be recalled only by the same caller, so a leaked token never hands one customer another's file
-    (the PDF and PNG of a held design are public routes, so this is what guards them). Saved with no
-    session and through no door — a design from the public editor, which the customer then checks
-    logged in — the 16-byte token itself is the key, for the 30 minutes it lives; nothing else is
-    saved that way, since on a gated instance an anonymous caller cannot reach the check."""
+    be recalled only by the same caller, so a leaked token never hands one customer another's file.
+    `shared` is a design saved in the editor: its link is made to be sent to someone else and opened
+    from another door (saved on the LAN, opened on the public address — Shyeline 2026-11-17), so it
+    has no owner and the 16-byte token itself is the key, as for any share link."""
     now = time.time()
-    owner = session_identity() or ("open-door" if _opened_by_proxy() else None)
+    owner = None if shared else session_identity() or ("open-door" if _opened_by_proxy() else None)
     with _held_lock:
         for stale in [t for t, held in _held_uploads.items() if held["expires"] < now]:
             del _held_uploads[stale]
@@ -960,19 +959,74 @@ def _remember_upload(data, filename):
 
 
 def _recall_upload(token):
-    """The held upload for this token, its clock restarted — or None when it is gone."""
+    """The held upload for this token, its clock restarted — or None when it is gone. A saved design
+    that left memory is read back from the designs folder, when the shop configured one."""
     now = time.time()
     with _held_lock:
         held = _held_uploads.get(token)
-        if not held:
-            return None
-        if held["expires"] < now:
+        if held and held["expires"] < now:
             del _held_uploads[token]
+            held = None
+        if held:
+            held["expires"] = now + UPLOAD_HOLD_SECONDS
+    held = held or _kept_design(token)
+    if held and held["owner"] and held["owner"] != _caller():
+        return None                                  # somebody else's upload: as if it never existed
+    return held
+
+
+# ── Saved designs kept on disk ──────────────────────────────────────────────
+# A design link (`/model/<token>?design=<held>`) is something people send to each other, and 30
+# minutes of memory killed every one of them (Shyeline 2026-11-17). Opt-in by PREPRESS_DESIGNS_DIR:
+# only what the EDITOR saved is written, never a file uploaded for a check — that promise stands.
+DESIGNS_DIR_ENV = "PREPRESS_DESIGNS_DIR"
+DESIGN_KEEP_SECONDS = 30 * 24 * 3600
+DESIGNS_DIR_MAX_BYTES = 2 * 1024 * 1024 * 1024      # the save route is public: the oldest go first
+_HELD_TOKEN = re.compile(r"[A-Za-z0-9_-]{16,64}")   # the token becomes a file name
+
+
+def _designs_dir():
+    return (os.environ.get(DESIGNS_DIR_ENV) or "").strip()
+
+
+def _keep_design(held, pdf_bytes, filename):
+    """Write a saved design beside its file name, and drop what is too old or over the cap."""
+    folder = _designs_dir()
+    if not folder:
+        return
+    try:
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, held + ".pdf"), "wb") as handle:
+            handle.write(pdf_bytes)
+        with open(os.path.join(folder, held + ".json"), "w", encoding="utf-8") as handle:
+            json.dump({"filename": filename}, handle)
+        kept = sorted((entry for entry in os.scandir(folder) if entry.name.endswith(".pdf")),
+                      key=lambda entry: entry.stat().st_mtime, reverse=True)
+        total, oldest_allowed = 0, time.time() - DESIGN_KEEP_SECONDS
+        for entry in kept:
+            total += entry.stat().st_size
+            if entry.stat().st_mtime < oldest_allowed or total > DESIGNS_DIR_MAX_BYTES:
+                os.remove(entry.path)
+                os.remove(entry.path[:-len(".pdf")] + ".json")
+    except OSError as error:                         # the design still lives its 30 minutes in memory
+        logger.warning("design %s not kept on disk: %s", held, error)
+
+
+def _kept_design(token):
+    """A design from the designs folder, shaped like a held upload — or None."""
+    folder = _designs_dir()
+    if not folder or not _HELD_TOKEN.fullmatch(token or ""):
+        return None
+    path = os.path.join(folder, token)
+    try:
+        if os.path.getmtime(path + ".pdf") < time.time() - DESIGN_KEEP_SECONDS:
             return None
-        if held["owner"] and held["owner"] != _caller():
-            return None                              # somebody else's upload: as if it never existed
-        held["expires"] = now + UPLOAD_HOLD_SECONDS
-        return held
+        with open(path + ".json", encoding="utf-8") as handle:
+            kept = json.load(handle)
+        with open(path + ".pdf", "rb") as handle:
+            return {"data": handle.read(), "filename": kept["filename"], "owner": None}
+    except (OSError, ValueError, KeyError):
+        return None
 
 
 # ── The design editor: step 3 of the loop, in the browser (ROADMAP „Step 3: the design editor") ────
@@ -1047,7 +1101,8 @@ def api_design_save(token):
     except from_template.TemplateError as error:
         return jsonify({"error": str(error)}), 409
     filename = f"projekt-{token}.pdf"
-    held = _remember_upload(pdf_bytes, filename)
+    held = _remember_upload(pdf_bytes, filename, shared=True)
+    _keep_design(held, pdf_bytes, filename)
     # Where the design goes next, all by its held token: the PDF to keep, the check page with it
     # already queued (sprawdz.html re-checks the held bytes), the 3D scene wearing it.
     return jsonify({"held": held, "pdf": f"{base_path()}/api/designs/{held}/pdf",

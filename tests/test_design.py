@@ -10,6 +10,7 @@ import io
 import json
 import os
 import sys
+import time
 
 import pikepdf
 import pytest
@@ -173,14 +174,13 @@ def test_a_design_saved_without_a_login_is_the_token_holder_s(client, template_t
     assert judged.get_json()["template_token"] == template_token
 
 
-def test_a_design_saved_through_the_lan_door_stays_behind_it(client, template_token, monkeypatch):
-    """Only a save with no session AND no door is token-keyed: what came through the open LAN door is
-    the door's, and a public caller holding its token gets nothing — the PDF and PNG routes are public."""
+def test_a_design_saved_through_the_lan_door_opens_from_the_public_one(client, template_token, monkeypatch):
+    """A design link is made to be sent on: saved behind the LAN door, it opens with no door and no
+    session, by its token alone. An upload held for a re-check stays its owner's (test_app.py)."""
     monkeypatch.setenv(app_module.OPEN_HEADER_ENV, "X-Prepress-Open")
     body = _save_design(client, template_token, headers={"X-Prepress-Open": "1"})
-    assert client.get(f"/api/designs/{body['held']}/png").status_code == 404
-    assert client.get(f"/api/designs/{body['held']}/pdf").status_code == 404
-    assert client.get(f"/api/designs/{body['held']}/png", headers={"X-Prepress-Open": "1"}).status_code == 200
+    assert client.get(f"/api/designs/{body['held']}/png").status_code == 200
+    assert client.get(f"/api/designs/{body['held']}/pdf").status_code == 200
 
 
 def test_the_editor_returns_to_a_shop_only_on_a_listed_origin(client, template_token, monkeypatch):
@@ -266,6 +266,25 @@ def test_a_design_without_a_picture_is_refused(client, template_token):
                          content_type="multipart/form-data")
     assert broken.status_code == 400
     assert "zapisz" in broken.get_json()["error"].lower() or "read" in broken.get_json()["error"].lower()
+
+
+def test_a_saved_design_outlives_memory_when_a_designs_folder_is_set(client, template_token, monkeypatch, tmp_path):
+    """A design link is sent to other people: with PREPRESS_DESIGNS_DIR it survives the 30-minute hold
+    and a restart; without it nothing is written."""
+    unkept = _save_design(client, template_token)
+    folder = tmp_path / "projekty"
+    monkeypatch.setenv(app_module.DESIGNS_DIR_ENV, str(folder))
+    kept = _save_design(client, template_token)
+    assert sorted(path.name for path in folder.iterdir()) == [kept["held"] + ".json", kept["held"] + ".pdf"]
+    app_module._held_uploads.clear()                       # the restart
+    assert client.get(f"/api/designs/{kept['held']}/png").status_code == 200
+    assert client.get(f"/api/designs/{kept['held']}/pdf").data.startswith(b"%PDF")
+    assert client.get(f"/api/designs/{unkept['held']}/png").status_code == 404
+    assert client.get("/api/designs/..%2F..%2Fsecret/pdf").status_code == 404
+    # past its keep time it is gone
+    old = time.time() - app_module.DESIGN_KEEP_SECONDS - 60
+    os.utime(folder / (kept["held"] + ".pdf"), (old, old))
+    assert client.get(f"/api/designs/{kept['held']}/png").status_code == 404
 
 
 def test_an_expired_or_unknown_design_has_no_pdf(client):

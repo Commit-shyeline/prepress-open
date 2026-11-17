@@ -177,7 +177,13 @@ if (model) {
             wearPage(model, texture);
             // For a caller that waits for the print (`?shot=1`): the demo or better is on.
             if (atRank >= 1) document.body.dataset.art = 'on';
-        }, undefined, () => { /* no picture at this rank — the lower one stays, which is correct */ });
+        }, undefined, () => {
+            // No picture at this rank — the lower one stays. A missing DESIGN is said out loud:
+            // the demo print in its place reads as "my graphic did not load".
+            if (url.includes('/api/designs/')) {
+                document.getElementById('sideNote').textContent = 'Ten projekt wygasł — zapisz go jeszcze raz w edytorze.';
+            }
+        });
     }
     const [pageW, pageH] = info.page_mm || [1, 1];
     const samePage = (image) => image && Math.abs(Math.log((image.width / image.height) / (pageW / pageH))) < 0.03;

@@ -1723,7 +1723,12 @@ function build(data, cutFrom) {
                 sleeve.mesh.material.color.set(0xffffff);
                 sleeve.mesh.material.needsUpdate = true;
             }
-        }, undefined, () => { /* no artwork — bare cloth is the correct fallback */ });
+        }, undefined, () => {
+            // No artwork — bare cloth is the correct fallback. A missing DESIGN is said out loud.
+            if (url.includes('/api/designs/')) {
+                document.getElementById('sideNote').textContent = 'Ten projekt wygasł — zapisz go jeszcze raz w edytorze.';
+            }
+        });
     }
     // THIS template's demo — laid out inside its own safe outline (demo_artwork.py).
     // `?label=`: the demo names the variant instead of its wordmark (a catalogue shot, `?shot=1`).
