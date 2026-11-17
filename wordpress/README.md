@@ -21,5 +21,12 @@ engine.
    is the filled template page, `/png` its picture); an order placed within that time fetches the PDF
    server side, or asks the customer to save again.
 
+**The 3D preview**
+
+`[prepress_model template="TOKEN"]` is a frame on `<instance>/model/<token>?embed=1`: the viewer runs
+on the instance, so the plugin ships no model and no viewer code. With WooCommerce a product and each
+of its variations carry a template token (`_prepress_open_template`); the frame follows the chosen
+variation, and one checkbox under Settings → General places it on every product page that has a token.
+
 **Install:** copy `prepress-open-connector/` into `wp-content/plugins/`, activate, set the instance
 address under Settings → General.

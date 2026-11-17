@@ -9,6 +9,29 @@
  * instance for 30 minutes after its last use; the PDF address is where the design can be fetched
  * server side within that time.
  */
+/*
+ * The 3D preview follows the chosen variation: WooCommerce announces a pick with its jQuery event
+ * `found_variation`, whose data carries `prepress_open_model_url` (the plugin's PHP adds it). A
+ * variation without a model leaves the frame on the one it shows.
+ */
+( function () {
+	const jQuery = window.jQuery;
+	if ( ! jQuery ) {
+		return; // no WooCommerce variation form speaks without it
+	}
+	jQuery( document ).on( 'found_variation', function ( event, variation ) {
+		const url = variation && variation.prepress_open_model_url;
+		if ( ! url ) {
+			return;
+		}
+		document.querySelectorAll( 'iframe.prepress-open-model' ).forEach( ( frame ) => {
+			if ( frame.getAttribute( 'src' ) !== url ) {
+				frame.setAttribute( 'src', url );
+			}
+		} );
+	} );
+} )();
+
 ( function () {
 	const connector = window.PrepressOpenConnector || {};
 	const instance = String( connector.instance || '' ).replace( /\/+$/, '' );

@@ -84,4 +84,39 @@ function openPage( url, { readyState = 'complete', instance = INSTANCE } = {} ) 
 	assert.equal( page.events.length, 1 );
 }
 
+/** A product page with one 3D frame and WooCommerce's jQuery; returns the frame and a way to pick a variation. */
+function openProductPage( shown ) {
+	const frame = { src: shown, getAttribute: () => frame.src, setAttribute: ( name, value ) => { frame.src = value; frame.loads += 1; }, loads: 0 };
+	let onVariation = null;
+	const document = {
+		readyState: 'complete',
+		querySelectorAll: ( selector ) => ( selector === 'iframe.prepress-open-model' ? [ frame ] : [] ),
+	};
+	const window = {
+		PrepressOpenConnector: { instance: INSTANCE },
+		location: { search: '', pathname: '/p/', hash: '' },
+		jQuery: () => ( { on: ( name, handler ) => { if ( name === 'found_variation' ) onVariation = handler; } } ),
+	};
+	vm.runInNewContext( SCRIPT, { window, document, URLSearchParams, String, RegExp, JSON, console } );
+	return { frame, pick: ( variation ) => onVariation( {}, variation ) };
+}
+
+// Another size picked: the frame shows that size's model; the same size again does not reload it.
+{
+	const page = openProductPage( INSTANCE + '/model/size-s?embed=1' );
+	page.pick( { prepress_open_model_url: INSTANCE + '/model/size-l?embed=1' } );
+	assert.equal( page.frame.src, INSTANCE + '/model/size-l?embed=1' );
+	page.pick( { prepress_open_model_url: INSTANCE + '/model/size-l?embed=1' } );
+	assert.equal( page.frame.loads, 1 );
+}
+
+// A variation without a model keeps the one on screen.
+{
+	const page = openProductPage( INSTANCE + '/model/size-s?embed=1' );
+	page.pick( { prepress_open_model_url: '' } );
+	page.pick( {} );
+	assert.equal( page.frame.src, INSTANCE + '/model/size-s?embed=1' );
+	assert.equal( page.frame.loads, 0 );
+}
+
 console.log( 'connector: ok' );

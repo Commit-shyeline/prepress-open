@@ -4,7 +4,7 @@ Tags: print, prepress, design, templates
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 8.0
-Stable tag: 0.1.0
+Stable tag: 0.2.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -31,7 +31,17 @@ token back when the customer returns.
    `sessionStorage['prepress-open:design']`. `held` names the design on the instance for 30 minutes
    after its last use; `pdf` is where to fetch the filled template page in that time.
 
+5. `[prepress_model template="TOKEN" height="480"]` shows that template's 3D preview, in a frame served
+   by your instance; a model with several shapes gets its shape buttons there. With WooCommerce, give a
+   product (General tab) or each of its variations a "prepress-open template" token: the shortcode
+   without `template` then shows the product's own model and follows the chosen variation, and
+   Settings → General → "prepress-open 3D preview" places it on every such product page for you.
+   The instance must be reachable over HTTPS and must not forbid framing.
+
 == Changelog ==
+
+= 0.2.0 =
+* The 3D preview: `[prepress_model]`, a template token per WooCommerce product and variation, optional placement on product pages.
 
 = 0.1.0 =
 * First release: the setting, the shortcode, the hand-off reader.
