@@ -99,6 +99,9 @@ function prepress_open_design_shortcode( $attributes ): string {
 
 const PREPRESS_OPEN_PLACEMENT_OPTION = 'prepress_open_model_on_product';
 const PREPRESS_OPEN_TEMPLATE_META    = '_prepress_open_template'; // on a product and on each of its variations
+// Its own form name: the product's field and the variations' fields post in one form, and
+// `name=x` beside `name=x[0]` leaves PHP only the array — the product's token would be dropped.
+const PREPRESS_OPEN_VARIATION_FIELD  = 'variable_prepress_open_template';
 const PREPRESS_OPEN_MODEL_HEIGHT_PX  = 480;
 
 /** `$value` when it is a template token, else ''. */
@@ -191,7 +194,7 @@ function prepress_open_product_field(): void {
 add_action( 'woocommerce_product_after_variable_attributes', 'prepress_open_variation_field', 10, 3 );
 function prepress_open_variation_field( $loop, $variation_data, $variation ): void {
 	woocommerce_wp_text_input(
-		prepress_open_template_field( PREPRESS_OPEN_TEMPLATE_META . '[' . (int) $loop . ']', $variation->ID ) + array( 'wrapper_class' => 'form-row form-row-full' )
+		prepress_open_template_field( PREPRESS_OPEN_VARIATION_FIELD . '[' . (int) $loop . ']', $variation->ID ) + array( 'wrapper_class' => 'form-row form-row-full' )
 	);
 }
 
@@ -215,7 +218,7 @@ function prepress_open_save_product_field( $product_id ): void {
 add_action( 'woocommerce_save_product_variation', 'prepress_open_save_variation_field', 10, 2 );
 function prepress_open_save_variation_field( $variation_id, $loop ): void {
 	// phpcs:ignore WordPress.Security.NonceVerification.Missing
-	prepress_open_save_template( (int) $variation_id, wp_unslash( $_POST[ PREPRESS_OPEN_TEMPLATE_META ][ $loop ] ?? '' ) );
+	prepress_open_save_template( (int) $variation_id, wp_unslash( $_POST[ PREPRESS_OPEN_VARIATION_FIELD ][ $loop ] ?? '' ) );
 }
 
 /** Keep a token, drop anything else: a value that is not a token would only build a dead address. */
