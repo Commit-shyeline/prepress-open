@@ -87,6 +87,18 @@ async function openPairing(token) {
     if (info.error) return messageAt('msgPair', info.error, false);
     const model = await scene3d.loadProductModel(info.glb, new URL('draco/', import.meta.url).href);
     view = buildView(token, info, model);
+    // One radio per shape, opening in the last one, as the customer's viewer does.
+    const shapes = scene3d.shapeNames(model);
+    el('mdlShape').hidden = !shapes.length;
+    el('mdlShape').replaceChildren(...[scene3d.AS_MODELLED, ...shapes].map((name) => {
+        const label = document.createElement('label');
+        label.className = 'opt';
+        const radio = Object.assign(document.createElement('input'), { type: 'radio', name: 'mdlShape', value: name });
+        radio.checked = name === shapes.at(-1);
+        label.append(radio, ' ' + scene3d.shapeLabel(name));
+        return label;
+    }));
+    if (shapes.length) scene3d.showShape(model, shapes.at(-1));
     // What the file carries wins; a fresh model gets the automatic pass.
     const stored = (info.map && info.map.faces) || [];
     if (stored.length) view.applyStored(stored); else view.autoFit();
@@ -293,6 +305,7 @@ function buildView(token, info, model) {
     return {
         render, autoFit, applyStored, save, dispose,
         setTexture(which) { texture = which; render(); },
+        setShape(name) { scene3d.showShape(model, name); },
     };
 }
 
@@ -303,6 +316,7 @@ if (el('mdlImport')) {
     el('mdlSave').addEventListener('click', () => { if (view) view.save(); });
     document.querySelectorAll('[name="mdlTexture"]').forEach((radio) =>
         radio.addEventListener('change', () => { if (view && radio.checked) view.setTexture(radio.value); }));
+    el('mdlShape').addEventListener('change', (event) => { if (view && event.target.checked) view.setShape(event.target.value); });
     loadTemplateList().then(renderPickers);
     loadMaterials();
 }

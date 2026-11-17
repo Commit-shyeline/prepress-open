@@ -97,6 +97,34 @@ export function dressModel(model, map) {
     }
 }
 
+/** The meshes that carry other shapes: glTF morph targets, e.g. a soft product as it looks in use. */
+const shapedMeshes = (model) => model.meshes.filter((mesh) => mesh.node.morphTargetInfluences?.length);
+
+/** The name the switches use for the model as modelled, without any morph target. */
+export const AS_MODELLED = '';
+
+/** Switch labels for the shape names; any other target shows its own name (shapeLabel). */
+const SHAPE_LABELS = { [AS_MODELLED]: 'Uszyta', sat: 'Po siadzie', backrest: 'Z oparciem' };
+export const shapeLabel = (name) => SHAPE_LABELS[name] ?? name;
+
+/** The model's other shapes by name, in the GLB's order (its targetNames); empty for a model with none. A model
+ * opens in its last one. */
+export function shapeNames(model) {
+    const dictionary = shapedMeshes(model)[0]?.node.morphTargetDictionary ?? {};
+    return Object.keys(dictionary).sort((a, b) => dictionary[a] - dictionary[b]);
+}
+
+/** The model in the shape named `name` alone, or as modelled (AS_MODELLED). A pick still lands right in any of
+ * them: three.js raycasts the morphed vertices, and the UVs do not move. */
+export function showShape(model, name) {
+    for (const mesh of shapedMeshes(model)) {
+        const influences = mesh.node.morphTargetInfluences;
+        influences.fill(0);
+        const index = mesh.node.morphTargetDictionary?.[name];
+        if (index !== undefined) influences[index] = 1;
+    }
+}
+
 /** Put `texture` (the page, top row first) on every dressed face. */
 export function wearPage(model, texture) {
     texture.flipY = false;                      // the glTF frame: v = 0 at the page's top, as model-map.js says

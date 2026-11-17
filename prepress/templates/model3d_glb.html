@@ -18,12 +18,19 @@ header b { font-size: 16px; } header a { font-size: 12.5px; }
 .note-float { position: absolute; right: 12px; bottom: 12px; font-size: 12px; color: var(--muted);
               background: color-mix(in srgb, var(--surface) 88%, transparent);
               border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+/* The model's shapes (as modelled, then its morph targets), shown only for a model that has them. */
+.shape-float { position: absolute; left: 12px; top: 12px; display: flex; gap: 4px; }
+.shape-float[hidden] { display: none; }
+.shape-float button { font: inherit; font-size: 12px; color: var(--ink); cursor: pointer;
+                      background: color-mix(in srgb, var(--surface) 88%, transparent);
+                      border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+.shape-float button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
 #err { position: absolute; inset: 0; display: none; place-items: center; font-weight: 600;
        color: var(--alert); text-align: center; padding: 24px; }
 #loading { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 600;
            color: var(--muted); }
 /* The same chrome rules as the flag scene, because the same pages embed both. */
-body.bare header, body.bare .note-float { display: none; }
+body.bare header, body.bare .note-float, body.bare .shape-float { display: none; }
 body.embed header { display: none; }
 body.bare, body.embed { background: transparent; height: 100vh; min-height: 0; overflow: hidden; }
 body.bare #stage, body.embed #stage { min-height: 0; }
@@ -43,6 +50,7 @@ body.bare #stage canvas { pointer-events: none; }
 <div id="stage">
     <div id="loading">Wczytujemy model…</div>
     <div class="note-float" id="sideNote">Obróć myszką. Kółko przybliża.</div>
+    <div class="shape-float" id="shapeSwitch" role="group" aria-label="Kształt" hidden></div>
     <div id="err"></div>
 </div>
 
@@ -55,7 +63,7 @@ body.bare #stage canvas { pointer-events: none; }
 import * as THREE from 'three';
 import { OrbitControls } from '{{ asset("OrbitControls.js") }}';
 import { shotData } from '{{ asset("shot-frame.js") }}';
-import { loadProductModel, groundModel, dressModel, wearPage, lightScene, PAGE_CHANNEL }
+import { loadProductModel, groundModel, dressModel, wearPage, lightScene, shapeNames, showShape, shapeLabel, AS_MODELLED, PAGE_CHANNEL }
     from '{{ asset("product-model.js") }}';
 
 const token = {{ token|tojson }};
@@ -128,6 +136,31 @@ if (model) {
     document.getElementById('sideNote').textContent =
         `${size.x.toFixed(2)} × ${size.z.toFixed(2)} × ${size.y.toFixed(2)} m · obróć myszką`;
 
+    // A model with morph targets opens in its last one; the switch has a button per shape, as modelled first.
+    const shapeSwitch = document.getElementById('shapeSwitch');
+    const shapes = shapeNames(model);
+    shapeSwitch.hidden = !shapes.length;
+    function pickShape(name) {
+        showShape(model, name);
+        for (const one of shapeSwitch.querySelectorAll('[data-shape]')) {
+            one.setAttribute('aria-pressed', String(one.dataset.shape === name));
+        }
+    }
+    if (shapes.length) {
+        shapeSwitch.replaceChildren(...[AS_MODELLED, ...shapes].map((name) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.dataset.shape = name;
+            button.textContent = shapeLabel(name);
+            return button;
+        }));
+        pickShape(shapes.at(-1));
+    }
+    shapeSwitch.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-shape]');
+        if (button) pickShape(button.dataset.shape);
+    });
+
     /* The page texture, by rank: the sheet itself (0), this template's demo print (1), the customer's
        own work (2) — a saved design, or the artwork the check page hands over. */
     let rank = -1;
@@ -181,6 +214,7 @@ if (model) {
                 const material = Array.isArray(mesh.node.material) ? [pageMaterial, mesh.original.material]
                                                                    : mesh.original.material;
                 const copy = new THREE.Mesh(geometry, material);
+                if (mesh.node.morphTargetInfluences) copy.morphTargetInfluences = [...mesh.node.morphTargetInfluences];
                 copy.applyMatrix4(mesh.node.matrixWorld);
                 posed.add(copy);
             }
